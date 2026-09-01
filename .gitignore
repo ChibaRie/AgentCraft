@@ -1,1 +1,9 @@
-node_modules/`ndist/`n.env`n__pycache__/`n.venv/`n
+node_modules/
+dist/
+.env
+__pycache__/
+*.py[cod]
+.venv/
+*.db
+.pytest_cache/
+.ruff_cache/

@@ -1,0 +1,51 @@
+name: agentcraft
+
+services:
+  control:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.control
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - path: ../.env
+        required: false
+    volumes:
+      - "${HOST_WORKSPACE_ROOT:-./workspace}:/workspaces/authorized:ro"
+      - "${HOST_DATA_ROOT:-./data}:/data:rw"
+    depends_on:
+      - docker-socket-proxy
+      - provider-proxy
+
+  provider-proxy:
+    image: provider-proxy:placeholder
+    expose:
+      - "8080"
+    networks:
+      - internal
+
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      VOLUMES: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - internal
+
+  pi-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.pi-worker
+    image: agentcraft-pi-worker:0.84.3
+    profiles:
+      - pi-worker
+    networks:
+      - internal
+
+networks:
+  internal:
+    internal: true

@@ -1,0 +1,9 @@
+FROM node:22-slim
+
+RUN npm install -g @earendil-works/pi-coding-agent@0.84.3 && \
+    useradd --create-home --shell /bin/bash piworker
+
+USER piworker
+WORKDIR /workspace
+
+CMD ["pi"]
