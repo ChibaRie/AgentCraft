@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.models.base import Base
@@ -9,6 +9,7 @@ from backend.models.base import Base
 class MCPServer(Base):
     __tablename__ = "mcp_servers"
     __table_args__ = (
+        Index("idx_mcp_servers_owner_id", "owner_id"),
         CheckConstraint("transport IN ('stdio','http-sse')", name="ck_mcp_servers_transport"),
         CheckConstraint("status IN ('draft','published','offline')", name="ck_mcp_servers_status"),
     )

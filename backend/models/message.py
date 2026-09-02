@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.models.base import Base
@@ -9,6 +9,7 @@ from backend.models.base import Base
 class Message(Base):
     __tablename__ = "messages"
     __table_args__ = (
+        Index("idx_messages_conv_created", "conversation_id", "created_at"),
         CheckConstraint("role IN ('user','assistant','tool')", name="ck_messages_role"),
     )
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

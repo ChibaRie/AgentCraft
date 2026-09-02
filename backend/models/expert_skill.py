@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.models.base import Base
@@ -8,7 +8,10 @@ from backend.models.base import Base
 
 class ExpertSkill(Base):
     __tablename__ = "expert_skills"
-    __table_args__ = (UniqueConstraint("expert_id", "skill_id", name="uq_expert_skills_pair"),)
+    __table_args__ = (
+        Index("idx_expert_skills_skill_id", "skill_id"),
+        UniqueConstraint("expert_id", "skill_id", name="uq_expert_skills_pair"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     expert_id: Mapped[int] = mapped_column(
         ForeignKey("experts.id", ondelete="CASCADE"), nullable=False

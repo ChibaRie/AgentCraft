@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.models.base import Base
@@ -9,6 +9,7 @@ from backend.models.base import Base
 class Skill(Base):
     __tablename__ = "skills"
     __table_args__ = (
+        Index("idx_skills_owner_id", "owner_id"),
         CheckConstraint("status IN ('draft','published','offline')", name="ck_skills_status"),
     )
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

@@ -5,6 +5,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -17,6 +18,7 @@ from backend.models.base import Base
 class MCPTool(Base):
     __tablename__ = "mcp_tools"
     __table_args__ = (
+        Index("idx_mcp_tools_server_id", "server_id"),
         CheckConstraint(
             "sensitive = 0 OR enabled = 0 OR authorized_at IS NOT NULL",
             name="ck_mcp_tools_authorization",

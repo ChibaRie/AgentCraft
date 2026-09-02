@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.models.base import Base
@@ -9,6 +9,8 @@ from backend.models.base import Base
 class Task(Base):
     __tablename__ = "tasks"
     __table_args__ = (
+        Index("idx_tasks_user_id", "user_id"),
+        Index("idx_tasks_expert_id", "expert_id"),
         CheckConstraint(
             "status IN ('created','running','completed','failed')", name="ck_tasks_status"
         ),

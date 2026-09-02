@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.models.base import Base
@@ -9,6 +9,8 @@ from backend.models.base import Base
 class Expert(Base):
     __tablename__ = "experts"
     __table_args__ = (
+        Index("idx_experts_owner_id", "owner_id"),
+        Index("idx_experts_status_category", "status", "category"),
         CheckConstraint(
             "category IN ('tech','design','writing','data_analysis','office','other')",
             name="ck_experts_category",

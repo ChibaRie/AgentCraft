@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.models.base import Base
@@ -9,6 +9,7 @@ from backend.models.base import Base
 class TaskFile(Base):
     __tablename__ = "task_files"
     __table_args__ = (
+        Index("idx_task_files_task_created", "task_id", "created_at"),
         CheckConstraint(
             "length(original_name) BETWEEN 1 AND 255", name="ck_task_files_original_name"
         ),
