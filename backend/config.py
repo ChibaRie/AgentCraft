@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     UPLOAD_MAX_FILES_PER_REQUEST: int = 10
     UPLOAD_MAX_TASK_BYTES: int = 104857600
     SECRET_KEY: str = "replace-me"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_MINUTES: int = 120
     DATABASE_URL: str = "sqlite+aiosqlite:///./agentcraft.db"
 
 

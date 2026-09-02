@@ -68,8 +68,29 @@ def test_all_contract_endpoints_exist_in_openapi() -> None:
         assert method.lower() in paths[template], f"missing {method} {template}"
 
 
+# 已实现的端点从 501 占位断言中移除（行为由 tests/test_users.py 覆盖）
+IMPLEMENTED = {
+    ("POST", "/api/auth/register"),
+    ("POST", "/api/auth/login"),
+    ("GET", "/api/users/me"),
+    ("POST", "/api/users/me/expert"),
+}
+
+# 挂载了真实 JWT 依赖的占位端点：匿名请求先被 401 拦截，轮不到 501
+PROTECTED_PREFIXES = (
+    "/api/experts",
+    "/api/skills",
+    "/api/mcp/servers",
+    "/api/tasks",
+    "/api/users",
+    "/api/workspaces",
+)
+
+
 @pytest.mark.parametrize(("method", "path"), CONTRACTS)
-def test_unimplemented_contract_returns_501(method: str, path: str) -> None:
+def test_unimplemented_contract_returns_placeholder_status(method: str, path: str) -> None:
+    if (method, path) in IMPLEMENTED:
+        pytest.skip("implemented in phase 1; covered by tests/test_users.py")
     kwargs = {}
     if path == "/api/auth/register":
         kwargs["json"] = {
@@ -84,4 +105,7 @@ def test_unimplemented_contract_returns_501(method: str, path: str) -> None:
     if path == "/api/tasks/1/files":
         kwargs["files"] = [("files", ("placeholder.txt", b"placeholder"))]
     response = client.request(method, path, **kwargs)
-    assert response.status_code == 501
+    expected_status = (
+        401 if any(path.startswith(prefix) for prefix in PROTECTED_PREFIXES) else 501
+    )
+    assert response.status_code == expected_status

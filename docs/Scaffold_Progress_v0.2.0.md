@@ -215,9 +215,56 @@ Pi 容器默认不启动。
 
 ---
 
-## 7. 变更记录
+## 7. 阶段 1：用户系统垂直切片（2026-09-02 完成）
+
+按 PRD v0.4.1 §4.1、Engineering Spec v0.4.0 §6.2 实现第一个垂直切片。
+
+### 7.1 后端（TDD：tests/test_users.py 先行，23 个用例）
+
+| 端点 | 行为 |
+|---|---|
+| `POST /api/auth/register` | 201 `{data:{id,username,email,role,token}}`；400 校验失败（信封 `VALIDATION_ERROR`）；409 `USERNAME_EXISTS`/`EMAIL_EXISTS`；注册即自动登录 |
+| `POST /api/auth/login` | 200 同上；`login` 接受用户名或邮箱；401 `INVALID_CREDENTIALS`（统一提示"账号或密码不正确"，防账号枚举） |
+| `GET /api/users/me` | 200 `{data:{id,username,email,role,created_at}}`；无/坏 token 401 `UNAUTHORIZED` |
+| `POST /api/users/me/expert` | 200 role→expert；重复申请 409 `ALREADY_EXPERT` |
+
+配套变更：
+
+- JWT（python-jose，HS256，2h）+ passlib/bcrypt（bcrypt 锁 4.0.1 适配 passlib 1.7.4）
+- `main.py` 全局异常处理器：所有失败统一 `{error:{code,message}}` 信封；`RequestValidationError` 转 400（规格 §6.1）
+- `middleware/auth.py`：`get_current_user`（加载 User 实体）与 `get_current_user_id`（占位端点沿用）
+- `middleware/permission.py`：`require_expert_role`（403 `FORBIDDEN`），供阶段 2 专家管理接口使用
+- 修复脚手架缺陷：`User` 模型缺失 4 个反向 relationship（Expert/Skill/MCPServer/Task 的 `back_populates` 悬空导致 mapper 配置失败）
+- `tests/conftest.py`：每测试独立 SQLite（tmp 文件 + NullPool）+ `get_db` 依赖覆盖
+- `tests/test_api_contracts.py`：已实现端点移出 501 断言；受保护占位端点匿名请求断言 401
+
+### 7.2 前端（React 18 + Vite，原生 CSS tokens）
+
+- 设计语言「墨与纸」：黑白灰、中等对比、发丝线 + 灰阶渐变 + 分层阴影；支持 `prefers-color-scheme` 暗色；`prefers-reduced-motion` 降级
+- `auth/AuthContext.jsx`：Token 持久化 localStorage（`agentcraft_token`），挂载时经 `/api/users/me` 恢复会话，401 自动清除
+- `api/client.js`：Bearer 注入 + `{data}`/`{error}` 信封解析
+- P01 登录/注册页：分栏墨纸构图、滑动墨块切换、PRD 文案的内联校验（去空格计长、两次密码一致）、服务端冲突映射到字段
+- NavBar + UserMenu：权限感知菜单（专家用户才显示我的专家/Skill 管理）、Escape/外点关闭
+- P05 个人中心：账号信息、专家身份申请（即时生效 + 成功态）、任务列表空态
+- 路由守卫：`RequireAuth`（未登录跳 /login 并记录 from），`requireExpert` 分支；P01 对已登录用户回跳
+
+### 7.3 验证记录
+
+| 验证项 | 结果 |
+|---|---|
+| `uv run pytest` | 78 passed, 4 skipped |
+| `uv run ruff check .` | PASS |
+| `uv run alembic check` | PASS（relationship 变更不影响表结构） |
+| `npm run build` | PASS（gzip 70KB） |
+| Playwright 端到端 | 注册→自动登录→个人中心→申请专家→登出→守卫→邮箱重登 全通过 |
+| 截图 | `.impeccable/review/`（桌面/移动、亮色/暗色、普通/专家态） |
+
+---
+
+## 8. 变更记录
 
 | 版本 | 时间 | 说明 |
 |---|---|---|
 | v0.1.0 | 2026-09-01 | 记录脚手架首版完成状态与验证结果 |
 | v0.2.0 | 2026-09-02 | 补齐数据库文档定义的 11 个索引，新增 Alembic 索引迁移并扩展迁移测试 |
+| v0.3.0 | 2026-09-02 | 阶段 1 用户系统垂直切片：4 个端点 + JWT/bcrypt + 统一错误信封 + P01/P05/NavBar 前端 + 23 个后端用例；修复 User 反向 relationship 缺失 |
