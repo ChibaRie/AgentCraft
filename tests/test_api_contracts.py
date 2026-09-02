@@ -82,6 +82,18 @@ IMPLEMENTED = {
     ("POST", "/api/skills/1/offline"),
     ("POST", "/api/skills/1/validate"),
     ("DELETE", "/api/skills/1"),
+    ("POST", "/api/experts"),
+    ("GET", "/api/experts"),
+    ("GET", "/api/experts/1"),
+    ("PUT", "/api/experts/1"),
+    ("POST", "/api/experts/1/publish"),
+    ("POST", "/api/experts/1/offline"),
+    ("DELETE", "/api/experts/1"),
+    ("POST", "/api/experts/1/skills"),
+    ("PUT", "/api/experts/1/skills/1"),
+    ("DELETE", "/api/experts/1/skills/1"),
+    ("GET", "/api/discover/experts"),
+    ("GET", "/api/discover/experts/1"),
 }
 
 # 挂载了真实 JWT 依赖的占位端点：匿名请求先被 401 拦截，轮不到 501

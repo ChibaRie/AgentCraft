@@ -311,7 +311,52 @@ Pi 容器默认不启动。
 
 ---
 
-## 9. 变更记录
+## 9. 阶段 3：专家 CRUD 与绑定 + 专家中心（2026-09-02 完成，闭环一收口）
+
+按 PRD §4.2、Engineering Spec §6.3/§6.4、DB 设计 §5.2 实现。MCP 绑定端点保留 501，随 MCP 管理阶段实现。
+
+### 9.1 专家管理 API（§6.3，38 个测试）
+
+| 端点 | 行为 |
+|---|---|
+| `POST /api/experts` | 201 draft；PRD §4.2.2 字段规则（name 2-30 去空格、description 10-100 去空格、category 枚举、persona/methodology 非空白不设上限、task_examples ≤5 条每条 ≤50 字符、avatar_url 仅 http/https 格式校验） |
+| `GET /api/experts` | 分页信封；`?status=draft,published,offline` 逗号分隔过滤；仅本人 |
+| `GET /api/experts/{id}` | 详情含 skills（含 enabled/status）与 mcps（空，随 MCP 阶段接入）；不返回 MCP 连接信息；他人 403 / 缺失 404 |
+| `PUT /api/experts/{id}` | 部分更新；task_examples 缺席不改、显式 null 清空 |
+| `POST .../publish` | 前置：至少一个 published+enabled 绑定，否则 400 `EXPERT_PUBLISH_CONDITION`；重复发布 409 |
+| `POST .../offline` | 仅 published 可下架；running 任务回收随任务阶段接入 |
+| `DELETE /api/experts/{id}` | 前置无任何状态任务引用（快照规则），否则 409 `EXPERT_STILL_REFERENCED`；级联删绑定、不影响 Skill |
+| `POST /{id}/skills` | 绑定默认 enabled=false；Skill 必须 published（400 `SKILL_NOT_PUBLISHED`）；他人 Skill 403；重复 409；enabled=true 防御性内容校验 |
+| `PUT /{id}/skills/{skill_id}` | 开关绑定；enabled=true 重查 published+校验；404 `BINDING_NOT_FOUND`（绑定优先于归属） |
+| `DELETE /{id}/skills/{skill_id}` | 解绑；解绑后可重绑 |
+
+### 9.2 专家中心 API（§6.4，匿名可访问）
+
+- `GET /api/discover/experts`：仅 published；`?search`（LIKE 转义 `%_\`）/`?category`/分页；卡片含 skill_count
+- `GET /api/discover/experts/{id}`：公开详情（人设/方法论/任务示例/启用 Skill）；非 published 404
+- 公开口径统一为「enabled 绑定 + Skill 当前 published」：离线 Skill（kill switch）不出现也不计数，卡片与详情一致
+
+### 9.3 前端 P03/P04/P06/P07
+
+- P06 我的专家：状态徽标、发布/下架、编辑入口、删除二次确认（409 提示任务引用）
+- P07 专家编辑：双栏（表单 + SkillBindingPanel）；任务示例动态增删（≤5）；绑定下拉只列已发布未绑定 Skill；启用/关闭开关（墨色滑块）；保存后 create→edit 导航
+- P03 专家中心：搜索 + 分类 chips + 分页（URL 状态驱动）；骨架屏/空态
+- P04 专家详情：人设/方法论/擅长任务/已启用 Skill；召唤按钮占位（任务阶段开放）；404 与加载失败分流提示
+
+### 9.4 验证记录
+
+| 验证项 | 结果 |
+|---|---|
+| `uv run pytest` | 164 passed, 24 skipped（新增专家 38 + 回归 3） |
+| `uv run ruff check .` | PASS |
+| `npm run build` | PASS（gzip 80KB） |
+| Playwright 闭环一 | 注册→申请→建专家→建 Skill→校验→发布→绑定（默认关）→启用→发布专家→专家中心出现→详情→下架→消失，全通过 |
+
+对抗式审查（22 代理）修复 13 处：category:null 500→400、skill_count 口径泄漏/不一致、绑定错误优先级、LIKE 通配符转义、绑定下拉只列已发布、P04 错误分流、编辑页加载门禁、绑定失败保留选择、绑定错误顶部可见、创建通知经路由 state 传递、searchText 与 URL 同步、错误独占渲染、page 参数加固。
+
+---
+
+## 10. 变更记录
 
 | 版本 | 时间 | 说明 |
 |---|---|---|
@@ -319,3 +364,4 @@ Pi 容器默认不启动。
 | v0.2.0 | 2026-09-02 | 补齐数据库文档定义的 11 个索引，新增 Alembic 索引迁移并扩展迁移测试 |
 | v0.3.0 | 2026-09-02 | 阶段 1 用户系统垂直切片：4 个端点 + JWT/bcrypt + 统一错误信封 + P01/P05/NavBar 前端 + 23 个后端用例；修复 User 反向 relationship 缺失 |
 | v0.4.0 | 2026-09-02 | 阶段 2 Skill 管理垂直切片：validate_skill 纯文本校验器 + Skill 全生命周期 API（状态机）+ P08 前端（列表/弹窗/ValidateButton）+ 61 个新测试 |
+| v0.5.0 | 2026-09-02 | 阶段 3 专家 CRUD/绑定/专家中心：闭环一收口；P03/P04/P06/P07；41 个新测试；审查修复 13 处 |
