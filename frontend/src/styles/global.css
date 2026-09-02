@@ -925,6 +925,372 @@ a {
   margin-bottom: 4px;
 }
 
+/* ---------- P08 Skill 管理 ---------- */
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.btn-ghost.is-danger {
+  color: var(--ink-strong);
+  border-color: var(--hairline-strong);
+}
+
+.btn-ghost.is-danger:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.manage-tabs {
+  display: inline-flex;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  padding: 3px;
+  margin-bottom: 16px;
+}
+
+.manage-tab {
+  border: 0;
+  background: none;
+  padding: 7px 22px;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-3);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+}
+
+.manage-tab.is-active {
+  background: var(--surface);
+  color: var(--ink-strong);
+  box-shadow: var(--shadow-1);
+}
+
+.manage-tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.manage-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.manage-count {
+  font-size: 13px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.skill-list {
+  display: grid;
+  gap: 14px;
+}
+
+.skill-card {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  padding: 20px 22px;
+  transition: box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.skill-card:hover {
+  box-shadow: var(--shadow-2);
+}
+
+.skill-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.skill-card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.skill-card-title h3 {
+  font-size: 16.5px;
+  font-weight: 700;
+}
+
+.skill-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--hairline-strong);
+  color: var(--text-2);
+  background: var(--surface-2);
+}
+
+.skill-status.is-published {
+  background: linear-gradient(180deg, var(--ink), var(--ink-strong));
+  border-color: transparent;
+  color: var(--on-ink);
+}
+
+.skill-status.is-offline {
+  border-style: dashed;
+  background: transparent;
+  color: var(--text-3);
+}
+
+.skill-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.skill-card-desc {
+  margin: 10px 0 4px;
+  font-size: 14px;
+  color: var(--text-2);
+  max-width: 72ch;
+}
+
+.skill-card-meta {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 校验报告 */
+.validate-report {
+  margin-top: 14px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-control);
+  padding: 12px 14px;
+  font-size: 13.5px;
+  background: var(--surface-2);
+}
+
+.validate-report-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--ink-strong);
+}
+
+.issue-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--hairline);
+  display: grid;
+  gap: 6px;
+}
+
+.issue-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--text-2);
+}
+
+.issue-level {
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.issue-row.is-error .issue-level {
+  background: var(--ink-strong);
+  color: var(--on-ink);
+}
+
+.issue-row.is-warning .issue-level {
+  border: 1px solid var(--hairline-strong);
+  color: var(--text-2);
+}
+
+.issue-text strong {
+  color: var(--ink-strong);
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+.binding-strip {
+  margin-top: 14px;
+  font-size: 13.5px;
+  color: var(--text-2);
+  border-top: 1px solid var(--hairline);
+  padding-top: 12px;
+}
+
+/* 删除二次确认 */
+.confirm-strip {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: 1px solid var(--ink-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  color: var(--ink-strong);
+  font-size: 13.5px;
+  font-weight: 500;
+  padding: 10px 14px;
+}
+
+.confirm-strip-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+/* 骨架屏（与卡片同构） */
+.skill-card.is-skeleton .skeleton-line {
+  height: 14px;
+  border-radius: 7px;
+  background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2));
+  background-size: 200% 100%;
+  margin-top: 12px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .skill-card.is-skeleton .skeleton-line {
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+
+  @keyframes shimmer {
+    from {
+      background-position: 200% 0;
+    }
+    to {
+      background-position: -200% 0;
+    }
+  }
+}
+
+.skill-card.is-skeleton .skeleton-line.is-title {
+  height: 18px;
+  width: 38%;
+  margin-top: 0;
+}
+
+.skill-card.is-skeleton .skeleton-line.is-short {
+  width: 22%;
+}
+
+/* ---------- 弹窗 ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(19, 19, 22, 0.44);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 20px;
+  overflow-y: auto;
+}
+
+.modal {
+  width: min(680px, 100%);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  transform-origin: top center;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .modal {
+    animation: modal-in var(--duration-normal) var(--ease-out);
+  }
+
+  @keyframes modal-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px) scale(0.985);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 0;
+}
+
+.modal-title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.modal-close {
+  border: 0;
+  background: none;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+}
+
+.modal-close:hover:not(:disabled) {
+  color: var(--ink-strong);
+  background: var(--surface-2);
+}
+
+.modal-close:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.modal-body {
+  display: grid;
+  gap: 14px;
+  padding: 18px 24px 24px;
+}
+
+.modal-body .field-textarea {
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.6;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
 /* ---------- 占位页 ---------- */
 
 .scaffold-page {
@@ -965,6 +1331,19 @@ a {
 
   .profile-grid {
     grid-template-columns: 1fr;
+  }
+
+  .skill-card-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .skill-card-actions {
+    justify-content: flex-start;
+  }
+
+  .modal-overlay {
+    padding: 20px 12px;
   }
 
   .navbar-inner {

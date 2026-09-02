@@ -68,12 +68,20 @@ def test_all_contract_endpoints_exist_in_openapi() -> None:
         assert method.lower() in paths[template], f"missing {method} {template}"
 
 
-# 已实现的端点从 501 占位断言中移除（行为由 tests/test_users.py 覆盖）
+# 已实现的端点从 501 占位断言中移除（行为由 tests/test_users.py、tests/test_skills.py 覆盖）
 IMPLEMENTED = {
     ("POST", "/api/auth/register"),
     ("POST", "/api/auth/login"),
     ("GET", "/api/users/me"),
     ("POST", "/api/users/me/expert"),
+    ("POST", "/api/skills"),
+    ("GET", "/api/skills"),
+    ("GET", "/api/skills/1"),
+    ("PUT", "/api/skills/1"),
+    ("POST", "/api/skills/1/publish"),
+    ("POST", "/api/skills/1/offline"),
+    ("POST", "/api/skills/1/validate"),
+    ("DELETE", "/api/skills/1"),
 }
 
 # 挂载了真实 JWT 依赖的占位端点：匿名请求先被 401 拦截，轮不到 501

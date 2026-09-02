@@ -261,10 +261,61 @@ Pi 容器默认不启动。
 
 ---
 
-## 8. 变更记录
+## 8. 阶段 2：Skill 管理垂直切片（2026-09-02 完成）
+
+按 PRD v0.4.1 §4.4、Engineering Spec v0.4.0 §6.5/§9.1、DB 设计 §5.3 实现完整 Skill 生命周期。
+
+### 8.1 validate_skill 校验器（harness/mcp/validate_skill.py，30 个单测）
+
+纯文本规则校验，无外部依赖、不执行输入内容：
+
+| 检查项 | 级别 |
+|---|---|
+| 必填完整性（role/goal/steps/output_requirements/constraints） | ERROR |
+| 字段长度 ≤5000 字符 | WARNING |
+| API Key 模式（sk-/ghp_/AKIA/xox/AIza） | ERROR |
+| 危险指令模式（rm -rf、mkfs、dd、del /s、盘符格式化、DROP TABLE、管道执行脚本） | ERROR |
+| 可执行代码模式（import os/subprocess、eval/exec、os.system） | WARNING |
+| 越狱模板（[INST]、`<<<`、`</system>`、忽略以上所有指令、现在你是一个，§7.5） | WARNING 但标记不通过 |
+
+### 8.2 Skill API（§6.5 全契约，31 个 API 测试）
+
+| 端点 | 行为 |
+|---|---|
+| `POST /api/skills` | 201 draft；PRD §4.4.2 字段规则（name 2-30 去空格、description 10-200 去空格、role 5-200、长文本 20-5000 非全空白、input_requirements 可选 ≤5000） |
+| `GET /api/skills` | 分页信封 {data,total,page,size}，仅本人，创建时间倒序 |
+| `GET /api/skills/{id}` | 详情含 bound_experts；他人 403、缺失 404 |
+| `PUT /api/skills/{id}` | 部分更新；published 必须同事务通过 validate_skill，失败 400 `SKILL_INVALID` 并回滚保留原内容 |
+| `POST .../publish` | draft/offline→published；内容不过校验 400；重复发布 409 |
+| `POST .../offline` | 仅 published 可下架，否则 409 |
+| `POST .../validate` | 只读校验已保存内容，不改状态 |
+| `DELETE /api/skills/{id}` | 前置已解绑，否则 409 `SKILL_STILL_BOUND` |
+
+全部端点专家身份门禁（未登录 401 / 普通用户 403 `FORBIDDEN`）。状态机严格按 DB 设计 §5.3。
+
+### 8.3 前端 P08（Skill 部分）
+
+- 列表卡片：状态徽标（草稿描边/已发布墨底/已下架虚线）、校验、发布/下架、编辑、绑定情况、删除（行内二次确认）
+- SkillEditorModal：9 字段弹窗（PRD 提示文案与错误文案）、客户端校验与服务端错误内联呈现
+- ValidateButton 行内校验报告：通过态与 issues 列表（ERROR/WARNING 分级徽标）
+- 骨架屏加载、空态引导、MCP Server 标签页占位（后续阶段）
+
+### 8.4 验证记录
+
+| 验证项 | 结果 |
+|---|---|
+| `uv run pytest` | 135 passed, 12 skipped（新增 30 校验单测 + 31 API 测试） |
+| `uv run ruff check .` | PASS |
+| `npm run build` | PASS（gzip 74KB） |
+| Playwright 端到端 | 创建 → validate → 发布 → 下架全流程；已发布编辑塞入 API Key → 400 保留原内容，弹窗内呈现校验失败信息 |
+
+---
+
+## 9. 变更记录
 
 | 版本 | 时间 | 说明 |
 |---|---|---|
 | v0.1.0 | 2026-09-01 | 记录脚手架首版完成状态与验证结果 |
 | v0.2.0 | 2026-09-02 | 补齐数据库文档定义的 11 个索引，新增 Alembic 索引迁移并扩展迁移测试 |
 | v0.3.0 | 2026-09-02 | 阶段 1 用户系统垂直切片：4 个端点 + JWT/bcrypt + 统一错误信封 + P01/P05/NavBar 前端 + 23 个后端用例；修复 User 反向 relationship 缺失 |
+| v0.4.0 | 2026-09-02 | 阶段 2 Skill 管理垂直切片：validate_skill 纯文本校验器 + Skill 全生命周期 API（状态机）+ P08 前端（列表/弹窗/ValidateButton）+ 61 个新测试 |

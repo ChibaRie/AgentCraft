@@ -7,15 +7,7 @@ import {
   UserCircle,
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
-
-function formatDateTime(isoString) {
-  if (!isoString) {
-    return "";
-  }
-  // 后端存 UTC 但序列化为无时区的 naive ISO 串；补 Z 避免被当作本地时间
-  const normalized = /[zZ]|[+-]\d{2}:?\d{2}$/.test(isoString) ? isoString : `${isoString}Z`;
-  return new Date(normalized).toLocaleString("zh-CN", { hour12: false });
-}
+import { formatDateTime } from "../lib/datetime.js";
 
 export default function ProfilePage() {
   const { user, isExpert, applyExpert } = useAuth();
