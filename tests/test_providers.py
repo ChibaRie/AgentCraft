@@ -9,13 +9,12 @@
 import base64
 import json
 import os
-from pathlib import Path
 
 import pytest
 
 from backend.config import Settings, get_settings
 from backend.main import app
-from backend.utils.crypto import decrypt_text, make_keyring, provider_key_aad
+from backend.utils.crypto import EncryptionError, decrypt_text, make_keyring, provider_key_aad
 from tests.test_skills import auth_header, register_expert
 
 pytestmark = pytest.mark.usefixtures("client")
@@ -234,8 +233,9 @@ def test_update_provider_ciphertext_roundtrip(client, crypto_settings, test_db):
     )
     assert plaintext == "sk-roundtrip-8888"
     # 换用户 AAD 解密必须失败（归属绑定）
-    with pytest.raises(Exception):
-        decrypt_text(envelope, aad=provider_key_aad(user_id + 1), keyring=crypto_settings.keyring())
+    _, keyring = make_keyring(crypto_settings.MCP_ENCRYPTION_KEYRING)
+    with pytest.raises(EncryptionError):
+        decrypt_text(envelope, aad=provider_key_aad(user_id + 1), keyring=keyring)
 
 
 def test_set_default_exclusive(client, crypto_settings):
@@ -264,7 +264,8 @@ def test_delete_provider(client, crypto_settings):
     provider_id = create_provider(client, token).json()["data"]["id"]
     deleted = client.delete(f"/api/providers/{provider_id}", headers=auth_header(token))
     assert deleted.status_code == 200
-    assert client.get(f"/api/providers/{provider_id}", headers=auth_header(token)).status_code == 404
+    gone = client.get(f"/api/providers/{provider_id}", headers=auth_header(token))
+    assert gone.status_code == 404
     # 他人配置不可删
     other_id = create_provider(client, token, name="他人的").json()["data"]["id"]
     token_b, _ = register_expert(client, username="prov-n", email="prov-n@example.com")

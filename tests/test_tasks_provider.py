@@ -15,7 +15,7 @@ import pytest
 
 from backend.config import Settings, get_settings
 from backend.main import app
-from tests.test_experts import bind_skill, create_expert, valid_expert
+from tests.test_experts import valid_expert
 from tests.test_providers import create_provider
 from tests.test_skills import auth_header, register_expert
 
@@ -148,7 +148,6 @@ def test_task_rejects_foreign_provider(client, crypto_settings):
 
 def test_provider_snapshot_frozen_after_config_change(client, crypto_settings, test_db):
     """冻结验证：创建后改配置/换默认/删除配置，已建任务的快照不变。"""
-    from sqlalchemy import select
 
     from backend.models.task import Task
 

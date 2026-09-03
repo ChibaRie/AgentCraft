@@ -7,9 +7,8 @@ Create Date: 2026-09-03 14:58:43.274900
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = '2906d805fc72'
@@ -31,8 +30,12 @@ def upgrade() -> None:
     sa.Column('api_key_hint', sa.String(length=8), nullable=True),
     sa.Column('model_id', sa.String(length=100), nullable=False),
     sa.Column('is_default', sa.Integer(), nullable=False),
-    sa.Column('created_at', sa.DateTime(), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column(
+        'created_at', sa.DateTime(), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False
+    ),
+    sa.Column(
+        'updated_at', sa.DateTime(), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False
+    ),
     sa.CheckConstraint("protocol IN ('openai')", name='ck_user_providers_protocol'),
     sa.CheckConstraint('is_default IN (0,1)', name='ck_user_providers_is_default'),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),

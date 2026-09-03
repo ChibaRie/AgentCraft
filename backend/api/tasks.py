@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import Settings, get_settings
 from backend.database import get_db
 from backend.dependencies import (
     get_pi_engine_manager,
@@ -26,7 +27,6 @@ from backend.engine.pi_engine import PiEngineError
 from backend.engine.pi_engine_manager import EngineStateError, PiEngineManager
 from backend.engine.skill_loader import PromptTooLargeError, SkillLoader
 from backend.middleware.auth import get_current_user_id
-from backend.config import Settings, get_settings
 from backend.schemas.task import TaskCreateRequest, TaskMessageRequest
 from backend.services import provider_service, task_service, workspace
 from backend.services.task_locks import task_round_lock

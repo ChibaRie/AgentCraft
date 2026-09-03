@@ -64,7 +64,10 @@ def test_tampered_ciphertext_rejected(keyring):
     corrupted = bytearray(b64url_len(envelope["ciphertext"]))
     import base64 as b64
 
-    envelope = {**envelope, "ciphertext": b64.urlsafe_b64encode(bytes(corrupted)).decode().rstrip("=")}
+    envelope = {
+        **envelope,
+        "ciphertext": b64.urlsafe_b64encode(bytes(corrupted)).decode().rstrip("="),
+    }
     with pytest.raises(EncryptionError):
         decrypt_text(envelope, aad="aad-x", keyring=keyring)
 

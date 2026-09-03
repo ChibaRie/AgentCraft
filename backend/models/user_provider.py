@@ -1,6 +1,15 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.models.base import Base
@@ -29,7 +38,8 @@ class UserProvider(Base):
     protocol: Mapped[str] = mapped_column(String(20), default="openai", nullable=False)
     base_url: Mapped[str] = mapped_column(String(500), nullable=False)
     api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    api_key_hint: Mapped[str | None] = mapped_column(String(8), nullable=True)  # 尾 4 位掩码，写时派生
+    # 尾 4 位掩码提示，写时派生；仅展示用，列表无需解密
+    api_key_hint: Mapped[str | None] = mapped_column(String(8), nullable=True)
     model_id: Mapped[str] = mapped_column(String(100), nullable=False)
     is_default: Mapped[int] = mapped_column(default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

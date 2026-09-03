@@ -26,6 +26,6 @@ class User(Base):
     skills: Mapped[list["Skill"]] = relationship(back_populates="owner")  # noqa: F821
     mcp_servers: Mapped[list["MCPServer"]] = relationship(back_populates="owner")  # noqa: F821
     tasks: Mapped[list["Task"]] = relationship(back_populates="user")  # noqa: F821
-    providers: Mapped[list["UserProvider"]] = relationship(
+    providers: Mapped[list["UserProvider"]] = relationship(  # noqa: F821
         back_populates="user"
-    )  # noqa: F821
+    )

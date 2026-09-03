@@ -162,6 +162,54 @@ async def create_provider(
     return row
 
 
+async def _assert_name_available(
+    db: AsyncSession, user_id: int, name: str, exclude_id: int
+) -> None:
+    duplicate = (
+        await db.execute(
+            select(UserProvider).where(
+                UserProvider.user_id == user_id,
+                UserProvider.name == name,
+                UserProvider.id != exclude_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if duplicate is not None:
+        raise ProviderNameExistsError(f"配置名「{name}」已存在")
+
+
+async def _apply_update_fields(
+    db: AsyncSession,
+    user_id: int,
+    provider_id: int,
+    row: UserProvider,
+    *,
+    name: str | None,
+    protocol: str | None,
+    base_url: str | None,
+    model_id: str | None,
+    is_default: bool | None,
+    apply_key,
+) -> None:
+    """字段级更新：查重改名 / 标量赋值 / Key 三态 / 默认互斥。"""
+    if name is not None and name != row.name:
+        await _assert_name_available(db, user_id, name, provider_id)
+        row.name = name
+    if protocol is not None:
+        row.protocol = protocol
+    if base_url is not None:
+        row.base_url = base_url
+    if model_id is not None:
+        row.model_id = model_id
+    await apply_key()
+    if is_default is True:
+        row.is_default = 1
+        await db.flush()
+        await _clear_other_defaults(db, user_id, row.id)
+    elif is_default is False:
+        row.is_default = 0
+
+
 async def update_provider(
     db: AsyncSession,
     user_id: int,
@@ -179,40 +227,26 @@ async def update_provider(
 ) -> UserProvider:
     row = await _get_owned(db, user_id, provider_id)
 
-    if name is not None and name != row.name:
-        duplicate = (
-            await db.execute(
-                select(UserProvider).where(
-                    UserProvider.user_id == user_id,
-                    UserProvider.name == name,
-                    UserProvider.id != provider_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if duplicate is not None:
-            raise ProviderNameExistsError(f"配置名「{name}」已存在")
-        row.name = name
-    if protocol is not None:
-        row.protocol = protocol
-    if base_url is not None:
-        row.base_url = base_url
-    if model_id is not None:
-        row.model_id = model_id
-    if api_key_provided:
+    async def apply_key_change(current: UserProvider) -> None:
+        """api_key 三态（缺席=不变 / None=清除 / str=替换）。"""
+        if not api_key_provided:
+            return
         if api_key is None:
-            # 显式清除（免 Key 端点）
-            row.api_key_encrypted = None
-            row.api_key_hint = None
+            current.api_key_encrypted = None
+            current.api_key_hint = None
         else:
             assert settings is not None
-            row.api_key_encrypted, row.api_key_hint = _encrypt_key(api_key, user_id, settings)
+            current.api_key_encrypted, current.api_key_hint = _encrypt_key(
+                api_key, user_id, settings
+            )
+
+    await _apply_update_fields(
+        db, user_id, provider_id, row,
+        name=name, protocol=protocol, base_url=base_url,
+        model_id=model_id, is_default=is_default,
+        apply_key=lambda: apply_key_change(row),
+    )
     try:
-        if is_default is True:
-            row.is_default = 1
-            await db.flush()
-            await _clear_other_defaults(db, user_id, row.id)
-        elif is_default is False:
-            row.is_default = 0
         await db.commit()
     except Exception:
         await db.rollback()

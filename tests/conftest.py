@@ -153,9 +153,14 @@ def make_scripted_manager(tmp_path: Path):
     async def fetch_history(task_id: int, limit: int) -> list[dict]:
         return []
 
+    async def resolve_provider(user_id: int, provider_config_id: int | None) -> dict:
+        return {"source": "system", "protocol": "openai",
+                "base_url": "http://provider-proxy:8080/v1", "model_id": "gpt-4o-mini"}
+
     manager = PiEngineManager(
         settings,
         history_fetcher=fetch_history,
+        provider_resolver=resolve_provider,
         extension_generator=ExtensionGenerator(tmp_path / "extensions"),
     )
 

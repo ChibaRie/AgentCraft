@@ -15,8 +15,8 @@ from pathlib import Path
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.engine.skill_loader import PromptTooLargeError, SkillLoader
 from backend.config import Settings
+from backend.engine.skill_loader import PromptTooLargeError, SkillLoader
 from backend.models.conversation import Conversation
 from backend.models.expert import Expert
 from backend.models.expert_skill import ExpertSkill
@@ -24,8 +24,8 @@ from backend.models.message import Message
 from backend.models.skill import Skill
 from backend.models.task import Task
 from backend.models.task_file import TaskFile
-from backend.services import provider_service
 from backend.schemas.task import TaskCreateRequest
+from backend.services import provider_service
 from backend.services.task_locks import task_data_lock
 from backend.services.user_service import UserSystemError
 from backend.services.workspace import (

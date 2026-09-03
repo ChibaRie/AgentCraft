@@ -77,7 +77,9 @@ def encrypt_text(
         raise EncryptionError(f"active kid {active_kid} 不在 keyring 中")
     nonce = os.urandom(_NONCE_BYTES)
     # AESGCM.encrypt 返回 ciphertext||tag（tag 固定 16B 尾部），按契约拆分独立存放
-    sealed = AESGCM(keyring[active_kid]).encrypt(nonce, plaintext.encode("utf-8"), aad.encode("utf-8"))
+    sealed = AESGCM(keyring[active_kid]).encrypt(
+        nonce, plaintext.encode("utf-8"), aad.encode("utf-8")
+    )
     ciphertext, tag = sealed[:-_TAG_BYTES], sealed[-_TAG_BYTES:]
     return {
         "v": 1,
