@@ -4,6 +4,7 @@ import { ArrowLeft, Paperclip, Plus, Warning } from "@phosphor-icons/react";
 import { request } from "../api/client.js";
 import { SseClient } from "../api/sse.js";
 import MessageList from "../components/MessageList.jsx";
+import TaskContextPanel from "../components/TaskContextPanel.jsx";
 import { formatBytes } from "../lib/format.js";
 import { formatDateTime } from "../lib/datetime.js";
 
@@ -60,16 +61,23 @@ export default function TaskChatPage() {
   const [loadError, setLoadError] = useState(null);
   const [notice, setNotice] = useState(null);
 
-  const [streaming, setStreaming] = useState({ active: false, text: "" });
+  const [streaming, setStreaming] = useState({
+    active: false,
+    text: "",
+    thinking: "",
+    toolCalls: [],
+  });
   const [pendingUser, setPendingUser] = useState(null);
   // 对账失败时保留本次回复的乐观渲染，避免已显示内容凭空消失
   const [unpersistedReply, setUnpersistedReply] = useState(null);
   const [input, setInput] = useState("");
   const [isUploading, setIsUploading] = useState(false);
+  const [examples, setExamples] = useState([]);
   const sseRef = useRef(null);
   const activeTaskIdRef = useRef(taskId);
   const scrollRef = useRef(null);
   const fileInputRef = useRef(null);
+  const composerRef = useRef(null);
 
   const refresh = useCallback(async () => {
     const forTaskId = taskId;
@@ -104,7 +112,7 @@ export default function TaskChatPage() {
     setIsMissing(false);
     setLoadError(null);
     setNotice(null);
-    setStreaming({ active: false, text: "" });
+    setStreaming({ active: false, text: "", thinking: "", toolCalls: [] });
     setPendingUser(null);
     setUnpersistedReply(null);
     setInput("");
@@ -143,6 +151,45 @@ export default function TaskChatPage() {
     }
   }, [task?.messages?.length, streaming]);
 
+  // 切换任务 / 首次加载：直接定位到最新消息
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (container && task) {
+      container.scrollTop = container.scrollHeight;
+    }
+    // 仅在任务标识变化时执行；task 内容更新由上方 near-bottom 逻辑接管
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 刻意只看 taskId
+  }, [taskId, Boolean(task)]);
+
+  // 发送后立即滚到底（用户主动发信必然关注回复）
+  useEffect(() => {
+    if (pendingUser && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [pendingUser]);
+
+  // 空对话示例 chips：取专家公开详情的 task_examples（仅首条消息前展示）
+  const hasUserMessage = (task?.messages ?? []).some((message) => message.role === "user");
+  useEffect(() => {
+    if (!task?.expert_id || hasUserMessage) {
+      setExamples([]);
+      return undefined;
+    }
+    let cancelled = false;
+    request(`/api/experts/${task.expert_id}`)
+      .then((payload) => {
+        if (!cancelled) {
+          setExamples(payload.data.task_examples ?? []);
+        }
+      })
+      .catch(() => {
+        // 示例是引导性内容，失败静默
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [task?.expert_id, hasUserMessage]);
+
   async function handleSend(event) {
     event.preventDefault();
     const content = input.trim();
@@ -151,10 +198,13 @@ export default function TaskChatPage() {
       return;
     }
     setInput("");
+    if (composerRef.current) {
+      composerRef.current.style.height = "auto"; // 发送后复位自增高
+    }
     setNotice(null);
     setUnpersistedReply(null);
     setPendingUser(content);
-    setStreaming({ active: true, text: "" });
+    setStreaming({ active: true, text: "", thinking: "", toolCalls: [] });
     const client = new SseClient(`/api/tasks/${myTaskId}/messages`);
     sseRef.current = client;
     let lastText = "";
@@ -166,6 +216,39 @@ export default function TaskChatPage() {
         if (name === "text_delta") {
           lastText += data.delta;
           setStreaming((current) => ({ ...current, text: current.text + data.delta }));
+        } else if (name === "thinking_delta") {
+          setStreaming((current) => ({
+            ...current,
+            thinking: current.thinking + data.delta,
+          }));
+        } else if (name === "tool_event") {
+          // start 建卡（running）；end 回填结果；update 忽略（v1 无增量展示）
+          setStreaming((current) => {
+            if (data.status === "start") {
+              return {
+                ...current,
+                toolCalls: [
+                  ...(current.toolCalls ?? []),
+                  { name: data.name, args: data.args, status: "running", result: null },
+                ],
+              };
+            }
+            if (data.status === "end") {
+              const calls = [...(current.toolCalls ?? [])];
+              for (let i = calls.length - 1; i >= 0; i -= 1) {
+                if (calls[i].name === data.name && calls[i].status === "running") {
+                  calls[i] = {
+                    ...calls[i],
+                    status: data.isError ? "error" : "end",
+                    result: data.result ?? "",
+                  };
+                  break;
+                }
+              }
+              return { ...current, toolCalls: calls };
+            }
+            return current;
+          });
         } else if (name === "message_saved") {
           lastText = data.content;
           setStreaming((current) => ({ ...current, text: data.content }));
@@ -225,7 +308,6 @@ export default function TaskChatPage() {
   }
 
   const messages = task?.messages ?? [];
-  const hasUserMessage = messages.some((message) => message.role === "user");
   const isCompleted = task?.status === "completed";
   const canAttach = Boolean(task) && task.status === "created" && !hasUserMessage;
   const canSend = Boolean(task) && !isCompleted && !streaming.active;
@@ -233,9 +315,25 @@ export default function TaskChatPage() {
     ...(pendingUser ? [{ role: "user", content: pendingUser }] : []),
     ...(unpersistedReply ? [{ role: "assistant", content: unpersistedReply }] : []),
   ];
+  // 调用记录 = 历史 tool 消息 + 流内进行中的调用（右侧面板）
+  // toolCalls 用 ?? [] 兜底：HMR 快速刷新会保留旧形态的 streaming state
+  const panelToolCalls = [
+    ...messages
+      .filter((message) => message.role === "tool")
+      .map((message) => {
+        const isError = message.content.startsWith("[tool_error] ");
+        return {
+          name: message.tool_name || "工具调用",
+          status: isError ? "error" : "end",
+          result: isError ? message.content.slice("[tool_error] ".length) : message.content,
+          time: message.created_at,
+        };
+      }),
+    ...(streaming.toolCalls ?? []).map((call) => ({ ...call, time: null })),
+  ];
 
   return (
-    <main className="task-layout">
+    <main className={`task-layout${taskId && task && !isMissing ? " has-context" : ""}`}>
       <TaskSidebar tasks={tasks} activeId={taskId} />
 
       <section className="task-main">
@@ -272,17 +370,25 @@ export default function TaskChatPage() {
         {taskId && !isMissing && task && (
           <>
             <header className="task-header">
+              <span className="task-avatar" aria-hidden="true">
+                {(task.expert_name_snapshot || "专").slice(0, 1)}
+              </span>
               <div className="task-header-info">
                 <h2 className="task-header-title">{task.title}</h2>
                 <div className="task-header-meta">
-                  <span className={`status-chip is-${task.status}`}>
-                    {STATUS_LABELS[task.status] || task.status}
-                  </span>
                   <span className="task-header-expert">{task.expert_name_snapshot}</span>
-                  <span className="task-header-workdir">{task.workdir}</span>
+                  <span className="task-header-id">#{task.id}</span>
+                  <span className="task-header-workdir" title="沙箱内以 /workspace 可见">
+                    {task.workdir} · 沙箱内可见
+                  </span>
                 </div>
               </div>
-              {isCompleted && <span className="task-header-ended">对话已结束</span>}
+              <span
+                className={`runtime is-${streaming.active ? "running" : isCompleted ? "ended" : "idle"}`}
+              >
+                <span className="runtime-dot" aria-hidden="true" />
+                {streaming.active ? "生成中" : isCompleted ? "已结束" : "空闲"}
+              </span>
             </header>
 
             {notice && (
@@ -301,13 +407,44 @@ export default function TaskChatPage() {
             )}
 
             <div className="message-scroll" ref={scrollRef}>
+              {!hasUserMessage && !streaming.active && messages.length === 0 && (
+                <div className="empty-chat">
+                  <h2>和「{task.expert_name_snapshot}」开始第一轮对话</h2>
+                  <p>
+                    描述你要完成的任务。发送后系统会装载专家人设、已启用 Skill
+                    与工作目录，并冻结任务快照。
+                  </p>
+                  {examples.length > 0 && (
+                    <div className="example-chips">
+                      {examples.map((example) => (
+                        <button
+                          key={example}
+                          type="button"
+                          className="example-chip"
+                          onClick={() => {
+                            setInput(example);
+                            composerRef.current?.focus();
+                          }}
+                        >
+                          {example}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               <MessageList
                 messages={messages}
                 pending={optimisticMessages}
                 streamingText={streaming.text}
                 isStreaming={streaming.active}
+                streamingThinking={streaming.thinking ?? ""}
+                streamingToolCalls={streaming.toolCalls ?? []}
+                taskCreatedAt={task.created_at}
+                skillsCount={task.skills?.length ?? 0}
+                mcpCount={task.mcp_tools?.length ?? 0}
               />
-              {streaming.active && streaming.text === "" && (
+              {streaming.active && streaming.text === "" && streaming.thinking === "" && (
                 <p className="task-stream-hint">专家正在思考…</p>
               )}
             </div>
@@ -344,15 +481,19 @@ export default function TaskChatPage() {
                   {isUploading ? "上传中…" : "附件"}
                 </button>
                 <textarea
+                  ref={composerRef}
                   className="composer-input"
                   value={input}
-                  rows={2}
+                  rows={1}
                   maxLength={32000}
-                  placeholder={
-                    isCompleted ? "任务已结束" : "向专家描述你的需求，Enter 发送"
-                  }
+                  placeholder={isCompleted ? "任务已结束" : "输入消息，Enter 发送，Shift + Enter 换行"}
                   disabled={!canSend}
-                  onChange={(event) => setInput(event.target.value)}
+                  onChange={(event) => {
+                    setInput(event.target.value);
+                    const el = event.target;
+                    el.style.height = "auto";
+                    el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
@@ -364,10 +505,21 @@ export default function TaskChatPage() {
                   发送
                 </button>
               </div>
+              <p className="composer-hint">
+                专家经 Pi 引擎多轮推理完成任务；回复为流式输出，可随时中止。
+              </p>
             </form>
           </>
         )}
       </section>
+
+      {taskId && !isMissing && task && (
+        <TaskContextPanel
+          skills={task.skills ?? []}
+          mcpTools={task.mcp_tools ?? []}
+          toolCalls={panelToolCalls}
+        />
+      )}
     </main>
   );
 }

@@ -355,6 +355,15 @@ def test_create_task_snapshots_frozen(client, test_db):
     assert json.loads(frozen.skill_snapshot) == skill_snapshot
     assert frozen.expert_name_snapshot == "技术周报专家"
 
+    # 详情响应暴露快照摘要（右侧上下文面板数据源，P09 增强）
+    detail = client.get(f"/api/tasks/{task_id}", headers=auth_header(token))
+    data = detail.json()["data"]
+    assert data["expert_avatar_snapshot"] is None  # 专家未设头像
+    assert [s["name"] for s in data["skills"]] == ["技术周报生成"]
+    assert "收集本周技术素材" in data["skills"][0]["content"]
+    assert data["snapshot_loaded_at"] == skill_snapshot["loaded_at"]
+    assert data["mcp_tools"] == []
+
 
 # ---------------------------------------------------------------------------
 # GET /api/tasks（列表）
@@ -552,7 +561,7 @@ def test_send_message_persists_history_and_transitions_to_running(client):
     # EchoEngine：assistant 完整回复原样回显用户消息
     assert data["messages"][1]["content"] == content
     for message in data["messages"]:
-        assert set(message) == {"id", "role", "content", "created_at"}
+        assert set(message) == {"id", "role", "content", "tool_name", "created_at"}
 
 
 def test_send_message_second_round_increments_seq(client):

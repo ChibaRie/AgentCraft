@@ -135,13 +135,19 @@ async def get_task(
             "workdir": task.workdir,
             "expert_id": task.expert_id,
             "expert_name_snapshot": task.expert_name_snapshot,
+            "expert_avatar_snapshot": task.expert_avatar_snapshot,
             "created_at": task.created_at,
+            # 快照摘要（创建时冻结，右侧上下文面板展示；§7.5/DB 设计 §6）
+            "skills": json.loads(task.skill_snapshot or "{}").get("skills", []),
+            "snapshot_loaded_at": json.loads(task.skill_snapshot or "{}").get("loaded_at"),
+            "mcp_tools": json.loads(task.mcp_snapshot or "{}").get("tools", []),
             "files": [task_service.task_file_payload(item) for item in files],
             "messages": [
                 {
                     "id": message.id,
                     "role": message.role,
                     "content": message.content,
+                    "tool_name": message.tool_name,
                     "created_at": message.created_at,
                 }
                 for message in messages
