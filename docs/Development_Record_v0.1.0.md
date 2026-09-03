@@ -1,11 +1,11 @@
 # AgentCraft 开发记录
 
 **文档类型**：开发记录（面向项目成员与后续阶段的 AI Coding 智能体）
-**文档版本**：v0.3.0
+**文档版本**：v0.4.0
 **记录周期**：2026-09-02 至 2026-09-03
 **项目位置**：`C:\Users\ChibaRie\Desktop\AgentCraft\agentcraft`
 **上游文档**：PRD v0.4.1、Engineering Spec v0.4.0、Database Design v0.4.0、Scaffold Plan v0.4.0
-**当前状态**：阶段 1-5 完成——闭环二已接通真引擎（Pi 0.84.3 容器沙箱，faux 全链路验收）；P09 按原型完成功能增强
+**当前状态**：阶段 1-5 + 5.5（Provider BYOK 双模式）完成——闭环二接通真引擎沙箱，用户可自带 Provider（密文存储/任务级快照/指纹重建）；P09 按原型完成功能增强
 
 ---
 
@@ -246,6 +246,26 @@ CLI 无内置 faux（经任务扩展 `pi.registerProvider`+自定义 streamSimpl
 
 ---
 
+## 7A. 阶段 5.5：Provider 双模式 BYOK（2026-09-03 完成）
+
+**目标**（策略变更：Provider 切换从 P1 提入 P0）：用户自带 OpenAI 兼容 Provider（P10 配置，Key 信封加密入库，任务级 `provider_snapshot` 冻结）；未配置回退系统 `.env`；生效时机=容器重建（Skill+Provider 双指纹）。文档基线先行（PRD §1.3/§8+P10、DB §3.12+tasks 双列+「Key 不入 DB」修订、手册 §7.7 重写+§7.2 指纹行+决策 #18、新建 `DEVELOPMENT_PLAN.md` 主控）。
+
+### 交付
+
+- `utils/crypto.py`：AES-256-GCM 信封（§11.3 同款换 AAD，AAD 绑定归属用户；ACTIVE_KID 显式校验；写时派生尾 4 位掩码）
+- `user_providers` 表 + `tasks.provider_config_id`/`provider_snapshot`（batch 迁移）；快照自足——删除配置不阻塞既有任务
+- `/api/providers` CRUD（Key 仅写入/三态更新/默认互斥/所有权统一 404/密钥环未配置 503）
+- 任务创建回退链（显式→用户默认→系统）+ 快照冻结 + 详情 `provider` 摘要（`api_key_set` 布尔）
+- `ensure_container()` Provider 指纹：当前生效配置（新鲜解析）vs 容器启动指纹 → 重建+重播种；DB 快照保持冻结
+- P10 `/settings/providers` + NavBar 入口 + TaskCreatePage Provider 选择器
+- 安全审查修复：ACTIVE_KID 校验、所有权 404 化（消除存在性预言）、base_url URL 解析校验（SSRF 立场：本地 BYOK 允许回环（Ollama），出口防线在阶段 6 proxy）
+
+### 边界
+
+容器 env 的 `OPENAI_BASE_URL` 仍指向 provider-proxy——非 faux 用户 Provider 的真实流量在阶段 6（proxy 按令牌路由 + Responses→Completions 兼容转换）打通；faux 链路与数据/快照/指纹行为已完整验收（含浏览器实测）。
+
+---
+
 ## 8. 累计度量
 
 ### 8.1 测试矩阵（244 passed / 31 skipped，共 275 用例）
@@ -298,6 +318,7 @@ CLI 无内置 faux（经任务扩展 `pi.registerProvider`+自定义 streamSimpl
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| v0.4.0 | 2026-09-03 | 增补阶段 5.5（Provider BYOK 双模式）：加密信封/user_providers/CRUD/任务快照/指纹重建/P10；文档基线四份修订；安全审查修复 3 项 |
 | v0.3.0 | 2026-09-03 | 增补阶段 5（Pi 引擎集成：协议层/SkillLoader/EventHandler/容器池/重播种/abort + faux 全链路验收）与 P09 原型功能增强（Markdown/工具卡片/上下文面板/视口锁定）；基线 244/31；实测规格修正 7 项 |
 | v0.2.0 | 2026-09-03 | 增补阶段 4（任务数据层 + SSE 链路，EchoEngine 冻结契约）：交付内容、审查修复 15 项、闭环二验收；刷新测试基线 204/31、错误码注册表、已知边界 |
 | v0.1.0 | 2026-09-03 | 首版：记录阶段 1-3（用户系统 / Skill 管理 / 专家与专家中心）的全部交付、审查修复与验收结果 |
