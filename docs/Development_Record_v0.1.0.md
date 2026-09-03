@@ -1,11 +1,11 @@
 # AgentCraft 开发记录
 
 **文档类型**：开发记录（面向项目成员与后续阶段的 AI Coding 智能体）
-**文档版本**：v0.1.0
+**文档版本**：v0.2.0
 **记录周期**：2026-09-02 至 2026-09-03
 **项目位置**：`C:\Users\ChibaRie\Desktop\AgentCraft\agentcraft`
 **上游文档**：PRD v0.4.1、Engineering Spec v0.4.0、Database Design v0.4.0、Scaffold Plan v0.4.0
-**当前状态**：阶段 1-3 完成，业务闭环一（专家业务闭环）已收口
+**当前状态**：阶段 1-4 完成，业务闭环一（专家业务闭环）与闭环二（任务对话链路）均已收口
 
 ---
 
@@ -18,17 +18,18 @@
 | 阶段 1 | 用户系统（注册/登录/个人信息/申请专家） | `33e397a` | 28 文件 +2895/-72 | 27 |
 | 阶段 2 | Skill 管理（validate/CRUD/发布/下架 + P08） | `5087b73` | 16 文件 +2155/-73 | 62 |
 | 阶段 3 | 专家 CRUD + Skill 绑定 + 专家中心 | `78a4a5f` | 12 文件 +2948/-74 | 40 |
-| **合计** | **闭环一收口** | — | **~8000 行净增** | **129** |
+| 阶段 4 | 任务数据层 + SSE 链路（EchoEngine 冻结契约 + P09） | `f6f76e5` | 27 文件 +3750/-83 | 47 |
+| **合计** | **闭环一 + 闭环二收口** | — | **~11800 行净增** | **176** |
 
-当前测试基线：**164 passed / 24 skipped**（skipped 均为已实现端点在契约占位测试中的让位，行为由专属测试文件覆盖）。
+当前测试基线：**204 passed / 31 skipped / 共 235 用例**（skipped 均为已实现端点在契约占位测试中的让位，行为由专属测试文件覆盖）。
 
 ```
-22dfceb (脚手架) → 21c8ac0 (索引) → 33e397a (阶段1) → 5087b73 (阶段2) → 78a4a5f (阶段3)
+22dfceb (脚手架) → 21c8ac0 (索引) → 33e397a (阶段1) → 5087b73 (阶段2) → 78a4a5f (阶段3) → f6f76e5 (阶段4)
 ```
 
 ---
 
-## 2. 工程基建（贯穿三阶段）
+## 2. 工程基建（贯穿各阶段）
 
 ### 2.1 统一错误信封（阶段 1 建立，全程复用）
 
@@ -44,7 +45,7 @@
 成功响应统一 `{data: ...}`；列表接口 `{data, total, page, size}`。
 
 **错误码注册表（累计）**：
-`VALIDATION_ERROR` / `UNAUTHORIZED` / `INVALID_CREDENTIALS` / `USERNAME_EXISTS` / `EMAIL_EXISTS` / `ALREADY_EXPERT` / `FORBIDDEN` / `NOT_FOUND` / `CONFLICT` / `NOT_IMPLEMENTED` / `INTERNAL_ERROR`（用户域）；`SKILL_INVALID` / `SKILL_NOT_PUBLISHED` / `SKILL_STILL_BOUND` / `INVALID_STATE_TRANSITION`（Skill 域）；`EXPERT_PUBLISH_CONDITION` / `EXPERT_STILL_REFERENCED` / `SKILL_ALREADY_BOUND` / `BINDING_NOT_FOUND`（专家域）。
+`VALIDATION_ERROR` / `UNAUTHORIZED` / `INVALID_CREDENTIALS` / `USERNAME_EXISTS` / `EMAIL_EXISTS` / `ALREADY_EXPERT` / `FORBIDDEN` / `NOT_FOUND` / `CONFLICT` / `NOT_IMPLEMENTED` / `INTERNAL_ERROR`（用户域）；`SKILL_INVALID` / `SKILL_NOT_PUBLISHED` / `SKILL_STILL_BOUND` / `INVALID_STATE_TRANSITION`（Skill 域）；`EXPERT_PUBLISH_CONDITION` / `EXPERT_STILL_REFERENCED` / `SKILL_ALREADY_BOUND` / `BINDING_NOT_FOUND`（专家域）；`WORKDIR_INVALID` / `WORKDIR_NOT_FOUND` / `EXPERT_NOT_AVAILABLE` / `EXPERT_OFFLINE` / `TASK_ALREADY_STARTED` / `TASK_ROUND_BUSY`（任务域）；`FILENAME_INVALID` / `FILE_TOO_LARGE` / `FILE_COUNT_EXCEEDED` / `FILE_QUOTA_EXCEEDED` / `FILE_STORAGE_ERROR`（文件域）。
 
 ### 2.2 测试基建
 
@@ -61,6 +62,7 @@
 | 阶段 1 | 15 | 11（去重 9） | 0 | 全部修复 |
 | 阶段 2 | 14 | 4 | 1 | 全部修复 |
 | 阶段 3 | 22 | 14（去重 13） | 2 | 全部修复（含 1 项等待期主动发现） |
+| 阶段 4 | 25 | 21（确认 18） | 3 | 15 项修复 |
 
 累计修复的高价值缺陷示例：bcrypt 72 字节截断边界、登录时序侧信道（哑哈希均衡）、`PUT {"field": null}` 触发 NOT NULL 500（两处）、会话恢复竞态、公开 skill_count 泄漏隐藏 Skill 计数、LIKE 通配符未转义、删除确认条残留导致误删路径。
 
@@ -176,9 +178,35 @@ PRD §4.1.4 六条验收全过（Playwright）：注册自动登录、重复用�
 
 ---
 
-## 6. 累计度量
+## 6. 阶段 4：任务数据层 + SSE 链路（EchoEngine 冻结契约）
 
-### 6.1 测试矩阵（164 passed / 24 skipped）
+**目标**：手册 §6.6 任务 API + §8.3 SSE 前端链路 + DB 设计 §3.5-§3.8/§5.5/§6；用 Mock 引擎（EchoEngine）把 SSE 事件契约冻结下来，Pi 真引擎阶段只换引擎实现，前端与事件 schema 不动。完整交付细节见 `Scaffold_Progress_v0.2.0.md` §10。
+
+### 6.1 交付内容
+
+- **任务 API**：`GET /api/workspaces`（授权根内目录浏览，resolve 包含性校验拒 junction/符号链接逃逸）；`POST /api/tasks`（workdir 仅接受根内相对路径，派生存储值与 `ck_tasks_workdir` CHECK 绑定规范常量；专家必须 published；**快照冻结**：expert_name/avatar、skill_snapshot = enabled ∩ published 的完整内容 + persona/methodology、mcp_snapshot = v1 空 tools）；列表/详情（详情含 files + messages，id 兜底秒级时间戳次序）
+- **消息 SSE**：`POST /api/tasks/{id}/messages` 帧序 `meta → text_delta×N → message_saved → done` 严格按 §6.6；前置校验失败仍返回统一 JSON 信封；created/failed → running 原子流转在 data lock 内完成；用户消息先落库，assistant 完整回复以引擎 final 事件为依据落库（§7.6）
+- **文件上传**：仅 `status=created` 且无用户消息；文件名规则（basename/控制字符/255）+ 单文件 20MB + 单次 10 个 + 任务累计 100MB；流式 SHA-256；暂存 → 校验 → 移动 → DB 提交，任一步失败整批补偿；启动巡检清理超时 staging 与孤儿文件；`UploadSizeGuard` 按 Content-Length 在 multipart 预落盘前拒绝超量请求
+- **锁语义（§7.2 的进程内替代）**：per-task data lock（配额 TOCTOU + manifest 冻结与首条消息互斥）+ per-task round lock（一轮未结束再发送 429 + `Retry-After`，seq 锁内计算）
+- **前端 P09**：`/tasks/new`（专家选择 `?expert=` 预选 + WorkdirSelector 钻取）；`/tasks/{id}` 左侧任务列表 + 消息流式渲染（text_delta 逐字 + 光标动画）+ 附件 chips（首条消息后禁用）；`api/sse.js` SseClient = Fetch + ReadableStream + Bearer（EventSource 仅支持 GET 且无法携带 Authorization，故弃用）
+
+### 6.2 审查修复（15 项，3 项否决）
+
+高价值缺陷：上传配额 TOCTOU + manifest 冻结复核（data lock）、running 并发发送 429（round lock）、multipart 预落盘磁盘 DoS 守卫、Windows junction 逃逸（`is_symlink` 不识别 junction，改用 resolve 包含性）、mime_type 消毒、前端切换任务时旧 SSE 流污染共享状态（CRITICAL：activeTaskIdRef 乱序守卫 + 切换 abort）、对账失败保留乐观回复。
+
+### 6.3 验收：PRD 闭环二完整走通（Playwright）
+
+```
+P04 召唤 → 创建任务（workdir 浏览选择）→ 首条消息前上传附件
+→ 发消息 → EchoEngine 流式回复 → 多轮对话 → 刷新后历史可查
+→ 发送后附件按钮禁用 ✓
+```
+
+---
+
+## 7. 累计度量
+
+### 7.1 测试矩阵（204 passed / 31 skipped，共 235 用例）
 
 | 测试文件 | 用例数 | 覆盖 |
 |---|---|---|
@@ -186,39 +214,43 @@ PRD §4.1.4 六条验收全过（Playwright）：注册自动登录、重复用�
 | `test_users.py` | 27 | 注册/登录/me/expert + 权限依赖 + 边界（72 字节、NUL） |
 | `test_skills.py` | 32 | Skill 全契约 + 状态机 + 绑定删除保护 |
 | `test_experts.py` | 40 | 专家 CRUD/发布条件/绑定/discover + 公开口径一致性 |
-| `test_api_contracts.py` | 50（24 skipped） | 契约存在性 + 未实现端点 501/401 监控 |
+| `test_tasks.py` | 47 | 任务创建/快照冻结/workdir/SSE 帧序与 schema/状态机/上传规则与补偿 |
+| `test_api_contracts.py` | 50（31 skipped） | 契约存在性 + 未实现端点 501/401 监控 |
 | `test_health/models/migrations/pi_*` | 9 | 脚手架基线 |
 
-### 6.2 代码资产
+### 7.2 代码资产
 
-- 后端：`api/`（experts/skills/users/auth 已实现；mcp/files/tasks/internal 占位 501）、`services/`（user/skill/expert 已实现）、`middleware/`（auth/permission）、`schemas/`、`models/`（11 表）、`harness/mcp/validate_skill.py`
-- 前端：9 页面全部脱离占位（P01/P03/P04/P05/P06/P07/P08 完整；P02 首页、P09 对话页待后续阶段接入数据）；`auth/AuthContext`、`components/`（NavBar/RequireAuth/SkillEditorModal）、`lib/`（datetime/categories）、`api/client`
-- 构建：前端 gzip 80KB（预算 300KB 内）；ruff 全程零告警；`alembic check` 一致（relationship 变更不动表结构）
+- 后端：`api/`（auth/users/skills/experts/tasks/files 已实现；mcp/internal 与任务 complete/abort/delete 占位 501）、`services/`（user/skill/expert/task/file/workspace/task_locks）、`engine/`（echo.py Mock 引擎；pi_* 占位）、`middleware/`（auth/permission/upload_guard）、`schemas/`、`models/`（11 表）、`harness/mcp/validate_skill.py`
+- 前端：10 路由全部脱离占位（P01/P03-P08 完整 + P09 任务创建/对话完整；P02 首页待数据接入）；`auth/AuthContext`、`components/`（NavBar/RequireAuth/SkillEditorModal/MessageList/WorkdirSelector）、`lib/`（datetime/categories/format）、`api/client` + `api/sse.js`
+- 构建：前端 gzip 87KB（预算 300KB 内）；ruff 全程零告警；`alembic check` 一致
 
-### 6.3 PRD 验收覆盖状态
+### 7.3 PRD 验收覆盖状态
 
 | PRD 条目 | 状态 |
 |---|---|
 | §4.1.4 用户系统验收（6 条） | ✅ 全过 |
-| §4.4.6 Skill 验收 | ✅ 创建/编辑/校验/发布/下架/删除保护；运行时上下文加载（第 3-4、8 条）留任务阶段 |
-| §4.2.7 专家验收 | ✅ 发布条件/下架消失/删除阻断/所有权；「下架后既有任务发送被阻断」（第 4 条）留任务阶段 |
+| §4.4.6 Skill 验收 | ✅ 创建/编辑/校验/发布/下架/删除保护；运行时上下文加载（第 3-4、8 条）随 Pi 引擎阶段 |
+| §4.2.7 专家验收 | ✅ 全过（含「下架后既有任务发送被阻断」，阶段 4 以 `EXPERT_OFFLINE` 落地） |
+| §4.3.x 任务验收 | ✅ 闭环二端到端走通（见 §6.3）；完成/中止/删除随 Pi 引擎阶段 |
 | §3.1 闭环一 | ✅ 端到端走通（见 §5.4） |
+| §3.2 闭环二 | ✅ 端到端走通（EchoEngine 代答，SSE 契约已冻结） |
 
 ---
 
-## 7. 已知边界与阶段 4 接口
+## 8. 已知边界与阶段 5 接口
 
 当前为后续阶段预留的接缝：
 
-1. **任务阶段接管**：专家下架时的 running 任务回收（`offline_expert` 注释处）、下架专家消息发送拦截（TaskService 按 `expert.status`）、快照机制首次落库（`expert_name_snapshot`/`skill_snapshot`/`mcp_snapshot`）
-2. **MCP 管理阶段**：`/api/experts/{id}/mcp` 三端点保持 501；专家详情 `mcps` 字段当前恒为空数组；P08 的 MCP 标签页为占位
-3. **Pi 引擎阶段**：`validate_skill` 将被 Pi 上下文组装（SkillLoader）复用；绑定 enabled 语义与运行时 kill switch 的联动
-4. **通用待办**：列表分页在前端仅 P03 有分页控件（P06/P08 为 size=100 + total 计数，课程规模够用）；首页 P02 与对话页 P09 待数据接入
+1. **Pi 引擎阶段**：EchoEngine → PiEngineManager 替换（API 层只依赖 EngineEvent 流，SSE 契约与前端不动）；round lock 升级为跨进程 mutation lock（§7.2.1）；任务 complete/abort/delete 三端点 501 待接引擎后实现；`validate_skill` 将被 Pi 上下文组装（SkillLoader）复用
+2. **MCP 管理阶段**：`/api/experts/{id}/mcp` 三端点保持 501；专家详情 `mcps` 字段当前恒为空数组；P08 的 MCP 标签页为占位；mcp_snapshot 当前为空集占位
+3. **规格补记**：`description ≤2000` / `content ≤32000` 为规格未记载的实现上限，待规格升版补记
+4. **通用待办**：列表分页在前端仅 P03 有分页控件（P06/P08/P09 侧栏为 size=100/50 + total 计数，课程规模够用）；首页 P02 待数据接入
 
 ---
 
-## 8. 变更记录
+## 9. 变更记录
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| v0.2.0 | 2026-09-03 | 增补阶段 4（任务数据层 + SSE 链路，EchoEngine 冻结契约）：交付内容、审查修复 15 项、闭环二验收；刷新测试基线 204/31、错误码注册表、已知边界 |
 | v0.1.0 | 2026-09-03 | 首版：记录阶段 1-3（用户系统 / Skill 管理 / 专家与专家中心）的全部交付、审查修复与验收结果 |
