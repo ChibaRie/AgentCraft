@@ -2702,6 +2702,19 @@ a {
   margin-top: 0;
 }
 
+/* 紧凑形态：仅工具名 + 状态（结果在右侧调用记录面板） */
+.tool-call.is-compact {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+}
+
+.tool-call.is-compact .tool-call-name {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 13px;
+}
+
 .tool-call summary {
   display: flex;
   align-items: center;

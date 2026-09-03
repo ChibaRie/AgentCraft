@@ -9,22 +9,16 @@ function Markdown({ text }) {
   return <div className="md-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />;
 }
 
-/** 工具调用卡片：summary=名称+参数摘要+状态；展开看结果。 */
-function ToolCard({ name, args, status, result }) {
+/** 工具调用行：只展示工具名 + 状态（结果详情见右侧「调用记录」面板）。 */
+function ToolCard({ name, status }) {
   const isError = status === "error";
   const stateLabel =
-    status === "running" ? "执行中…" : status === "error" ? "调用失败" : status === "end" ? "已完成" : "";
+    status === "running" ? "执行中…" : isError ? "调用失败" : status === "end" ? "已完成" : "";
   return (
-    <details className={`tool-call${isError ? " is-error" : ""}`} open={status === "running"}>
-      <summary>
-        <span className="tool-call-name">{name}</span>
-        {args != null && (
-          <span className="tool-call-args">{JSON.stringify(args)}</span>
-        )}
-        {stateLabel && <span className="tool-call-state">{stateLabel}</span>}
-      </summary>
-      {result != null && result !== "" && <pre className="tool-call-result">{result}</pre>}
-    </details>
+    <div className={`tool-call is-compact${isError ? " is-error" : ""}`}>
+      <span className="tool-call-name">{name}</span>
+      {stateLabel && <span className="tool-call-state">{stateLabel}</span>}
+    </div>
   );
 }
 
@@ -87,12 +81,7 @@ function HistoryMessage({ message }) {
     const isError = message.content.startsWith("[tool_error] ");
     return (
       <div className="message is-tool">
-        <ToolCard
-          name={message.tool_name || "工具调用"}
-          args={null}
-          status={isError ? "error" : "end"}
-          result={isError ? message.content.slice("[tool_error] ".length) : message.content}
-        />
+        <ToolCard name={message.tool_name || "工具调用"} status={isError ? "error" : "end"} />
       </div>
     );
   }
