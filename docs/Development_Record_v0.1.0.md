@@ -1,11 +1,11 @@
 # AgentCraft 开发记录
 
 **文档类型**：开发记录（面向项目成员与后续阶段的 AI Coding 智能体）
-**文档版本**：v0.2.0
+**文档版本**：v0.3.0
 **记录周期**：2026-09-02 至 2026-09-03
 **项目位置**：`C:\Users\ChibaRie\Desktop\AgentCraft\agentcraft`
 **上游文档**：PRD v0.4.1、Engineering Spec v0.4.0、Database Design v0.4.0、Scaffold Plan v0.4.0
-**当前状态**：阶段 1-4 完成，业务闭环一（专家业务闭环）与闭环二（任务对话链路）均已收口
+**当前状态**：阶段 1-5 完成——闭环二已接通真引擎（Pi 0.84.3 容器沙箱，faux 全链路验收）；P09 按原型完成功能增强
 
 ---
 
@@ -19,12 +19,14 @@
 | 阶段 2 | Skill 管理（validate/CRUD/发布/下架 + P08） | `5087b73` | 16 文件 +2155/-73 | 62 |
 | 阶段 3 | 专家 CRUD + Skill 绑定 + 专家中心 | `78a4a5f` | 12 文件 +2948/-74 | 40 |
 | 阶段 4 | 任务数据层 + SSE 链路（EchoEngine 冻结契约 + P09） | `f6f76e5` | 27 文件 +3750/-83 | 47 |
-| **合计** | **闭环一 + 闭环二收口** | — | **~11800 行净增** | **176** |
+| 阶段 5 | Pi 引擎集成（容器沙箱 + 重播种 + abort） | `d153a22`+`afaae05` | 32 文件 +4300/-120 | 30+5 |
+| P09 增强 | 原型功能对齐（md/工具卡片/上下文面板/视口锁定） | `852dbe3` | 9 文件 +1100/-60 | 2 |
+| **合计** | **闭环二接通真引擎** | — | **~17200 行净增** | **208** |
 
-当前测试基线：**204 passed / 31 skipped / 共 235 用例**（skipped 均为已实现端点在契约占位测试中的让位，行为由专属测试文件覆盖）。
+当前测试基线：**244 passed / 31 skipped / 共 275 用例**（skipped 均为已实现端点在契约占位测试中的让位，行为由专属测试文件覆盖）。
 
 ```
-22dfceb (脚手架) → 21c8ac0 (索引) → 33e397a (阶段1) → 5087b73 (阶段2) → 78a4a5f (阶段3) → f6f76e5 (阶段4)
+22dfceb (脚手架) → 21c8ac0 (索引) → 33e397a (阶段1) → 5087b73 (阶段2) → 78a4a5f (阶段3) → f6f76e5 (阶段4) → d153a22+afaae05 (阶段5) → 852dbe3 (P09增强)
 ```
 
 ---
@@ -45,7 +47,7 @@
 成功响应统一 `{data: ...}`；列表接口 `{data, total, page, size}`。
 
 **错误码注册表（累计）**：
-`VALIDATION_ERROR` / `UNAUTHORIZED` / `INVALID_CREDENTIALS` / `USERNAME_EXISTS` / `EMAIL_EXISTS` / `ALREADY_EXPERT` / `FORBIDDEN` / `NOT_FOUND` / `CONFLICT` / `NOT_IMPLEMENTED` / `INTERNAL_ERROR`（用户域）；`SKILL_INVALID` / `SKILL_NOT_PUBLISHED` / `SKILL_STILL_BOUND` / `INVALID_STATE_TRANSITION`（Skill 域）；`EXPERT_PUBLISH_CONDITION` / `EXPERT_STILL_REFERENCED` / `SKILL_ALREADY_BOUND` / `BINDING_NOT_FOUND`（专家域）；`WORKDIR_INVALID` / `WORKDIR_NOT_FOUND` / `EXPERT_NOT_AVAILABLE` / `EXPERT_OFFLINE` / `TASK_ALREADY_STARTED` / `TASK_ROUND_BUSY`（任务域）；`FILENAME_INVALID` / `FILE_TOO_LARGE` / `FILE_COUNT_EXCEEDED` / `FILE_QUOTA_EXCEEDED` / `FILE_STORAGE_ERROR`（文件域）。
+`VALIDATION_ERROR` / `UNAUTHORIZED` / `INVALID_CREDENTIALS` / `USERNAME_EXISTS` / `EMAIL_EXISTS` / `ALREADY_EXPERT` / `FORBIDDEN` / `NOT_FOUND` / `CONFLICT` / `NOT_IMPLEMENTED` / `INTERNAL_ERROR`（用户域）；`SKILL_INVALID` / `SKILL_NOT_PUBLISHED` / `SKILL_STILL_BOUND` / `INVALID_STATE_TRANSITION`（Skill 域）；`EXPERT_PUBLISH_CONDITION` / `EXPERT_STILL_REFERENCED` / `SKILL_ALREADY_BOUND` / `BINDING_NOT_FOUND`（专家域）；`WORKDIR_INVALID` / `WORKDIR_NOT_FOUND` / `EXPERT_NOT_AVAILABLE` / `EXPERT_OFFLINE` / `TASK_ALREADY_STARTED` / `TASK_ROUND_BUSY` / `PROMPT_TOO_LARGE`（任务域，413=系统提示词超 64KiB）；`FILENAME_INVALID` / `FILE_TOO_LARGE` / `FILE_COUNT_EXCEEDED` / `FILE_QUOTA_EXCEEDED` / `FILE_STORAGE_ERROR`（文件域）；SSE 流内错误帧 `ENGINE_ERROR` / `ROUND_TIMEOUT`（引擎/轮超时，recoverable）。
 
 ### 2.2 测试基建
 
@@ -63,6 +65,7 @@
 | 阶段 2 | 14 | 4 | 1 | 全部修复 |
 | 阶段 3 | 22 | 14（去重 13） | 2 | 全部修复（含 1 项等待期主动发现） |
 | 阶段 4 | 25 | 21（确认 18） | 3 | 15 项修复 |
+| 阶段 5 | 提交安全审查 | 2 | 0 | 2 项修复（轮超时逐段重置→整轮 deadline；stdout 行长/队列无界→1MiB 上限+有界队列）；另有实测驱动规格修正 7 项（phase5 文档 §九） |
 
 累计修复的高价值缺陷示例：bcrypt 72 字节截断边界、登录时序侧信道（哑哈希均衡）、`PUT {"field": null}` 触发 NOT NULL 500（两处）、会话恢复竞态、公开 skill_count 泄漏隐藏 Skill 计数、LIKE 通配符未转义、删除确认条残留导致误删路径。
 
@@ -204,9 +207,48 @@ P04 召唤 → 创建任务（workdir 浏览选择）→ 首条消息前上传�
 
 ---
 
-## 7. 累计度量
+## 7. 阶段 5：Pi 引擎集成（闭环二接通真引擎）
 
-### 7.1 测试矩阵（204 passed / 31 skipped，共 235 用例）
+**目标**：手册 §7 全链路——PiEngine 协议层、SkillLoader、EventHandler、PiEngineManager（容器池/重播种/abort），替换 EchoEngine。执行手册 `docs/phase5_piagent.md`（含 §九 实测规格修正 7 项）。事实源对齐 pi 0.84.3 源码，步骤 1 手工 JSONL 实验录制真实帧序（`tests/fixtures/pi_frames/`）作协议测试语料。
+
+### 7.1 交付内容（4 核心 + 3 支撑文件）
+
+| 模块 | 要点 |
+|---|---|
+| `engine/pi_engine.py` | JSONL LF 分帧；pending {id: Future} 自增关联（id 错配→needs_rebuild）；handle_line 三分叉（response→Future / extension_ui_request 2s 自动应答 / 事件→回调）；writer lock 串行 stdin；stdout 独立排空协程（1MiB 行长上限） |
+| `engine/event_handler.py` | Pi 事件→SSE（§6.6 冻结 schema）；落库纪律：assistant 仅 stopReason=stop，aborted/error 丢弃（防重播种喂回残缺上下文）；tool_execution_end → role=tool 落库；usage 映射 prompt/completion_tokens |
+| `engine/skill_loader.py` | §7.5 组装：专家身份→人设→方法论→Skill（任务级 nonce 边界+同形子串剥离）→TaskFile manifest（独立 nonce+数据声明）→工作规则（项目上下文非更高优先级）→末尾忽略声明；64KiB 上限创建时 413 `PROMPT_TOO_LARGE` |
+| `engine/pi_engine_manager.py` | 容器表+ensure_container（惰性创建/needs_rebuild/引擎死亡重建）；**重播种**：新容器首条消息嵌入最近 40 条历史（[历史对话回顾]+[当前消息]，绝不单独发历史防幻影轮）；run_round 整轮 deadline 超时→abort；request_abort 绕 mutation lock；有界轮队列（增量可丢/关键必达）；任务令牌随容器轮换 |
+| `engine/docker_transport.py` | `ContainerSpec` 单一事实源（CLI/API 双通道防漂移）：argv 数组直传、三挂载、非 root、只读 rootfs、cap_drop ALL、no-new-privileges、tmpfs（/tmp + ~/.pi）、internal 网络、512MB/1CPU；aiodocker API 通道 + docker CLI stdio 通道（npipe 回退）+ stderr 诊断日志 |
+| `engine/extension_generator.py` | §7.4 生成 task.ts：MCP 工具循环（快照写死）+ faux provider 注册块（AGENTCRAFT_PROVIDER=faux） |
+| `engine/subprocess_transport.py` | 本地子进程传输（PI_RUNTIME=subprocess，仅开发） |
+
+PI_RUNTIME=auto：docker API→docker CLI→本地子进程依序回退。**EchoEngine 删除**；`POST /api/tasks/{id}/abort` 落地（202，所有权检查后绕锁）。
+
+### 7.2 规格修正（实测驱动，已补记规格 §12 #16/#17 与 phase5 文档 §九）
+
+CLI 无内置 faux（经任务扩展 `pi.registerProvider`+自定义 streamSimple 注册）；abort 后 message_end 仍发（stopReason=aborted）且 agent_settled 照常收尾；只读 rootfs 需 `~/.pi` tmpfs（凭证存储）；`--mount readonly` 语法与绝对路径要求；user 消息也有 message_start/end（落库按 role 过滤）；轮超时整轮 deadline（防逐段重置）；Windows 下以 `node <dist/bundle/cli.js>` 形态直跑。
+
+### 7.3 测试策略
+
+- 协议层用**录制帧序回放**（faux_basic/faux_abort.jsonl）而非手造帧
+- manager 用脚本化假 Pi（conftest `FakePiTransport`：ACK→分帧回显 outgoing 消息，可挂起/注入错误/模拟 abort 帧序）——重播种/幻影轮/令牌轮换全部可断言
+- 契约测试（test_tasks SSE 47 例）经依赖注入换假 manager，与引擎实现解耦，§6.6 契约持续被监控
+
+### 7.4 验收（PRD §4.5.5，faux + Docker 容器运行时，`acceptance_pi_e2e.py`）
+
+```
+创建任务 → 首条消息流式（首条 <10s，非首条 0.03s）→ 多轮引用第 1 轮暗号（内存连续）
+→ docker rm -f 容器 → 再发消息 → 自动重建+重播种（回复含回顾壳中的暗号）✓
+→ abort：202 → done(aborted) → 半截回复不落库 → 任务保持 running 可继续 ✓
+→ docker inspect：仅三挂载/internal 网络/只读 rootfs/cap_drop ALL/非 root/无真实 Key ✓
+```
+
+---
+
+## 8. 累计度量
+
+### 8.1 测试矩阵（244 passed / 31 skipped，共 275 用例）
 
 | 测试文件 | 用例数 | 覆盖 |
 |---|---|---|
@@ -214,43 +256,48 @@ P04 召唤 → 创建任务（workdir 浏览选择）→ 首条消息前上传�
 | `test_users.py` | 27 | 注册/登录/me/expert + 权限依赖 + 边界（72 字节、NUL） |
 | `test_skills.py` | 32 | Skill 全契约 + 状态机 + 绑定删除保护 |
 | `test_experts.py` | 40 | 专家 CRUD/发布条件/绑定/discover + 公开口径一致性 |
-| `test_tasks.py` | 47 | 任务创建/快照冻结/workdir/SSE 帧序与 schema/状态机/上传规则与补偿 |
+| `test_tasks.py` | 50 | 任务创建/快照冻结/workdir/SSE 帧序/状态机/上传/abort/413/快照摘要 |
+| `test_pi_engine.py` | 13 | 协议层：ACK 语义/id 自增与错配/坏行跳过/UI 自动应答/生命周期（真实帧序回放） |
+| `test_pi_manager.py` | 9 | 重播种包裹与幻影轮防线/引擎死亡重建/令牌轮换/abort 绕锁 |
+| `test_event_handler.py` | 8 | 事件翻译：落库纪律/aborted 丢弃/usage 映射/tool_event |
+| `test_skill_loader.py` | 13 | §7.5 组装顺序/nonce 边界/同形剥离/manifest/64KiB |
 | `test_api_contracts.py` | 50（31 skipped） | 契约存在性 + 未实现端点 501/401 监控 |
 | `test_health/models/migrations/pi_*` | 9 | 脚手架基线 |
 
-### 7.2 代码资产
+### 8.2 代码资产
 
-- 后端：`api/`（auth/users/skills/experts/tasks/files 已实现；mcp/internal 与任务 complete/abort/delete 占位 501）、`services/`（user/skill/expert/task/file/workspace/task_locks）、`engine/`（echo.py Mock 引擎；pi_* 占位）、`middleware/`（auth/permission/upload_guard）、`schemas/`、`models/`（11 表）、`harness/mcp/validate_skill.py`
-- 前端：10 路由全部脱离占位（P01/P03-P08 完整 + P09 任务创建/对话完整；P02 首页待数据接入）；`auth/AuthContext`、`components/`（NavBar/RequireAuth/SkillEditorModal/MessageList/WorkdirSelector）、`lib/`（datetime/categories/format）、`api/client` + `api/sse.js`
-- 构建：前端 gzip 87KB（预算 300KB 内）；ruff 全程零告警；`alembic check` 一致
+- 后端：`api/`（auth/users/skills/experts/tasks/files/abort 已实现；mcp/internal 与任务 complete/delete 占位 501）、`services/`（user/skill/expert/task/file/workspace/task_locks）、`engine/`（pi_engine/event_handler/skill_loader/pi_engine_manager/extension_generator/docker_transport/subprocess_transport）、`middleware/`（auth/permission/upload_guard）、`schemas/`、`models/`（11 表）、`harness/mcp/validate_skill.py`；pi-worker 镜像 `agentcraft-pi-worker:0.84.3`
+- 前端：P09 对齐原型（Markdown 富渲染/思考行/工具调用卡片/右侧三 tab 上下文面板 + Skill 抽屉/运行态指示灯/空态示例 chips/composer 自增高与视口锁定布局）；`lib/markdown.js` 零依赖转义优先渲染器
+- 构建：前端 gzip 89.7KB（预算 300KB 内）；ruff 全程零告警；`alembic check` 一致
 
-### 7.3 PRD 验收覆盖状态
+### 8.3 PRD 验收覆盖状态
 
 | PRD 条目 | 状态 |
 |---|---|
 | §4.1.4 用户系统验收（6 条） | ✅ 全过 |
 | §4.4.6 Skill 验收 | ✅ 创建/编辑/校验/发布/下架/删除保护；运行时上下文加载（第 3-4、8 条）随 Pi 引擎阶段 |
 | §4.2.7 专家验收 | ✅ 全过（含「下架后既有任务发送被阻断」，阶段 4 以 `EXPERT_OFFLINE` 落地） |
-| §4.3.x 任务验收 | ✅ 闭环二端到端走通（见 §6.3）；完成/中止/删除随 Pi 引擎阶段 |
+| §4.3.x 任务验收 | ✅ 闭环二真引擎走通（§7.4：faux 流式/重播种恢复/abort）；complete/delete 随阶段 7 |
 | §3.1 闭环一 | ✅ 端到端走通（见 §5.4） |
-| §3.2 闭环二 | ✅ 端到端走通（EchoEngine 代答，SSE 契约已冻结） |
+| §3.2 闭环二 | ✅ 端到端走通（阶段 4 EchoEngine 冻结契约 → 阶段 5 换真引擎，前端零改动） |
 
 ---
 
-## 8. 已知边界与阶段 5 接口
+## 9. 已知边界与阶段 6 接口
 
 当前为后续阶段预留的接缝：
 
-1. **Pi 引擎阶段**：EchoEngine → PiEngineManager 替换（API 层只依赖 EngineEvent 流，SSE 契约与前端不动）；round lock 升级为跨进程 mutation lock（§7.2.1）；任务 complete/abort/delete 三端点 501 待接引擎后实现；`validate_skill` 将被 Pi 上下文组装（SkillLoader）复用
-2. **MCP 管理阶段**：`/api/experts/{id}/mcp` 三端点保持 501；专家详情 `mcps` 字段当前恒为空数组；P08 的 MCP 标签页为占位；mcp_snapshot 当前为空集占位
+1. **阶段 6（MCP 桥）**：`/internal/mcp/call` 后端实现 + `/api/experts/{id}/mcp` 三端点（仍 501）+ 扩展 TOOLS 真实注入（阶段 5 的 registerTool 模板与任务令牌直接复用）；provider-proxy（faux→openai 切换）；P08 的 MCP 标签页与 P09 右侧 MCP tab 数据接入
+2. **阶段 7（生命周期完善）**：任务 complete/delete 端点（仍 501）；mutation lock 跨进程化、并发上限排队、空闲回收、崩溃恢复重试 3 次、Skill 指纹 kill switch、看门狗巡检
 3. **规格补记**：`description ≤2000` / `content ≤32000` 为规格未记载的实现上限，待规格升版补记
 4. **通用待办**：列表分页在前端仅 P03 有分页控件（P06/P08/P09 侧栏为 size=100/50 + total 计数，课程规模够用）；首页 P02 待数据接入
 
 ---
 
-## 9. 变更记录
+## 10. 变更记录
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| v0.3.0 | 2026-09-03 | 增补阶段 5（Pi 引擎集成：协议层/SkillLoader/EventHandler/容器池/重播种/abort + faux 全链路验收）与 P09 原型功能增强（Markdown/工具卡片/上下文面板/视口锁定）；基线 244/31；实测规格修正 7 项 |
 | v0.2.0 | 2026-09-03 | 增补阶段 4（任务数据层 + SSE 链路，EchoEngine 冻结契约）：交付内容、审查修复 15 项、闭环二验收；刷新测试基线 204/31、错误码注册表、已知边界 |
 | v0.1.0 | 2026-09-03 | 首版：记录阶段 1-3（用户系统 / Skill 管理 / 专家与专家中心）的全部交付、审查修复与验收结果 |
