@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from backend.api import api_router, internal_router
 from backend.config import get_settings
 from backend.database import async_session_factory
+from backend.dependencies import get_pi_engine_manager
 from backend.middleware.upload_guard import UploadSizeGuardMiddleware
 from backend.services.file_service import sweep_stale_storage
 from backend.services.user_service import UserSystemError
@@ -39,6 +40,8 @@ async def lifespan(_app: FastAPI):
     except Exception:
         # 清理失败不阻塞启动，下次启动重试
         logger.exception("启动文件巡检失败")
+    # §7.2 空闲回收 / §7.8.1 看门狗：后台巡检循环
+    get_pi_engine_manager().ensure_background()
     yield
 
 

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Briefcase,
   CheckCircle,
@@ -7,13 +8,44 @@ import {
   UserCircle,
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
+import { request } from "../api/client.js";
 import { formatDateTime } from "../lib/datetime.js";
+
+const TASK_STATUS_LABELS = {
+  created: "待开始",
+  running: "进行中",
+  completed: "已结束",
+  failed: "异常",
+};
 
 export default function ProfilePage() {
   const { user, isExpert, applyExpert } = useAuth();
   const [isApplying, setIsApplying] = useState(false);
   const [applyError, setApplyError] = useState("");
   const [justApplied, setJustApplied] = useState(false);
+  const [tasks, setTasks] = useState(null);
+  const [taskError, setTaskError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        // §8.2 P05 TaskList：仅本人任务（服务端按 token 归属过滤）
+        const payload = await request("/api/tasks?page=1&size=20");
+        if (!cancelled) {
+          setTasks(payload.data);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setTaskError(error.message || "任务列表加载失败");
+        }
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleApplyExpert() {
     setIsApplying(true);
@@ -120,10 +152,39 @@ export default function ProfilePage() {
               <ListChecks size={16} aria-hidden="true" />
               我的任务
             </h2>
-            <div className="empty-state">
-              <strong>还没有任务</strong>
-              到专家中心召唤一位专家，开启你的第一个任务对话。
-            </div>
+            {taskError && (
+              <div className="form-alert" role="alert" style={{ marginBottom: 12 }}>
+                {taskError}
+              </div>
+            )}
+            {tasks === null && !taskError ? (
+              <p className="profile-expert-desc">加载中…</p>
+            ) : tasks && tasks.length === 0 ? (
+              <div className="empty-state">
+                <strong>还没有任务</strong>
+                到专家中心召唤一位专家，开启你的第一个任务对话。
+              </div>
+            ) : (
+              tasks && (
+                <ul className="binding-list">
+                  {tasks.map((task) => (
+                    <li className="binding-row" key={task.id}>
+                      <div className="binding-row-main">
+                        <Link to={`/tasks/${task.id}`} className="binding-row-link">
+                          <strong>{task.title || `任务 #${task.id}`}</strong>
+                          <span className="context-tool-desc">
+                            {task.expert_name_snapshot} · {formatDateTime(task.created_at)}
+                          </span>
+                        </Link>
+                      </div>
+                      <span className={`status-chip is-${task.status}`}>
+                        {TASK_STATUS_LABELS[task.status] || task.status}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )
+            )}
           </div>
         </section>
       </div>

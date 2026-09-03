@@ -61,6 +61,40 @@ def get_pi_engine_manager() -> PiEngineManager:
             )
             return snapshot
 
+    async def fetch_running_tasks() -> list[dict]:
+        """§7.8.1 看门狗取数：running 任务的 id 与 running 起点（updated_at）。"""
+        from sqlalchemy import select
+
+        from backend.database import async_session_factory
+        from backend.models.task import Task
+
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(Task.id, Task.updated_at).where(Task.status == "running")
+            )
+            return [
+                {"id": row[0], "running_since": row[1]}
+                for row in result.all()
+                if row[1] is not None
+            ]
+
+    async def mark_task_failed(task_id: int) -> None:
+        """§7.8.1 看门狗落库：仅 running → failed（不覆盖 completed）。"""
+        from datetime import datetime, timezone
+
+        from sqlalchemy import update
+
+        from backend.database import async_session_factory
+        from backend.models.task import Task
+
+        async with async_session_factory() as session:
+            await session.execute(
+                update(Task)
+                .where(Task.id == task_id, Task.status == "running")
+                .values(status="failed", updated_at=datetime.now(timezone.utc))
+            )
+            await session.commit()
+
     return PiEngineManager(
         settings,
         history_fetcher=fetch_history,
@@ -68,4 +102,6 @@ def get_pi_engine_manager() -> PiEngineManager:
         extension_generator=ExtensionGenerator(
             Path(settings.HOST_DATA_ROOT) / "extensions"
         ),
+        running_tasks_fetcher=fetch_running_tasks,
+        mark_task_failed=mark_task_failed,
     )

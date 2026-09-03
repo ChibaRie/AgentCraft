@@ -22,6 +22,7 @@ import os
 import secrets
 import shutil
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.config import Settings
@@ -36,7 +37,7 @@ from backend.engine.docker_transport import (
 )
 from backend.engine.event_handler import EventHandler
 from backend.engine.extension_generator import ExtensionGenerator
-from backend.engine.pi_engine import PiEngine
+from backend.engine.pi_engine import PiEngine, PiEngineError
 from backend.engine.skill_loader import SkillLoader
 from backend.engine.subprocess_transport import SubprocessPiTransport, resolve_pi_cli_js
 from backend.services.provider_service import provider_fingerprint
@@ -53,9 +54,35 @@ _ROLE_LABELS = {"user": "用户", "assistant": "助手", "tool": "工具"}
 # 轮事件队列上限：text_delta 洪泛时的内存防线（超出部分丢弃流式增量）
 _ROUND_QUEUE_MAX = 2000
 
+# 后台巡检节奏（§7.2 空闲回收 + §7.8.1 看门狗共用一个循环）
+_BACKGROUND_SWEEP_SECONDS = 30
+
+# §7.8 崩溃恢复：容器重建+重播种重发的最大次数
+_CRASH_RECOVERY_ATTEMPTS = 3
+
+# §7.8 轮超时/崩溃收尾的固定 SSE 帧（§6.6 done 枚举仅 stop|aborted）
+_ROUND_TIMEOUT_ERROR = {
+    "code": "ROUND_TIMEOUT",
+    "message": "回复超时，请重试",
+    "recoverable": True,
+}
+_ABORTED_DONE = {
+    "finish_reason": "aborted",
+    "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+}
+_ENGINE_CRASHED_ERROR = {
+    "code": "ENGINE_CRASHED",
+    "message": "引擎连续崩溃，请重试",
+    "recoverable": True,
+}
+
 
 class EngineStateError(Exception):
     """容器/引擎状态类错误（轮处理器转为 SSE error 帧）。"""
+
+
+class EngineCrashed(Exception):
+    """轮进行中容器死亡（reader EOF）——触发 §7.8 崩溃恢复。"""
 
 
 class PiEngineManager:
@@ -70,11 +97,16 @@ class PiEngineManager:
         provider_resolver: ProviderResolver,
         skill_loader: SkillLoader | None = None,
         task_files_root: Path | None = None,
+        running_tasks_fetcher: Callable[[], Awaitable[list[dict]]] | None = None,
+        mark_task_failed: Callable[[int], Awaitable[None]] | None = None,
     ) -> None:
         self._settings = settings
         self._history_fetcher = history_fetcher
         self._provider_resolver = provider_resolver
         self._extension_generator = extension_generator
+        # §7.8.1 看门狗的 DB 触点（dependencies 注入；测试可替换）
+        self._running_tasks_fetcher = running_tasks_fetcher
+        self._mark_task_failed = mark_task_failed
         self._skill_loader = skill_loader or SkillLoader(
             max_bytes=settings.SKILL_PROMPT_MAX_BYTES
         )
@@ -86,6 +118,12 @@ class PiEngineManager:
         self._containers: dict[int, PiEngine] = {}
         self._removal_hooks: dict[int, Callable[[], Awaitable[None]]] = {}
         self._task_tokens: dict[int, str] = {}
+        # §7.2 并发上限：容器槽位信号量（holder 集合保证一一配对释放）
+        self._slots = asyncio.Semaphore(max(1, settings.PI_MAX_CONCURRENT_CONTAINERS))
+        self._slot_holders: set[int] = set()
+        # §7.2 空闲回收：每任务最近活动时刻（loop.monotonic）
+        self._last_activity: dict[int, float] = {}
+        self._background_task: asyncio.Task | None = None
 
     # -- 容器生命周期 ---------------------------------------------------------
 
@@ -111,12 +149,7 @@ class PiEngineManager:
         current_fingerprint = provider_fingerprint(current_provider)
 
         engine = self._containers.get(task_id)
-        healthy = (
-            engine is not None
-            and not engine.needs_rebuild
-            and engine._reader_task is not None
-            and not engine._reader_task.done()
-        )
+        healthy = self._engine_healthy(task_id)
         if healthy and engine.provider_fingerprint != current_fingerprint:
             logger.info(
                 "Task %s: Provider 指纹变化（%s → %s），重建容器",
@@ -126,6 +159,7 @@ class PiEngineManager:
             )
             healthy = False
         if healthy:
+            self._last_activity[task_id] = asyncio.get_running_loop().time()
             return engine
         if engine is not None:
             await self._teardown(task_id)
@@ -142,6 +176,16 @@ class PiEngineManager:
         self._containers[task_id] = engine
         return engine
 
+    def _engine_healthy(self, task_id: int) -> bool:
+        """容器存在、未被标记重建、reader 协程存活。"""
+        engine = self._containers.get(task_id)
+        return (
+            engine is not None
+            and not engine.needs_rebuild
+            and engine._reader_task is not None
+            and not engine._reader_task.done()
+        )
+
     async def _create_engine(
         self,
         *,
@@ -156,6 +200,10 @@ class PiEngineManager:
         system_prompt = self._skill_loader.build_system_prompt(
             skill_snapshot, task_files, expert_name=expert_name
         )
+        # §7.2 并发上限：容器占用一个槽位（teardown 释放）；满时在此排队
+        if task_id not in self._slot_holders:
+            await self._slots.acquire()
+            self._slot_holders.add(task_id)
         # 容器 argv 用当前解析的 Provider（协议/模型）；base_url 与 Key 由
         # provider-proxy 按任务令牌侧解析（真实 Key 永不进容器，§7.7）
         provider = provider_snapshot.get("protocol") or self._settings.PI_PROVIDER
@@ -203,6 +251,7 @@ class PiEngineManager:
         engine.needs_reseed = True  # 新容器内存为空，首条消息必须重播种（§7.6）
         await transport.start()
         await engine.start()
+        self._last_activity[task_id] = asyncio.get_running_loop().time()
         logger.info("Task %s: Pi 引擎就绪（%s）", task_id, type(transport).__name__)
         return engine
 
@@ -311,6 +360,10 @@ class PiEngineManager:
             raise EngineStateError(f"工作目录越界: {stored_workdir}")
         return target
 
+    def resolve_workdir_host(self, stored_workdir: str) -> Path:
+        """公开包装（harness 内部接口解析任务 workdir 用）。"""
+        return self._resolve_workdir_host(stored_workdir)
+
     @staticmethod
     def _absolute(path: Path, label: str) -> Path:
         """bind mount source 必须是绝对路径（docker CLI 相对路径直接报错）。"""
@@ -327,6 +380,96 @@ class PiEngineManager:
         if removal is not None:
             await removal()
         self._task_tokens.pop(task_id, None)
+        if task_id in self._slot_holders:
+            self._slot_holders.discard(task_id)
+            self._slots.release()
+        self._last_activity.pop(task_id, None)
+
+    # -- 后台巡检（§7.2 空闲回收；§7.8.1 看门狗在 _background_loop 内扩展） ----
+
+    def ensure_background(self) -> None:
+        """启动后台巡检循环（lifespan 调用；重复调用幂等）。"""
+        if self._background_task is None or self._background_task.done():
+            self._background_task = asyncio.create_task(self._background_loop())
+
+    async def _background_loop(self) -> None:
+        while True:
+            await asyncio.sleep(_BACKGROUND_SWEEP_SECONDS)
+            try:
+                await self.sweep_idle()
+            except Exception:  # noqa: BLE001 - 巡检失败不终止循环
+                logger.exception("空闲回收巡检失败")
+            try:
+                await self.sweep_watchdog()
+            except Exception:  # noqa: BLE001 - 巡检失败不终止循环
+                logger.exception("看门狗巡检失败")
+
+    async def sweep_idle(self) -> int:
+        """空闲回收（§7.2）：连续 PI_IDLE_TIMEOUT_MINUTES 无活动且无活动轮
+        的容器 → 回收（下条消息自动重建+重播种）。返回回收数。"""
+        now = asyncio.get_running_loop().time()
+        idle_seconds = self._settings.PI_IDLE_TIMEOUT_MINUTES * 60
+        reclaimed = 0
+        for task_id, engine in list(self._containers.items()):
+            last = self._last_activity.get(task_id)
+            if last is None or not engine.is_round_settled:
+                continue
+            if now - last <= idle_seconds:
+                continue
+            logger.info("Task %s: 空闲超过 %d 分钟，回收容器", task_id,
+                        self._settings.PI_IDLE_TIMEOUT_MINUTES)
+            await self._teardown(task_id)
+            reclaimed += 1
+        return reclaimed
+
+    async def sweep_watchdog(self) -> int:
+        """看门狗巡检（§7.8.1）：确保不存在「running 但无终态保障」的任务。
+
+        - 容器死亡（无活动轮）→ 回收 + 标记 failed（可重试）
+        - running 累计时长超 PI_TASK_MAX_LIFETIME_MINUTES → abort（若在轮中）
+          + 回收容器 + 标记 failed（可重试）
+        返回处置数。DB 触点经注入的 fetcher/marker（单测替换）。
+        """
+        if self._running_tasks_fetcher is None:
+            return 0
+        rows = await self._running_tasks_fetcher()
+        now = datetime.now(timezone.utc)
+        lifetime_limit = self._settings.PI_TASK_MAX_LIFETIME_MINUTES * 60
+        handled = 0
+        for row in rows:
+            task_id = row["id"]
+            running_since = row.get("running_since")
+            engine = self._containers.get(task_id)
+            # 1) 容器死亡（无活动轮）：崩溃恢复只覆盖轮内；轮间死亡在此收口
+            if engine is not None and not self._engine_healthy(task_id):
+                if not engine.is_round_settled:
+                    continue  # 活动轮中的容器死亡由 run_round 崩溃恢复负责
+                logger.warning("Task %s: 看门狗发现容器死亡，回收并标记 failed", task_id)
+                await self._teardown(task_id)
+                await self._mark_failed_safe(task_id)
+                handled += 1
+                continue
+            # 2) 任务总超时（§7.8.1）：running 累计时长超阈
+            if running_since is not None:
+                started = (
+                    running_since
+                    if running_since.tzinfo is not None
+                    else running_since.replace(tzinfo=timezone.utc)
+                )
+                if (now - started).total_seconds() <= lifetime_limit:
+                    continue
+                logger.warning("Task %s: 任务总超时，abort + failed + 回收容器", task_id)
+                if engine is not None:
+                    if not engine.is_round_settled:
+                        await self.request_abort(task_id)
+                    await self._teardown(task_id)
+                await self._mark_failed_safe(task_id)
+                handled += 1
+        return handled
+
+    async def _mark_failed_safe(self, task_id: int) -> None:
+        if self._mark_task_failed is not None:
+            await self._mark_task_failed(task_id)
 
     async def stop_container(self, task_id: int) -> None:
         """停止并删除容器、失效任务令牌（任务删除/complete 用）。"""
@@ -371,6 +514,9 @@ class PiEngineManager:
 
         调用方（API 层）已持有轮锁并完成 prepare_send（用户消息已落库）。
         """
+        # §7.2 并发上限：需要新建容器且槽已满 → 先推 queued 再排队等待
+        if not self._engine_healthy(task_id) and self._slots.locked():
+            yield ("queued", {})
         engine = await self.ensure_container(
             task_id=task_id,
             user_id=user_id,
@@ -381,11 +527,51 @@ class PiEngineManager:
             expert_name=expert_name,
             mcp_tools=mcp_tools,
         )
+        self._last_activity[task_id] = asyncio.get_running_loop().time()
 
-        handler = EventHandler(persist_assistant, persist_tool)
-        # 有界队列：慢消费时丢弃可再生的流式增量（done/message_saved/tool_event/
-        # error 等关键事件必须送达，宁可短暂阻塞读取协程形成背压）
-        queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue(maxsize=_ROUND_QUEUE_MAX)
+        # §7.8 崩溃恢复：容器在轮中死亡 → 重建 + 重播种重发，最多 3 次；
+        # 仍失败 → 标记 failed（可重试）并以 error 帧收尾
+        for attempt in range(1, _CRASH_RECOVERY_ATTEMPTS + 1):
+            handler = EventHandler(persist_assistant, persist_tool)
+            queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue(
+                maxsize=_ROUND_QUEUE_MAX
+            )
+            try:
+                async for event in self._stream_attempt(
+                    engine, queue, handler, task_id=task_id, content=content
+                ):
+                    yield event
+                return
+            except (EngineCrashed, PiEngineError) as exc:
+                await self._teardown(task_id)
+                if attempt >= _CRASH_RECOVERY_ATTEMPTS:
+                    logger.error("Task %s: 崩溃恢复耗尽（%d 次）: %s", task_id, attempt, exc)
+                    if self._mark_task_failed is not None:
+                        await self._mark_task_failed(task_id)
+                    yield ("error", _ENGINE_CRASHED_ERROR)
+                    yield ("done", _ABORTED_DONE)
+                    return
+                logger.warning(
+                    "Task %s: 容器崩溃（第 %d/%d 次），重建并重播种: %s",
+                    task_id, attempt, _CRASH_RECOVERY_ATTEMPTS, exc,
+                )
+                engine = await self.ensure_container(
+                    task_id=task_id,
+                    user_id=user_id,
+                    provider_config_id=provider_config_id,
+                    stored_workdir=stored_workdir,
+                    skill_snapshot=skill_snapshot,
+                    task_files=task_files,
+                    expert_name=expert_name,
+                    mcp_tools=mcp_tools,
+                )
+                self._last_activity[task_id] = asyncio.get_running_loop().time()
+
+    async def _stream_attempt(
+        self, engine: PiEngine, queue: asyncio.Queue, handler: EventHandler, *, task_id: int,
+        content: str,
+    ) -> AsyncIterator[tuple[str, dict]]:
+        """单次尝试：发消息并转发事件至 done/超时收尾；容器死亡抛 EngineCrashed。"""
 
         async def on_frame(frame: dict) -> None:
             for sse_event in await handler.handle_frame(frame):
@@ -396,62 +582,52 @@ class PiEngineManager:
                 await queue.put(sse_event)
 
         unsubscribe = engine.on_event(on_frame)
+        reader = engine._reader_task
         try:
             message = await self._build_outgoing_message(engine, task_id, content)
             await engine.send_prompt(message)
             engine.needs_reseed = False
             # §7.8 轮超时以整轮为限：deadline 一次计算，逐次扣减剩余时间，
             # 防止慢速事件流把每段等待都重置成完整超时（DoS 加长轮占用）
-            deadline = asyncio.get_running_loop().time() + self._settings.PI_ROUND_TIMEOUT_SECONDS
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self._settings.PI_ROUND_TIMEOUT_SECONDS
             while True:
-                remaining = deadline - asyncio.get_running_loop().time()
-                if remaining <= 0:
-                    await self._round_timeout(task_id, engine)
-                    yield (
-                        "error",
-                        {
-                            "code": "ROUND_TIMEOUT",
-                            "message": "回复超时，请重试",
-                            "recoverable": True,
-                        },
-                    )
-                    yield (
-                        "done",
-                        {
-                            "finish_reason": "aborted",
-                            "usage": {"prompt_tokens": 0, "completion_tokens": 0},
-                        },
-                    )
+                outcome = await self._next_round_event(queue, reader, deadline, task_id, engine)
+                if outcome == "timeout":
+                    yield ("error", _ROUND_TIMEOUT_ERROR)
+                    yield ("done", _ABORTED_DONE)
                     return
-                try:
-                    name, payload = await asyncio.wait_for(queue.get(), timeout=remaining)
-                except asyncio.TimeoutError:
-                    await self._round_timeout(task_id, engine)
-                    logger.error("Task %s: 轮超时，已发送 abort", task_id)
-                    yield (
-                        "error",
-                        {
-                            "code": "ROUND_TIMEOUT",
-                            "message": "回复超时，请重试",
-                            "recoverable": True,
-                        },
-                    )
-                    yield (
-                        "done",
-                        {
-                            "finish_reason": "aborted",
-                            "usage": {"prompt_tokens": 0, "completion_tokens": 0},
-                        },
-                    )
-                    return
+                name, payload = outcome
                 yield (name, payload)
+                if name == "done" and engine.needs_rebuild:
+                    # id 错配在轮内暴露：本轮已尽力收尾，标记下次重建
+                    logger.error("Task %s: 检测到 response id 错配，下轮重建容器", task_id)
+                    return
                 if name == "done":
-                    if engine.needs_rebuild:
-                        # id 错配在轮内暴露：本轮已尽力收尾，标记下次重建
-                        logger.error("Task %s: 检测到 response id 错配，下轮重建容器", task_id)
                     return
         finally:
             unsubscribe()
+
+    async def _next_round_event(self, queue, reader, deadline, task_id, engine):
+        """等待下一个轮事件：事件 / "timeout"；容器死亡（reader EOF）抛
+        EngineCrashed，不空等至整轮超时。"""
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return "timeout"
+        waiter = asyncio.create_task(queue.get())
+        assert reader is not None
+        done_set, _pending = await asyncio.wait(
+            {waiter, reader}, timeout=remaining,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if waiter in done_set:
+            return waiter.result()
+        waiter.cancel()
+        if reader in done_set or reader.done():
+            raise EngineCrashed(f"Task {task_id}: stdout EOF")
+        await self._round_timeout(task_id, engine)
+        logger.error("Task %s: 轮超时，已发送 abort", task_id)
+        return "timeout"
 
     async def _round_timeout(self, task_id: int, engine: PiEngine) -> None:
         """§7.8：无 agent_settled 超时兜底 → abort → 可重试错误。"""

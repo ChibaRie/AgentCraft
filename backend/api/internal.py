@@ -16,7 +16,7 @@ from backend.database import get_db
 from backend.dependencies import get_pi_engine_manager
 from backend.engine.pi_engine_manager import PiEngineManager
 from backend.models.task import Task
-from backend.services import mcp_service
+from backend.services import harness_service, mcp_service
 from backend.services.task_token import TaskTokenInvalid, decode_task_token
 
 router = APIRouter(tags=["internal"])
@@ -77,12 +77,36 @@ async def call_mcp(
     return {"data": result}
 
 
-@router.post("/ui/response")
-async def respond_ui(payload: dict[str, object]) -> dict[str, object]:
-    # P1 预留：v1 由 PiEngine 内部自动应答 extension_ui_request，不暴露此接口
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "业务代码待填充")
+class HarnessCheckRequest(BaseModel):
+    task_id: int
+    path: str | None = None
 
 
 @router.post("/harness/check-code-style")
-async def check_code_style(payload: dict[str, object]) -> dict[str, object]:
+async def check_code_style(
+    payload: HarnessCheckRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    manager: PiEngineManager = Depends(get_pi_engine_manager),
+) -> dict[str, object]:
+    """§6.8：ruff format --check + ruff check（容器回调；30s 超时在服务层）。"""
+    _require_task_token(request, payload, manager)
+    task = await db.get(Task, payload.task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+    workdir_root = manager.resolve_workdir_host(task.workdir)
+    target = await harness_service.resolve_workspace_path(workdir_root, payload.path)
+    result = await harness_service.run_ruff_checks(target)
+    return {"data": result}
+
+
+@router.post("/ui/response")
+async def respond_ui(
+    payload: MCPCallRequest,
+    request: Request,
+    manager: PiEngineManager = Depends(get_pi_engine_manager),
+) -> dict[str, object]:
+    # P1 预留：v1 由 PiEngine 内部自动应答 extension_ui_request，不暴露此接口。
+    # 即便 501 占位也先验任务令牌，/internal 不留未鉴权面
+    _require_task_token(request, payload, manager)
     raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "业务代码待填充")

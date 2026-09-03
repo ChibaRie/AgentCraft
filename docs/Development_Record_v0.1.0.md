@@ -1,7 +1,7 @@
 # AgentCraft 开发记录
 
 **文档类型**：开发记录（面向项目成员与后续阶段的 AI Coding 智能体）
-**文档版本**：v0.5.0
+**文档版本**：v0.6.0
 **记录周期**：2026-09-02 至 2026-09-03
 **项目位置**：`C:\Users\ChibaRie\Desktop\AgentCraft\agentcraft`
 **上游文档**：PRD v0.4.1、Engineering Spec v0.4.0、Database Design v0.4.0、Scaffold Plan v0.4.0
@@ -290,6 +290,24 @@ CLI 无内置 faux（经任务扩展 `pi.registerProvider`+自定义 streamSimpl
 
 ---
 
+## 7C. 阶段 7：任务生命周期完善（2026-09-03 完成）
+
+**目标**：PRD §4.5.4 状态机闭环 + §4.5.7 验收收口：complete/delete/abort、并发上限、空闲回收、看门狗与总超时、崩溃恢复、check_code_style、P05 任务列表。
+
+### 交付
+
+- `task_lifecycle.py`：complete（预检→绕锁 abort→等锁→复验→completed+回收）、delete（锁序 round→data、停容器、级联清理）、专家下架联动；abort 409 化（无可中止轮）
+- `PiEngineManager`：容器槽位信号量+SSE queued 排队；空闲回收 sweep；看门狗 sweep（容器死亡/总超时→failed，fetcher/marker 注入）；崩溃恢复（轮中同时等事件与容器存活，重建+重播种≤3 次，耗尽 failed）
+- `harness_service.py` + `/internal/harness/check-code-style`（路径校验/ruff 执行解析/30s 超时）+ 扩展固定注册块；/internal 全令牌门禁
+- 前端：P05 我的任务列表；P09 中止/结束对话/删除按钮+failed 重试与 queued 提示；/tasks null 请求修复
+- 修复：Task.conversation 缺 delete-orphan（ORM 删除报 NOT NULL）；Task 锁跨测试泄漏（conftest 每用例清空 task_locks，生产单循环不受影响）
+
+### 验收（2026-09-03）
+
+基线 368/52；ruff 全绿。看门狗实测将遗留 running 任务 failed 化并重试恢复；complete（结束对话→输入框锁定）、delete（级联 DB 复核 0 行）、abort（半截回复不落库、保持 running）浏览器实测通过；PRD §4.5.7 十一条逐项核对见 Scaffold_Progress §12.5。
+
+---
+
 ## 8. 累计度量
 
 ### 8.1 测试矩阵（244 passed / 31 skipped，共 275 用例）
@@ -342,6 +360,7 @@ CLI 无内置 faux（经任务扩展 `pi.registerProvider`+自定义 streamSimpl
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| v0.6.0 | 2026-09-03 | 增补阶段 7（任务生命周期完善）：complete/delete/abort 锁语义、并发上限 queued、空闲回收、看门狗+总超时、崩溃恢复、check_code_style、P05/P09 前端；PRD §4.5.7 逐条验收；基线 368/52 |
 | v0.5.0 | 2026-09-03 | 增补阶段 6（MCP 管理 + MCP 桥，闭环三收口）：MCP 客户端/服务层/API 全套/内部调用端点/mcp-sandbox/dev 转发器/前端三页；闭环三 E2E（真实模型+真实 Server + kill switch 即时阻断）；toolUse 误报修复；基线 337/49 |
 | v0.4.1 | 2026-09-03 | 5.5 补验收：Proxy 提前落地（JWT 令牌/按令牌路由/completions 扩展/容器化），DeepSeek BYOK 真实对话用户实测通过 |
 | v0.4.0 | 2026-09-03 | 增补阶段 5.5（Provider BYOK 双模式）：加密信封/user_providers/CRUD/任务快照/指纹重建/P10；文档基线四份修订；安全审查修复 3 项 |

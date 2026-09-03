@@ -28,7 +28,7 @@ from backend.engine.pi_engine_manager import EngineStateError, PiEngineManager
 from backend.engine.skill_loader import PromptTooLargeError, SkillLoader
 from backend.middleware.auth import get_current_user_id
 from backend.schemas.task import TaskCreateRequest, TaskMessageRequest
-from backend.services import provider_service, task_service, workspace
+from backend.services import provider_service, task_lifecycle, task_service, workspace
 from backend.services.task_locks import task_round_lock
 from backend.services.workspace import WorkspaceNotFoundError
 
@@ -266,9 +266,15 @@ async def send_message(
 
 @router.post("/{task_id}/complete")
 async def complete_task(
-    task_id: int, user_id: int = Depends(get_current_user_id)
+    task_id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+    manager: PiEngineManager = Depends(get_pi_engine_manager),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, object]:
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "业务代码待填充")
+    """结束任务（§7.2.1 结束语义）：预检活动轮→绕锁 abort→等锁→持锁置 completed。"""
+    task = await task_lifecycle.complete_task(db, user_id, task_id, manager)
+    return {"data": {"task_id": task.id, "status": task.status}}
 
 
 @router.post("/{task_id}/abort", status_code=status.HTTP_202_ACCEPTED)
@@ -278,18 +284,36 @@ async def abort_task(
     db: AsyncSession = Depends(get_db),
     manager: PiEngineManager = Depends(get_pi_engine_manager),
 ) -> dict[str, object]:
-    """用户中止（§7.8/§7.8.1）：只读所有权检查后绕锁发 abort，不等待轮结束。
+    """用户中止（§7.8/§7.8.1）：仅 running 且存在活动轮可中止（PRD §4.5.6）。
 
-    任务保持 running（可继续）；未完成回复由 EventHandler 按 stopReason=aborted
-    丢弃不落库。
+    绕过 mutation lock 直接发 abort，不等待轮结束；任务保持 running（可继续）；
+    未完成回复由 EventHandler 按 stopReason=aborted 丢弃不落库。
     """
-    await task_service.get_task_detail(db, user_id, task_id)  # 404/403 所有权检查
+    task, _files, _messages = await task_service.get_task_detail(db, user_id, task_id)
+    if task.status != "running" or not manager.has_active_round(task_id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"code": "TASK_NO_ACTIVE_ROUND", "message": "当前没有可中止的 Agent 轮"},
+        )
     await manager.request_abort(task_id)
     return {"data": {"task_id": task_id, "abort_requested": True}}
 
 
 @router.delete("/{task_id}")
 async def delete_task(
-    task_id: int, user_id: int = Depends(get_current_user_id)
+    task_id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+    manager: PiEngineManager = Depends(get_pi_engine_manager),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, object]:
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "业务代码待填充")
+    """删除任务（§7.2.1 删除语义）：持锁→停容器→级联删除，项目目录不动。"""
+    await task_lifecycle.delete_task(
+        db,
+        user_id,
+        task_id,
+        manager,
+        task_files_root=Path(settings.HOST_DATA_ROOT) / "task-files",
+        extensions_root=Path(settings.HOST_DATA_ROOT) / "extensions",
+    )
+    return {"data": {"message": "deleted"}}

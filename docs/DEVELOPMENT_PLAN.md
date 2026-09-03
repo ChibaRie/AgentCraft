@@ -14,7 +14,7 @@
 | P09 增强 | 原型功能对齐（md/工具卡片/上下文面板/视口锁定） | ✅ | `852dbe3` |
 | **5.5** | **Provider 双模式 BYOK（用户自带 Key）** | ✅ | 本文档 §阶段 5.5 |
 | 6 | MCP 桥 + Provider Proxy 按令牌路由 | ✅ | proxy（2026-09-03 真实模型验收）+ MCP 管理/桥/沙箱（闭环三 E2E：真实模型真实调用 + kill switch 即时阻断 ✅） |
-| 7 | 生命周期完善（mutation lock 跨进程/回收/崩溃恢复/看门狗/complete/delete） | ⬜ | — |
+| 7 | 生命周期完善（mutation lock 跨进程/回收/崩溃恢复/看门狗/complete/delete） | ✅ | §7.2.1 锁语义表/并发上限 queued/空闲回收/看门狗+总超时/崩溃恢复/check_code_style/P05+P09（PRD §4.5.7 逐条验收 2026-09-03 ✅） |
 
 ---
 
@@ -54,7 +54,12 @@
 - 前端：P08 MCP Server 标签页 + P07 MCP 绑定面板 + P09 MCP tab 快照渲染
 - **闭环三 E2E 验收（2026-09-03）**：真实模型（deepseek-v4-flash BYOK）对话中真实调用 list_directory 并返回真实结果；禁用工具后既有任务下次调用 403 立即阻断；重新启用恢复。详见 Scaffold_Progress §12.2-12.3、Development_Record §7B
 
-## 阶段 7：生命周期完善（要点）
+## 阶段 7：生命周期完善（要点）✅ 2026-09-03 完成
 
-- complete/delete 端点（complete：无锁预检 → request_abort → 等锁 → completed + 回收容器）
-- mutation lock 跨进程化、并发上限排队（SSE queued）、空闲回收、崩溃恢复重试 3 次、Skill/Provider kill switch 巡检、任务总超时看门狗
+- ~~complete/delete 端点~~ ✅（§7.2.1 锁语义表逐行：预检→绕锁 abort→等锁→completed；删除持锁先停容器再级联）
+- ~~并发上限排队（SSE queued）~~ ✅ 容器槽位信号量；~~空闲回收~~ ✅；~~崩溃恢复重试 3 次~~ ✅（轮中等待事件与容器存活并行，EOF 即崩溃信号）
+- ~~Skill/Provider kill switch 巡检~~ ✅（Skill 在阶段 3 发送时校验；Provider/MCP kill switch 于阶段 5.5/6 落地）
+- ~~任务总超时看门狗~~ ✅（30s 巡检：容器死亡→failed；总超时→abort+failed+回收）
+- ~~check_code_style 内部接口（§6.8）~~ ✅ + 扩展注册块
+- ~~P05 个人中心（任务列表）~~ ✅；WorkdirSelector 已于阶段 4 落地（目录浏览，无目录上传）
+- mutation lock 跨进程化不实施（§7.2.1：v1 单实例进程内 asyncio.Lock 足够，Redis 不引入）

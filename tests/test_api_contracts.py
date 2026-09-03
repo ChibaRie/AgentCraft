@@ -125,6 +125,9 @@ IMPLEMENTED = {
     ("PUT", "/api/experts/1/mcp/1"),
     ("DELETE", "/api/experts/1/mcp/1"),
     ("POST", "/internal/mcp/call"),
+    # 阶段 6/7：内部接口均已实现或令牌门禁（行为由 test_harness/test_internal_mcp 覆盖）
+    ("POST", "/internal/ui/response"),
+    ("POST", "/internal/harness/check-code-style"),
 }
 
 # 挂载了真实 JWT 依赖的占位端点：匿名请求先被 401 拦截，轮不到 501

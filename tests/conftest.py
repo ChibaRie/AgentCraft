@@ -46,6 +46,8 @@ class FakePiTransport:
         self._round_cancelled = False  # 仅取消当前轮；新一轮不受影响
         self.closed = False
         self.fail_after_prompt = False
+        self.crash_on_prompts = 0  # >0 时该次数内 prompt 后 EOF（模拟容器崩溃）
+        self._prompt_seen = 0
         self.release: threading.Event | None = None
         self.on_round_start = None
         self._lines: asyncio.Queue[str | None] = asyncio.Queue()
@@ -61,6 +63,10 @@ class FakePiTransport:
         self.written.append(cmd)
         if cmd.get("type") == "prompt":
             self.emit({"id": cmd["id"], "type": "response", "command": "prompt", "success": True})
+            self._prompt_seen += 1
+            if self.crash_on_prompts and self._prompt_seen <= self.crash_on_prompts:
+                self.emit_eof()  # 容器崩溃：ACK 后 stdout EOF，交 manager 恢复
+                return
             self._schedule_round(cmd["message"])
         elif cmd.get("type") == "abort":
             self.aborted = True
@@ -140,13 +146,21 @@ class FakePiTransport:
         self.closed = True
 
 
-def make_scripted_manager(tmp_path: Path):
+def make_scripted_manager(
+    tmp_path: Path,
+    *,
+    round_timeout: int = 5,
+    max_concurrent: int = 4,
+    max_lifetime_minutes: int = 30,
+):
     """构造 PiEngineManager + FakePiTransport 注入（不启动真实容器/子进程）。"""
     settings = Settings(
         PI_RUNTIME="subprocess",
         HOST_DATA_ROOT=str(tmp_path / "data"),
         HOST_WORKSPACE_ROOT=str(tmp_path / "workspaces"),
-        PI_ROUND_TIMEOUT_SECONDS=5,
+        PI_ROUND_TIMEOUT_SECONDS=round_timeout,
+        PI_MAX_CONCURRENT_CONTAINERS=max_concurrent,
+        PI_TASK_MAX_LIFETIME_MINUTES=max_lifetime_minutes,
     )
     transports: list[FakePiTransport] = []
 
@@ -185,6 +199,20 @@ class TestDatabase:
     def run(self, coro):
         """在独立事件循环中执行一段协程（播种/查询用）。"""
         return asyncio.run(coro)
+
+
+@pytest.fixture(autouse=True)
+def reset_task_locks():
+    """task_locks 是模块级 dict；测试各自独占事件循环，跨测试残留的
+    asyncio.Lock 会绑定已死循环（RuntimeError）或保持已锁状态（429）。
+    每用例前清空（生产单循环不受影响）。"""
+    from backend.services import task_locks
+
+    task_locks._data_locks.clear()
+    task_locks._round_locks.clear()
+    yield
+    task_locks._data_locks.clear()
+    task_locks._round_locks.clear()
 
 
 @pytest.fixture()

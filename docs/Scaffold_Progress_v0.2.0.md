@@ -491,6 +491,23 @@ PRD §3.3 闭环三全链路落地：注册 Server → 发现工具 → 启用/�
 - 闭环三 E2E（真实模型 deepseek-v4-flash BYOK）：①Agent 对话中真实调用 list_directory（沙箱内 /workspace）+ 内置 bash 补充核实，回复含真实目录内容并落库；②P08 禁用 list_directory → 既有任务下一条消息再次调用 → **HTTP 403 立即阻断**（错误结果注入上下文，Agent 自行降级用 ls 核实并如实披露）；③重新启用 → 调用恢复，SSE 流 0 error 帧
 - 已知边界：mcp-sandbox 为共享镜像无任务挂载——MCP 文件系统 Server 看到的是沙箱自身 /workspace（空），与任务 workdir 不同（Pi 内置 bash/read/write 才操作任务工作区）；按任务挂载留阶段 7+ 权衡
 
+### 12.4 阶段 7：任务生命周期完善（2026-09-03 完成）
+
+- **生命周期端点（§7.2.1 锁语义表逐行）**：`task_lifecycle.py`——complete（无锁预检活动轮→request_abort 绕锁→等待并持有 mutation lock→持锁复验 running→completed+回收容器+失效令牌；created/failed/completed 409）；delete（round→data 锁序与发送一致防死锁；先停容器再级联删会话/消息/文件元数据/上传目录/扩展文件，项目目录不动）；abort 细化（仅 running 且存在活动轮可中止，否则 409 `TASK_NO_ACTIVE_ROUND`，202 不改终态）；专家下架联动（§7.8：该专家 running 任务原子置 completed+回收容器）。顺带修复 Task.conversation relationship 缺 cascade 导致 ORM 删除报 NOT NULL 的问题
+- **并发上限（§7.2/§6.6）**：容器槽位信号量（`PI_MAX_CONCURRENT_CONTAINERS`，holder 集合一一配对释放）；槽满时新发送先收到 SSE `queued` 再排队，槽释放自动继续
+- **空闲回收（§7.2）**：每任务最近活动时刻（loop.monotonic）；后台巡检发现连续 `PI_IDLE_TIMEOUT_MINUTES` 无活动且无活动轮→回收；下条消息自动重建+重播种
+- **看门狗与总超时（§7.8.1）**：后台循环（30s）双巡检——容器死亡（轮间）→回收+failed（可重试）；running 累计时长超 `PI_TASK_MAX_LIFETIME_MINUTES`（默认 30）→abort+failed+回收。DB 触点经 dependencies 注入 fetcher/marker（仅 running→failed，不覆盖 completed）
+- **崩溃恢复（§7.8）**：run_round 轮中同时等待事件流与容器存活（reader EOF 即崩溃信号，不空等超时）→teardown+重建+重播种重发，最多 3 次；耗尽→failed+`ENGINE_CRASHED` error 帧
+- **check_code_style（§6.8/§7.4）**：`harness_service`——/workspace 相对路径解析（拒绝绝对/`..`/解析逃逸/缺失）；ruff format --check + check（30s 超时，rc>=2→502；ruff 定位 PATH→venv）；issue 解析（format/check 两种行格式）；扩展模板固定追加注册块；端点复用 X-Task-Token 三重校验。内部接口全部令牌门禁（不留未鉴权 501 面）
+- **前端**：P05 个人中心「我的任务」列表（专家名/标题/状态/时间，仅本人）；P09 头部生命周期按钮（中止=活动轮可见、结束对话=running 可见+confirm、删除=confirm→级联→跳列表）、failed 重试提示、completed 输入框锁定、queued 排队提示；顺带修复 /tasks 列表页 `GET /api/tasks/null` 的无守卫请求
+- **commit 安全审查处置**：http-sse URL 校验（scheme/主机名/禁凭据；私网立场与 BYOK 一致并注释）；env 变量名格式校验+stdio 命令沙箱语义注释；上游错误文本不回显前端（详情仅日志）
+
+### 12.5 验收记录（阶段 7，2026-09-03）
+
+- 单测基线：368 passed / 52 skipped（新增生命周期 API 12、引擎生命周期 9、harness 12）；ruff 全绿
+- 看门狗实测：后端启动后 30s 巡检将两个今晨遗留 running 任务（总时长>30min）标记 failed 并回收容器（日志：「任务总超时，abort + failed + 回收容器」）——failed 任务经重发消息重试恢复 running 实测通过
+- PRD §4.5.7 逐条（浏览器 0 console error）：①创建即建会话✓ ②上传隔离+非所有者拒绝✓（阶段 4 契约） ③首条消息后禁传✓ ④目录上传阻断✓ ⑤超限无残留✓ ⑥流式+双方落库✓（真实模型） ⑦**中止实测**：流中点中止→半截回复未落库、任务保持 running✓ ⑧列表仅本人✓（非本人 403） ⑨详情时间序✓ ⑩专家下架阻断✓（联动 completed） ⑪**删除级联实测**：确认条→会话/消息/文件/任务行全删（DB 复核 0 行）→跳回列表✓；**complete 实测**：running→结束对话→已结束→输入框锁定✓
+
 ---
 
 ## 13. 变更记录
@@ -503,6 +520,7 @@ PRD §3.3 闭环三全链路落地：注册 Server → 发现工具 → 启用/�
 | v0.4.0 | 2026-09-02 | 阶段 2 Skill 管理垂直切片：validate_skill 纯文本校验器 + Skill 全生命周期 API（状态机）+ P08 前端（列表/弹窗/ValidateButton）+ 61 个新测试 |
 | v0.5.0 | 2026-09-02 | 阶段 3 专家 CRUD/绑定/专家中心：闭环一收口；P03/P04/P06/P07；41 个新测试；审查修复 13 处 |
 | v0.6.0 | 2026-09-03 | 阶段 4 任务数据层 + SSE 链路（EchoEngine 冻结契约）：任务/文件/工作区 API + P09 前端 + 启动巡检/体量守卫/任务锁；47 个新测试；审查修复 15 项 |
+| v0.11.0 | 2026-09-03 | 阶段 7 任务生命周期：complete/delete/abort（§7.2.1 锁语义表）/并发上限 queued/空闲回收/看门狗+总超时/崩溃恢复/check_code_style/P05 任务列表/P09 生命周期按钮；看门狗与中止/complete/删除级联实测通过；基线 368/52 |
 | v0.10.0 | 2026-09-03 | 阶段 6 MCP 管理 + MCP 桥：MCP 客户端（stdio/http）/mcp_service（env 信封/敏感授权/快照装配）/API 全套/内部调用端点/mcp-sandbox 沙箱/dev 转发器/P08+P07+P09 前端；闭环三 E2E（真实模型+真实 Server，kill switch 即时阻断）；toolUse error 帧误报修复；基线 337/49 |
 | v0.9.0 | 2026-09-03 | Proxy 提前落地 + 真实模型验收：JWT 任务令牌/provider-proxy 按令牌路由/completions 协议扩展/双网络容器化；DeepSeek BYOK 真实对话用户实测通过 |
 | v0.8.0 | 2026-09-03 | 阶段 5.5 Provider 双模式 BYOK：加密信封/user_providers 表/CRUD/任务快照冻结/Provider 指纹重建/P10 设置页；测试基线 274/36；安全审查修复（ACTIVE_KID 校验、所有权 404 化、SSRF 立场注释） |

@@ -46,5 +46,7 @@ class Task(Base):
     user = relationship("User", back_populates="tasks")
     provider_config = relationship("UserProvider")
     expert = relationship("Expert", back_populates="tasks")
-    conversation = relationship("Conversation", back_populates="task", uselist=False)
+    conversation = relationship(
+        "Conversation", back_populates="task", uselist=False, cascade="all, delete-orphan"
+    )
     files = relationship("TaskFile", back_populates="task", cascade="all, delete-orphan")

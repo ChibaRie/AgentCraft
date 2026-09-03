@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
+from backend.dependencies import get_pi_engine_manager
+from backend.engine.pi_engine_manager import PiEngineManager
 from backend.middleware.permission import require_expert_role
 from backend.models.user import User
 from backend.schemas.expert import (
@@ -26,7 +28,7 @@ from backend.schemas.expert import (
     ExpertUpdateRequest,
     UnboundResponse,
 )
-from backend.services import expert_service, mcp_service
+from backend.services import expert_service, mcp_service, task_lifecycle
 
 router = APIRouter(prefix="/experts", tags=["experts"])
 discover_router = APIRouter(prefix="/discover/experts", tags=["discover"])
@@ -132,8 +134,11 @@ async def offline_expert(
     expert_id: int,
     user: User = Depends(require_expert_role),
     db: AsyncSession = Depends(get_db),
+    manager: PiEngineManager = Depends(get_pi_engine_manager),
 ) -> dict[str, ExpertResponse]:
     expert = await expert_service.offline_expert(db, user.id, expert_id)
+    # §7.8：该专家 running 任务原子置 completed 并回收容器
+    await task_lifecycle.complete_expert_running_tasks(db, expert_id, manager)
     return {"data": _expert_response(expert)}
 
 

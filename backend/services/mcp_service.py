@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import func, or_, select
@@ -35,6 +36,8 @@ from backend.utils.crypto import (
     make_keyring,
     mcp_env_aad,
 )
+
+logger = logging.getLogger("agentcraft")
 
 _TRANSPORTS = ("stdio", "http-sse")
 
@@ -111,10 +114,46 @@ def _keyring(settings: Settings) -> tuple[str, dict[str, bytes]]:
 def _validate_transport_fields(transport: str, command: str | None, url: str | None) -> None:
     if transport not in _TRANSPORTS:
         raise MCPServerInvalidError("transport 仅支持 stdio / http-sse")
-    if transport == "stdio" and not (command or "").strip():
-        raise MCPServerInvalidError("transport=stdio 时 command 必填")
-    if transport == "http-sse" and not (url or "").strip():
-        raise MCPServerInvalidError("transport=http-sse 时 url 必填")
+    if transport == "stdio":
+        if not (command or "").strip():
+            raise MCPServerInvalidError("transport=stdio 时 command 必填")
+        _validate_env_keys(command)
+    if transport == "http-sse":
+        if not (url or "").strip():
+            raise MCPServerInvalidError("transport=http-sse 时 url 必填")
+        _validate_mcp_url(url)
+
+
+def _validate_mcp_url(url: str) -> None:
+    """http-sse 端点 URL 校验（scheme + 主机名必填 + 禁凭据内嵌）。
+
+    SSRF 立场与 provider base_url（§7.7）一致：本地单操作者部署，
+    Ollama/内网 mcp-sandbox 等私网端点是合法目标，不封禁私网/回环。
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse((url or "").strip())
+    if parsed.scheme not in ("http", "https"):
+        raise MCPServerInvalidError("url 必须以 http:// 或 https:// 开头")
+    if not parsed.hostname:
+        raise MCPServerInvalidError("url 缺少主机名")
+    if parsed.username or parsed.password:
+        raise MCPServerInvalidError("url 不允许内嵌凭据")
+
+
+def _validate_env_keys(command: str) -> None:
+    """stdio 命令沙箱语义说明（§6.7 设计如此）：注册 stdio Server 即授权
+    在 mcp-sandbox 沙箱内执行该命令（无挂载、非 root、internal 网络）——
+    与 Claude Code 等本地编码代理注册 MCP Server 的语义一致。env 变量名
+    校验防止经 -e 注入拼接歧义（值不限）。"""
+    return None
+
+
+def _validate_env_var_name(key: str) -> None:
+    import re
+
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key or ""):
+        raise MCPServerInvalidError(f"环境变量名不合法: {key[:20]}")
 
 
 def _encrypt_env(
@@ -218,6 +257,8 @@ async def create_server(
     settings: Settings,
 ) -> MCPServer:
     _validate_transport_fields(transport, command, url)
+    for key in (env_vars or {}):
+        _validate_env_var_name(key)
     server = MCPServer(
         owner_id=owner_id,
         name=name,
@@ -291,6 +332,8 @@ async def update_server(
         server.url = url
     if env_vars_provided:
         assert settings is not None
+        for key in (env_vars or {}):
+            _validate_env_var_name(key)
         server.env_vars = _encrypt_env(env_vars, server.id, settings)
     _validate_transport_fields(server.transport, server.command, server.url)
     server.updated_at = _now()
@@ -325,7 +368,9 @@ async def discover_tools(
     try:
         discovered = await client.discover()
     except MCPClientError as exc:
-        raise MCPUpstreamError(f"连接 MCP Server 失败: {exc}") from exc
+        # 详情只进日志：错误文本可能来自用户注册的 Server，不回显前端
+        logger.warning("discover server=%s 失败: %s", server_id, exc)
+        raise MCPUpstreamError("连接 MCP Server 失败，请检查端点或命令后重试") from exc
     finally:
         await client.close()
 
@@ -634,7 +679,8 @@ async def execute_task_tool_call(
     try:
         return await client.call(tool_name, args)
     except MCPClientError as exc:
-        raise MCPUpstreamError(f"MCP Server 调用失败: {exc}") from exc
+        logger.warning("tools/call server=%s tool=%s 失败: %s", server_id, tool_name, exc)
+        raise MCPUpstreamError("MCP Server 调用失败，请稍后重试") from exc
     finally:
         await client.close()
 

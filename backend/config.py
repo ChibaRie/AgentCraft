@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     PROVIDER_PROXY_IMAGE: str = "agentcraft-provider-proxy:latest"
     PI_RUNTIME: str = "auto"  # auto | docker | cli | subprocess
     PI_ROUND_TIMEOUT_SECONDS: int = 300
+    PI_TASK_MAX_LIFETIME_MINUTES: int = 30  # 任务总超时（§7.8.1），超阈 abort+failed
     PI_FAUX_CHUNK_DELAY_MS: int = 15  # faux 回显分帧节奏（0=即时；供 abort 观察流式）
     PI_NETWORK_NAME: str = "agentcraft-internal"
     MCP_SANDBOX_IMAGE: str = "agentcraft-mcp-sandbox:latest"  # stdio MCP Server 沙箱镜像

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Paperclip, Plus, Warning } from "@phosphor-icons/react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { ArrowLeft, Paperclip, Plus, Stop, Warning, XCircle, Trash } from "@phosphor-icons/react";
 import { request } from "../api/client.js";
 import { SseClient } from "../api/sse.js";
 import MessageList from "../components/MessageList.jsx";
@@ -53,6 +53,7 @@ function TaskSidebar({ tasks, activeId }) {
   */
 export default function TaskChatPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const taskId = id ? Number(id) : null;
 
   const [tasks, setTasks] = useState([]);
@@ -81,6 +82,9 @@ export default function TaskChatPage() {
 
   const refresh = useCallback(async () => {
     const forTaskId = taskId;
+    if (forTaskId == null) {
+      return false; // /tasks 列表页无任务 id，不发详情请求
+    }
     try {
       const payload = await request(`/api/tasks/${forTaskId}`);
       if (activeTaskIdRef.current !== forTaskId) {
@@ -252,6 +256,8 @@ export default function TaskChatPage() {
         } else if (name === "message_saved") {
           lastText = data.content;
           setStreaming((current) => ({ ...current, text: data.content }));
+        } else if (name === "queued") {
+          setNotice("并发已满，任务进入排队；有容器空出后会自动开始本轮回复。");
         } else if (name === "error") {
           setNotice(data.recoverable ? `${data.message}（可重试）` : data.message);
         }
@@ -307,10 +313,52 @@ export default function TaskChatPage() {
     }
   }
 
+  // -- 生命周期操作（PRD §4.5.4：中止/结束/删除；§4.5.6 约束） --------------
+
+  async function handleAbort() {
+    setNotice(null);
+    try {
+      await request(`/api/tasks/${taskId}/abort`, { method: "POST" });
+      setNotice(null); // 轮将由 SSE done(aborted) 自然收尾
+    } catch (cause) {
+      setNotice(cause.message); // 409：当前没有可中止的 Agent 轮
+    }
+  }
+
+  async function handleComplete() {
+    if (!window.confirm("确定要结束该任务吗？结束后不可继续对话（历史保留）。")) {
+      return;
+    }
+    sseRef.current?.abort(); // 有在途流先断开本地读取
+    setNotice(null);
+    try {
+      await request(`/api/tasks/${taskId}/complete`, { method: "POST" });
+      await refresh();
+    } catch (cause) {
+      setNotice(cause.message);
+    }
+  }
+
+  async function handleDelete() {
+    if (!window.confirm("确定要删除该任务吗？任务消息与上传文件将一并删除，且不可恢复。")) {
+      return;
+    }
+    sseRef.current?.abort();
+    try {
+      await request(`/api/tasks/${taskId}`, { method: "DELETE" });
+      navigate("/tasks");
+    } catch (cause) {
+      setNotice(cause.message);
+    }
+  }
+
   const messages = task?.messages ?? [];
   const isCompleted = task?.status === "completed";
+  const isFailed = task?.status === "failed";
   const canAttach = Boolean(task) && task.status === "created" && !hasUserMessage;
   const canSend = Boolean(task) && !isCompleted && !streaming.active;
+  // 中止仅在有活动轮时可见；结束仅 running 可见；删除对已建任务始终可见
+  const canAbort = Boolean(task) && task.status === "running" && streaming.active;
   const optimisticMessages = [
     ...(pendingUser ? [{ role: "user", content: pendingUser }] : []),
     ...(unpersistedReply ? [{ role: "assistant", content: unpersistedReply }] : []),
@@ -389,7 +437,45 @@ export default function TaskChatPage() {
                 <span className="runtime-dot" aria-hidden="true" />
                 {streaming.active ? "生成中" : isCompleted ? "已结束" : "空闲"}
               </span>
+              <span className="task-header-actions">
+                {canAbort && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={handleAbort}
+                    title="中止当前一轮；未完成回复不保留"
+                  >
+                    <Stop size={13} weight="fill" aria-hidden="true" />
+                    中止
+                  </button>
+                )}
+                {task.status === "running" && !streaming.active && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={handleComplete}
+                  >
+                    <XCircle size={13} aria-hidden="true" />
+                    结束对话
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm is-danger"
+                  onClick={handleDelete}
+                >
+                  <Trash size={13} aria-hidden="true" />
+                  删除
+                </button>
+              </span>
             </header>
+
+            {isFailed && !notice && (
+              <div className="task-notice" role="alert">
+                <Warning size={15} aria-hidden="true" />
+                <span>任务异常结束；重新发送一条消息即可重试（将重建容器并载入历史）。</span>
+              </div>
+            )}
 
             {notice && (
               <div className="task-notice" role="alert">

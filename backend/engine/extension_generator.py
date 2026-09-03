@@ -85,6 +85,34 @@ __FAUX_BLOCK__
       },
     });
   }
+
+  // §7.4 固定追加：Harness 内置工具（不入业务表；控制面在任务 workdir 执行）
+  pi.registerTool({
+    name: "check_code_style",
+    label: "check_code_style",
+    description: "Run ruff format/check on a path inside /workspace",
+    parameters: {
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: [],
+    } as never,
+    execute: async (callId: string, args: Record<string, unknown>, signal: AbortSignal) => {
+      const res = await fetch(`${BACKEND}/internal/harness/check-code-style`, {
+        method: "POST",
+        headers: { "X-Task-Token": TASK_TOKEN, "Content-Type": "application/json" },
+        body: JSON.stringify({ task_id: TASK_ID, path: (args as { path?: string }).path }),
+        signal,
+      });
+      if (!res.ok) {
+        throw new Error(`check_code_style failed: HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      return {
+        content: [{ type: "text", text: JSON.stringify(data.data) }],
+        details: { harness: "check_code_style" },
+      };
+    },
+  });
 }
 """
 
