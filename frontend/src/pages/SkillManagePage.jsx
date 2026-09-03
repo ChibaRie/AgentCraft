@@ -3,6 +3,7 @@ import { CheckCircle, Warning } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { request } from "../api/client.js";
 import { formatDateTime } from "../lib/datetime.js";
+import McpServerManager from "../components/McpServerManager.jsx";
 import SkillEditorModal from "../components/SkillEditorModal.jsx";
 
 const STATUS_LABELS = { draft: "草稿", published: "已发布", offline: "已下架" };
@@ -158,6 +159,7 @@ function SkillCard({ skill, busy, validation, binding, onAction }) {
 
 export default function SkillManagePage() {
   const { isReady, isAuthenticated } = useAuth();
+  const [activeTab, setActiveTab] = useState("skill");
   const [skills, setSkills] = useState([]);
   const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -287,14 +289,28 @@ export default function SkillManagePage() {
       </header>
 
       <div className="manage-tabs rise" style={{ "--rise-index": 1 }}>
-        <button type="button" className="manage-tab is-active" aria-current="true">
+        <button
+          type="button"
+          className={`manage-tab${activeTab === "skill" ? " is-active" : ""}`}
+          aria-current={activeTab === "skill"}
+          onClick={() => setActiveTab("skill")}
+        >
           Skill
         </button>
-        <button type="button" className="manage-tab" disabled>
+        <button
+          type="button"
+          className={`manage-tab${activeTab === "mcp" ? " is-active" : ""}`}
+          aria-current={activeTab === "mcp"}
+          onClick={() => setActiveTab("mcp")}
+        >
           MCP Server
         </button>
       </div>
 
+      {activeTab === "mcp" ? (
+        <McpServerManager />
+      ) : (
+        <>
       <div className="manage-toolbar rise" style={{ "--rise-index": 2 }}>
         <span className="manage-count">{isLoading ? "" : `共 ${total} 个 Skill`}</span>
         <button
@@ -349,6 +365,8 @@ export default function SkillManagePage() {
           onClose={() => setEditorSkill(null)}
           onSaved={handleSaved}
         />
+      )}
+        </>
       )}
     </main>
   );

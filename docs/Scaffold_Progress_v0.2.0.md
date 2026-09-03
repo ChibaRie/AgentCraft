@@ -469,6 +469,28 @@ pi-worker 镜像 `agentcraft-pi-worker:0.84.3`（node:22-slim，非 root piworke
 - **验收（用户实测）**：绑定 DeepSeek（deepseek-v4-flash）→ 建任务 → 对话全链路通过；proxy 无令牌 401、出站可达上游均验证；容器内 11 个 proxy 测试 + 5 个令牌测试全绿
 - 网络实测记录：Docker Desktop 自定义 internal 网络不解析 `host.docker.internal`（EAI_AGAIN）、host-gateway 不可达（ENETUNREACH）——「proxy 必须同网络容器化」的依据
 
+### 12.2 阶段 6：MCP 管理 + MCP 桥（2026-09-03 完成，闭环三收口）
+
+PRD §3.3 闭环三全链路落地：注册 Server → 发现工具 → 启用/敏感授权 → 发布 → 绑定专家 → 任务快照冻结 → Agent 对话中真实调用 → kill switch 即时阻断。
+
+- **MCP 客户端**（`engine/mcp_client.py`）：MCP 2024-11-05 JSON-RPC 2.0；stdio 传输（LF 分帧）+ streamable HTTP 传输（Mcp-Session-Id 保持，json/SSE 应答兼容）；`resolve_stdio_argv` 有 docker → `docker run --rm -i --network internal` mcp-sandbox 沙箱（env 经 -e 注入、命令经 sh -c），无 docker → 本地子进程开发回退；单请求超时 30s、结果 >100KB 截断（`MCP_RESULT_MAX_BYTES`）；env 密钥不落日志
+- **管理服务**（`services/mcp_service.py`）：Server CRUD（transport 条件必填）+ discover 落库（新工具默认 sensitive=1/enabled=0，仅可信只读 allowlist 置非敏感；重复 discover 更新描述/schema 并保留状态）+ 工具开关（sensitive 启用需 confirm→写 `authorized_at`，禁用即清空）+ publish（需≥1 工具）/offline + 删除（绑定或 `mcp_snapshot` 引用 409，可先下架止损）+ 专家绑定三操作（owner 归属 404 化、Server 必须 published、UNIQUE 409）
+- **env 加密信封**：§11.3 同款 AES-256-GCM，AAD=`agentcraft:mcp_servers:{server_id}:env_vars:v1`；API 只回变量名，运行期仅 MCPService 内存解密
+- **快照装配**：`load_snapshot_tools`（enabled 绑定 ∩ published Server ∩ enabled 工具 ∩ 非敏感或已授权）→ `tasks.mcp_snapshot` 冻结；扩展 `task.ts` 按快照生成 `pi.registerTool` + fetch 回调（§7.4 模板照抄）
+- **/internal/mcp/call**（§6.8）：X-Task-Token 三重校验（签名/任务一致/实例一致——旧容器令牌失效）→ 快照能力上限（404）→ kill switch 双层（Server published/工具 enabled/绑定 enabled/敏感授权非空且不早于快照时点 → 403）→ 执行（502 上游失败）；结果 {content, is_error} 透传
+- **mcp-sandbox 沙箱**（`docker/Dockerfile.mcp-sandbox` + compose profile）：node22-slim + `@modelcontextprotocol/server-filesystem` 预装、非 root、无挂载、internal 网络；真实探针 `probe_mcp_stdio.py` 实测 14 工具发现 + tools/call 全通
+- **dev 后端转发器**（`docker_ensure_backend_forwarder`）：internal 网络无 host 路由（阶段 5 实测），容器回调 /internal/mcp/call 需要「agentcraft-control」在网内可达——双网络转发容器（pi-worker 镜像 node 脚本，internal 别名 agentcraft-control + bridge 转发 host:8000），与 provider-proxy 同款模式；compose 形态（控制面已容器化）自动跳过
+- **前端**：P08 `/skills` 激活 MCP Server 标签页（注册表单含 env 键值对/发现/工具开关+敏感确认条/发布/下架/删除确认）；P07 专家编辑 MCP 绑定面板（绑定/启用/解绑，不展示连接信息）；P09 上下文面板 MCP tab 渲染冻结快照（含敏感徽标）；顺带修复 ExpertEditPage 绑定成功路径 `setSelectedSkillId` 越界引用的潜在 ReferenceError
+- **E2E 实测发现并修复**：Pi 在模型发起工具调用时以 `stopReason="toolUse"` 结束 assistant 消息——属工具循环正常中间步，EventHandler 原把非 stop 全部当 error 帧下发（faux 无工具未暴露）；已改为静默忽略并补回归测试；另修复 aiodocker 探测失败的 Unclosed client session 泄漏
+
+### 12.3 验收记录（阶段 6，2026-09-03）
+
+- 单测基线：337 passed / 49 skipped（新增 MCP 客户端 12、服务层 14、API 15、内部调用 12、toolUse 回归 1 等）；ruff 全绿
+- 真实 MCP Server：`probe_mcp_stdio.py` 经沙箱容器 discover 14 工具 + list_directory 全通
+- UI 全流程（浏览器，chibarie 账号，0 console error）：P08 注册「文件系统」（stdio）→ 发现 14 工具（只读 allowlist 无敏感标、写类带敏感标）→ 启用 list_directory → 敏感工具确认条验证 → 发布 → P07 绑定专家并启用 → 建任务（快照冻结「1 个 MCP 工具」）→ P09 MCP tab 渲染
+- 闭环三 E2E（真实模型 deepseek-v4-flash BYOK）：①Agent 对话中真实调用 list_directory（沙箱内 /workspace）+ 内置 bash 补充核实，回复含真实目录内容并落库；②P08 禁用 list_directory → 既有任务下一条消息再次调用 → **HTTP 403 立即阻断**（错误结果注入上下文，Agent 自行降级用 ls 核实并如实披露）；③重新启用 → 调用恢复，SSE 流 0 error 帧
+- 已知边界：mcp-sandbox 为共享镜像无任务挂载——MCP 文件系统 Server 看到的是沙箱自身 /workspace（空），与任务 workdir 不同（Pi 内置 bash/read/write 才操作任务工作区）；按任务挂载留阶段 7+ 权衡
+
 ---
 
 ## 13. 变更记录
@@ -481,6 +503,7 @@ pi-worker 镜像 `agentcraft-pi-worker:0.84.3`（node:22-slim，非 root piworke
 | v0.4.0 | 2026-09-02 | 阶段 2 Skill 管理垂直切片：validate_skill 纯文本校验器 + Skill 全生命周期 API（状态机）+ P08 前端（列表/弹窗/ValidateButton）+ 61 个新测试 |
 | v0.5.0 | 2026-09-02 | 阶段 3 专家 CRUD/绑定/专家中心：闭环一收口；P03/P04/P06/P07；41 个新测试；审查修复 13 处 |
 | v0.6.0 | 2026-09-03 | 阶段 4 任务数据层 + SSE 链路（EchoEngine 冻结契约）：任务/文件/工作区 API + P09 前端 + 启动巡检/体量守卫/任务锁；47 个新测试；审查修复 15 项 |
+| v0.10.0 | 2026-09-03 | 阶段 6 MCP 管理 + MCP 桥：MCP 客户端（stdio/http）/mcp_service（env 信封/敏感授权/快照装配）/API 全套/内部调用端点/mcp-sandbox 沙箱/dev 转发器/P08+P07+P09 前端；闭环三 E2E（真实模型+真实 Server，kill switch 即时阻断）；toolUse error 帧误报修复；基线 337/49 |
 | v0.9.0 | 2026-09-03 | Proxy 提前落地 + 真实模型验收：JWT 任务令牌/provider-proxy 按令牌路由/completions 协议扩展/双网络容器化；DeepSeek BYOK 真实对话用户实测通过 |
 | v0.8.0 | 2026-09-03 | 阶段 5.5 Provider 双模式 BYOK：加密信封/user_providers 表/CRUD/任务快照冻结/Provider 指纹重建/P10 设置页；测试基线 274/36；安全审查修复（ACTIVE_KID 校验、所有权 404 化、SSRF 立场注释） |
 | v0.7.0 | 2026-09-03 | 阶段 5 Pi 引擎集成：PiEngine 协议层 + SkillLoader + EventHandler + PiEngineManager（重播种/abort/容器池）+ Docker CLI/API 双传输 + faux 经扩展注册；EchoEngine 替换、abort 落地；faux 全链路 E2E 验收（含 docker rm -f 重播种恢复与沙箱 inspect 清单） |

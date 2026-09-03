@@ -13,7 +13,7 @@
 | 5 | Pi 引擎集成（容器沙箱/重播种/abort，faux 全链路验收） | ✅ | `d153a22`/`afaae05` |
 | P09 增强 | 原型功能对齐（md/工具卡片/上下文面板/视口锁定） | ✅ | `852dbe3` |
 | **5.5** | **Provider 双模式 BYOK（用户自带 Key）** | ✅ | 本文档 §阶段 5.5 |
-| 6 | MCP 桥 + Provider Proxy 按令牌路由 | 🚧 | **proxy 核心已完成并经真实模型验收**（JWT 令牌/completions 扩展/容器化双网络/BYOK 真实对话 2026-09-03 ✅）；余 MCP 桥 |
+| 6 | MCP 桥 + Provider Proxy 按令牌路由 | ✅ | proxy（2026-09-03 真实模型验收）+ MCP 管理/桥/沙箱（闭环三 E2E：真实模型真实调用 + kill switch 即时阻断 ✅） |
 | 7 | 生命周期完善（mutation lock 跨进程/回收/崩溃恢复/看门狗/complete/delete） | ⬜ | — |
 
 ---
@@ -45,11 +45,14 @@
 
 ---
 
-## 阶段 6：MCP 桥 + Proxy 路由（要点）
+## 阶段 6：MCP 桥 + Proxy 路由（要点）✅ 2026-09-03 完成
 
-- `/internal/mcp/call` 后端实现（任务令牌/容器实例/工具绑定校验，复用 5.5 的解密路径管理 MCP env）
-- `/api/experts/{id}/mcp` 三端点（当前 501）；扩展 TOOLS 真实注入；P08 MCP 标签页 + P09 MCP tab 数据接入
 - ~~Provider Proxy 按令牌路由 + Responses→Completions 兼容转换~~ **✅ 已随 5.5 提前完成**（2026-09-03 用户实测通过：DeepSeek BYOK 真实对话全链路；Responses 兼容以扩展注册 completions 协议方式规避，无需转换层；Ollama 免钥路径已由测试覆盖，OpenAI 官方上游同一通道）
+- `/api/mcp/servers` 九端点 + `/api/experts/{id}/mcp` 三端点 + env 信封（AES-256-GCM，AAD 绑定 server_id）——`mcp_service`
+- `/internal/mcp/call`：X-Task-Token 三重校验（签名/任务/实例）+ 快照能力上限 + kill switch 双层（Server/工具/绑定/敏感授权）
+- MCP 客户端（stdio 沙箱 + streamable HTTP 双传输）+ `mcp-sandbox` 沙箱镜像（真实 filesystem Server）+ dev 后端转发容器（容器回调控制面通道）
+- 前端：P08 MCP Server 标签页 + P07 MCP 绑定面板 + P09 MCP tab 快照渲染
+- **闭环三 E2E 验收（2026-09-03）**：真实模型（deepseek-v4-flash BYOK）对话中真实调用 list_directory 并返回真实结果；禁用工具后既有任务下次调用 403 立即阻断；重新启用恢复。详见 Scaffold_Progress §12.2-12.3、Development_Record §7B
 
 ## 阶段 7：生命周期完善（要点）
 

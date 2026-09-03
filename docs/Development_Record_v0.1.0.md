@@ -1,7 +1,7 @@
 # AgentCraft 开发记录
 
 **文档类型**：开发记录（面向项目成员与后续阶段的 AI Coding 智能体）
-**文档版本**：v0.4.0
+**文档版本**：v0.5.0
 **记录周期**：2026-09-02 至 2026-09-03
 **项目位置**：`C:\Users\ChibaRie\Desktop\AgentCraft\agentcraft`
 **上游文档**：PRD v0.4.1、Engineering Spec v0.4.0、Database Design v0.4.0、Scaffold Plan v0.4.0
@@ -266,6 +266,30 @@ CLI 无内置 faux（经任务扩展 `pi.registerProvider`+自定义 streamSimpl
 
 ---
 
+## 7B. 阶段 6：MCP 管理 + MCP 桥（2026-09-03 完成，闭环三收口）
+
+**目标**：PRD §3.3 闭环三——Agent 在对话中真实调用 MCP 工具并返回结果；禁用工具后调用被立即阻断。文档基线：手册 §6.7/§6.8/§7.4/§10.2/§11.3、DB §3.9-3.11。
+
+### 交付
+
+- `engine/mcp_client.py`：MCP 2024-11-05 JSON-RPC 客户端；stdio（docker run mcp-sandbox 沙箱 / 本地子进程回退）+ streamable HTTP 双传输；30s 单请求超时、100KB 结果截断、env 密钥不落日志
+- `services/mcp_service.py`：Server CRUD / discover 落库（保守敏感判定+可信只读 allowlist）/ 工具开关（sensitive 确认→authorized_at）/ publish/offline / 删除引用阻断（409）/ 专家绑定三操作 / env AES-256-GCM 信封（AAD 绑定 server_id，API 只回变量名）
+- `/api/mcp/servers` 九端点 + `/api/experts/{id}/mcp` 三端点去 501；专家详情 `mcps` 真实填充
+- `tasks.mcp_snapshot` 真实装配（enabled 绑定 ∩ published Server ∩ enabled 工具 ∩ 授权齐备）；`/internal/mcp/call`（X-Task-Token 三重校验 + 快照上限 + kill switch 双层校验 + 执行）
+- `docker/Dockerfile.mcp-sandbox` + compose profile（真实 `@modelcontextprotocol/server-filesystem`）；`probe_mcp_stdio.py` 真实探针
+- dev 后端转发容器：internal 别名 `agentcraft-control` → 转发宿主机控制面（容器回调 /internal/mcp/call 的通道；compose 形态自动跳过）
+- 前端：P08 MCP Server 标签页（注册/发现/工具开关+敏感确认/发布/下架/删除）、P07 MCP 绑定面板、P09 MCP tab 快照渲染（敏感徽标）
+- E2E 发现修复：`stopReason=toolUse`（工具循环正常中间步）被误报 error 帧 → 静默忽略+回归测试；aiodocker 探测会话泄漏修复
+
+### 验收（2026-09-03，浏览器 + 真实模型）
+
+- 基线：337 passed / 49 skipped；ruff 全绿；`probe_mcp_stdio.py` 沙箱发现 14 工具 + tools/call 全通
+- UI（chibarie，0 console error）：注册「文件系统」→ 发现（敏感标正确）→ 启用 → 发布 → 绑定专家 → 建任务（快照冻结）→ P09 tab 渲染
+- 闭环三（deepseek-v4-flash BYOK 真实模型）：①Agent 真实调用 list_directory + bash，回复真实目录内容并落库；②禁用工具 → 既有任务下次调用 **403 立即阻断**（错误注入上下文，Agent 如实披露并降级）；③重新启用恢复，SSE 0 error 帧
+- 已知边界：mcp-sandbox 无任务挂载（MCP 文件 Server 看到沙箱自身 /workspace）；按任务挂载权衡留阶段 7+
+
+---
+
 ## 8. 累计度量
 
 ### 8.1 测试矩阵（244 passed / 31 skipped，共 275 用例）
@@ -318,6 +342,7 @@ CLI 无内置 faux（经任务扩展 `pi.registerProvider`+自定义 streamSimpl
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| v0.5.0 | 2026-09-03 | 增补阶段 6（MCP 管理 + MCP 桥，闭环三收口）：MCP 客户端/服务层/API 全套/内部调用端点/mcp-sandbox/dev 转发器/前端三页；闭环三 E2E（真实模型+真实 Server + kill switch 即时阻断）；toolUse 误报修复；基线 337/49 |
 | v0.4.1 | 2026-09-03 | 5.5 补验收：Proxy 提前落地（JWT 令牌/按令牌路由/completions 扩展/容器化），DeepSeek BYOK 真实对话用户实测通过 |
 | v0.4.0 | 2026-09-03 | 增补阶段 5.5（Provider BYOK 双模式）：加密信封/user_providers/CRUD/任务快照/指纹重建/P10；文档基线四份修订；安全审查修复 3 项 |
 | v0.3.0 | 2026-09-03 | 增补阶段 5（Pi 引擎集成：协议层/SkillLoader/EventHandler/容器池/重播种/abort + faux 全链路验收）与 P09 原型功能增强（Markdown/工具卡片/上下文面板/视口锁定）；基线 244/31；实测规格修正 7 项 |

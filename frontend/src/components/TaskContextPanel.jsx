@@ -79,7 +79,8 @@ export default function TaskContextPanel({ skills = [], mcpTools = [], toolCalls
       {activeTab === "mcp" && (
         <div className="context-body" role="tabpanel">
           <p className="context-note">
-            工具集在任务创建时冻结（能力上限快照）；当前运行时暂未接入 MCP 工具调用。
+            工具集在任务创建时冻结（能力上限快照）；调用经控制面实时校验，
+            Server 下架 / 工具禁用 / 授权撤销会立即阻断。
           </p>
           {mcpTools.length === 0 ? (
             <p className="context-empty">本任务未绑定 MCP 工具</p>
@@ -88,6 +89,11 @@ export default function TaskContextPanel({ skills = [], mcpTools = [], toolCalls
               <div className="context-tool-row" key={`${tool.serverId}-${tool.name}`}>
                 <Wrench size={13} aria-hidden="true" />
                 <span className="context-tool-name">{tool.name}</span>
+                {tool.sensitive && (
+                  <span className="skill-status is-offline" title="敏感工具：需专家用户授权">
+                    敏感
+                  </span>
+                )}
                 <span className="context-tool-desc">{tool.description}</span>
               </div>
             ))
