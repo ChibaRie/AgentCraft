@@ -13,6 +13,27 @@ def _strip(value):
     return value.strip() if isinstance(value, str) else value
 
 
+def _validate_base_url(value: str) -> str:
+    """base_url 统一校验（创建/更新共用，防解析差分绕过）。
+
+    URL 解析校验（scheme + 主机名必填 + 禁凭据内嵌）。SSRF 立场（§7.7）：
+    本产品为本地单操作者 BYOK 部署，Ollama 等本机端点是合法目标，故不封禁
+    私网/回环地址；出口防线在 provider-proxy（任务令牌 scope、限速、无
+    CONNECT、日志脱敏，阶段 6 落地）。
+    """
+    from urllib.parse import urlparse
+
+    normalized = value.rstrip("/")
+    parsed = urlparse(normalized)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("base_url 必须以 http:// 或 https:// 开头")
+    if not parsed.hostname:
+        raise ValueError("base_url 缺少主机名")
+    if parsed.username or parsed.password or "@" in normalized.split("//", 1)[1]:
+        raise ValueError("base_url 不允许内嵌凭据")
+    return normalized
+
+
 class ProviderCreateRequest(BaseModel):
     name: str = Field(min_length=2, max_length=30)
     protocol: str = Field(default="openai")
@@ -36,23 +57,7 @@ class ProviderCreateRequest(BaseModel):
     @field_validator("base_url")
     @classmethod
     def _base_url_scheme(cls, value: str) -> str:
-        """URL 解析校验（scheme + 主机名必填 + 禁凭据内嵌）。
-
-        SSRF 立场（§7.7）：本产品为本地单操作者 BYOK 部署，Ollama 等本机
-        端点是合法目标，故不封禁私网/回环地址；出口防线在 provider-proxy
-        （任务令牌 scope、限速、无 CONNECT、日志脱敏，阶段 6 落地）。
-        """
-        from urllib.parse import urlparse
-
-        normalized = value.rstrip("/")
-        parsed = urlparse(normalized)
-        if parsed.scheme not in ("http", "https"):
-            raise ValueError("base_url 必须以 http:// 或 https:// 开头")
-        if not parsed.hostname:
-            raise ValueError("base_url 缺少主机名")
-        if parsed.username or parsed.password or "@" in normalized.split("//", 1)[1]:
-            raise ValueError("base_url 不允许内嵌凭据")
-        return normalized
+        return _validate_base_url(value)
 
     @field_validator("api_key")
     @classmethod
@@ -92,10 +97,7 @@ class ProviderUpdateRequest(BaseModel):
     def _base_url_scheme(cls, value):
         if value is None:
             return value
-        normalized = value.rstrip("/")
-        if not (normalized.startswith("http://") or normalized.startswith("https://")):
-            raise ValueError("base_url 必须以 http:// 或 https:// 开头")
-        return normalized
+        return _validate_base_url(value)
 
     @field_validator("api_key")
     @classmethod

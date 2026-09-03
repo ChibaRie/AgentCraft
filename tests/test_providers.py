@@ -274,3 +274,16 @@ def test_delete_provider(client, crypto_settings):
     token_b, _ = register_expert(client, username="prov-n", email="prov-n@example.com")
     forbidden = client.delete(f"/api/providers/{other_id}", headers=auth_header(token_b))
     assert forbidden.status_code == 404  # 不暴露他人配置存在性
+
+
+def test_update_provider_base_url_validation_parity(client, crypto_settings):
+    """更新路径与创建路径同校验（防解析差分绕过：弱 scheme/缺主机名/内嵌凭据）。"""
+    token, _ = register_expert(client, username="prov-parity", email="prov-parity@example.com")
+    provider_id = create_provider(client, token).json()["data"]["id"]
+    for bad in ("ftp://x.example.com", "http://", "http://user:pw@api.example.com"):
+        response = client.put(
+            f"/api/providers/{provider_id}",
+            json={"base_url": bad},
+            headers=auth_header(token),
+        )
+        assert response.status_code == 400, f"base_url={bad!r} 未被更新路径拒绝"
