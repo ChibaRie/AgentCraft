@@ -398,7 +398,54 @@ Pi 容器默认不启动。
 
 ---
 
-## 11. 变更记录
+## 11. 阶段 5：Pi 引擎集成（2026-09-03 完成，faux 全链路验收）
+
+按 `docs/phase5_piagent.md` 执行手册实现 §7 核心链路。事实源对齐 pi 0.84.3 源码（rpc.md + faux.ts + 扩展加载器），步骤 1 手工 JSONL 实验录制真实帧序存 `tests/fixtures/pi_frames/`（faux_basic/faux_abort），作为协议测试语料。
+
+### 11.1 交付内容（4 文件 + 引擎替换）
+
+| 模块 | 要点 |
+|---|---|
+| `engine/pi_engine.py` | 协议封装：JSONL LF 分帧（剥离尾部 \r）、pending {id: Future} 自增关联、handle_line 三分叉（response→Future；extension_ui_request→confirm=false/select·input·editor=cancelled 2s 自动应答；事件→回调）、writer lock 串行 stdin、stdout 独立排空协程（1MiB 行长上限内存防线）、id 错配→needs_rebuild、坏行跳过 |
+| `engine/event_handler.py` | Pi 事件→SSE 翻译（§6.6 冻结 schema）：text_delta/thinking_delta 转发、tool_execution_* → tool_event + role=tool 落库、message_end 仅 stopReason=stop 落库（aborted/error 丢弃，防重播种喂回残缺上下文）、agent_settled → done、usage 映射 prompt/completion_tokens |
+| `engine/skill_loader.py` | §7.5 组装：专家身份→人设→方法论→Skill（任务级 nonce 边界包裹 + 同形子串剥离）→TaskFile manifest（独立 nonce + 文件名是数据声明）→工作规则（项目上下文非更高优先级声明）→末尾忽略声明→cwd；64KiB UTF-8 上限，创建时 413（PROMPT_TOO_LARGE） |
+| `engine/pi_engine_manager.py` | 容器表 + ensure_container 惰性创建/重建（needs_rebuild/引擎死亡）；**重播种**（§7.6）：新容器首条消息嵌入最近 40 条历史（`[历史对话回顾]`+`[当前消息]`，绝不单独发历史防幻影轮）；run_round 整轮 deadline 超时兜底 abort；request_abort 绕 mutation lock；有界轮队列（增量帧可丢弃、关键事件必达）；任务令牌随容器轮换 |
+| `engine/docker_transport.py` | `ContainerSpec` 单一事实源（CLI/API 双通道防漂移）：argv 数组直传、三挂载、非 root、只读 rootfs、cap_drop ALL、no-new-privileges、tmpfs（/tmp + ~/.pi 凭证临时区）、internal 网络、512MB/1CPU、labels；DockerApiTransport（aiodocker）+ DockerCliTransport（`docker run -i` stdio，npipe 环境回退）+ stderr 诊断日志 |
+| `engine/extension_generator.py` | §7.4 生成 task.ts：MCP 工具注册循环（mcp_snapshot 写死）+ faux provider 注册块（AGENTCRAFT_PROVIDER=faux 启用） |
+| `engine/subprocess_transport.py` | 本地子进程传输（PI_RUNTIME=subprocess，Windows 开发直跑，无沙箱仅开发用） |
+
+**引擎替换**：`POST /api/tasks/{id}/messages` 改经 PiEngineManager.run_round（EchoEngine 删除）；`POST /api/tasks/{id}/abort` 落地（202，所有权检查后绕锁 abort）；PI_RUNTIME=auto 时 docker API→docker CLI→本地子进程依序回退。
+
+### 11.2 规格修正（以源码为准，待规格升版补记）
+
+1. **CLI 无内置 faux**（实测 `Unknown provider "faux"`）：经任务扩展 `pi.registerProvider` + 自定义 streamSimple 回显注册——回显含上下文尾部，「回复引用第 1 轮事实」即连续性的确定性证据；AGENTCRAFT_FAUX_CHUNK_DELAY_MS 控制分帧节奏（abort 可观察性）
+2. **abort 帧序**：abort 后 pi 仍发 assistant `message_end`（stopReason=aborted）+ `agent_settled` 照常收尾——落库纪律必须过滤 stopReason
+3. **只读 rootfs 需要 ~/.pi tmpfs**：pi 凭证存储在 HOME 下建目录，只读 rootfs 下 ENOENT；tmpfs 随容器销毁
+4. **--mount 语法**：只读为 `readonly` 标志（非 `ro` 后缀）；bind source 必须绝对路径（相对路径 docker CLI 直接报 invalid Windows path）
+5. **轮超时以整轮 deadline 计**（防慢流逐段重置超时）；user 消息也有 message_start/end 对（落库按 role 过滤）
+
+### 11.3 验收（PRD §4.5.5，faux + Docker 容器运行时，acceptance_pi_e2e.py）
+
+- ✅ faux 创建任务→发消息→P09 逐字流式（非首条 0.03s，首条 <10s）
+- ✅ 连续多轮，回复引用第 1 轮暗号（内存连续性）
+- ✅ `docker rm -f pi-task-N` 后发消息→自动重建+重播种，回复含 `[历史对话回顾]` 中的第 1 轮事实
+- ✅ abort：202→done(aborted)→半截回复不落库→任务保持 running 可继续
+- ✅ `docker inspect`：仅三个规定挂载、agentcraft-internal 网络、只读 rootfs、cap_drop ALL、非 root、env 无真实 Key（仅任务令牌）
+- ✅ 全部消息落库（4 user + 3 assistant，无中止残片）
+- ✅ `tests/test_pi_engine.py`（协议 13）+ `test_pi_manager.py`（重播种/abort/令牌 9）+ `test_event_handler.py`（翻译 8）全绿；全量 pytest 通过、ruff 零告警、vite build 86.5KB
+
+pi-worker 镜像 `agentcraft-pi-worker:0.84.3`（node:22-slim，非 root piworker）；受限网络经 `--build-arg NPM_REGISTRY=https://registry.npmmirror.com` 构建。
+
+### 11.4 遗留接缝（阶段 6/7）
+
+- `/internal/mcp/call` 后端实现与 MCP 工具真实验证（阶段 6）：任务令牌与扩展 registerTool 模板已就位
+- mutation lock 跨进程化、并发上限排队、空闲回收、崩溃恢复重试 3 次、Skill 指纹 kill switch、看门狗巡检（阶段 7）
+- provider-proxy（阶段 6）：faux→openai 切换时 OPENAI_BASE_URL/KEY 注入路径已预留
+- complete/delete 端点（阶段 7 complete 语义：无锁预检→request_abort→等锁→completed+回收容器）
+
+---
+
+## 12. 变更记录
 
 | 版本 | 时间 | 说明 |
 |---|---|---|
@@ -408,3 +455,4 @@ Pi 容器默认不启动。
 | v0.4.0 | 2026-09-02 | 阶段 2 Skill 管理垂直切片：validate_skill 纯文本校验器 + Skill 全生命周期 API（状态机）+ P08 前端（列表/弹窗/ValidateButton）+ 61 个新测试 |
 | v0.5.0 | 2026-09-02 | 阶段 3 专家 CRUD/绑定/专家中心：闭环一收口；P03/P04/P06/P07；41 个新测试；审查修复 13 处 |
 | v0.6.0 | 2026-09-03 | 阶段 4 任务数据层 + SSE 链路（EchoEngine 冻结契约）：任务/文件/工作区 API + P09 前端 + 启动巡检/体量守卫/任务锁；47 个新测试；审查修复 15 项 |
+| v0.7.0 | 2026-09-03 | 阶段 5 Pi 引擎集成：PiEngine 协议层 + SkillLoader + EventHandler + PiEngineManager（重播种/abort/容器池）+ Docker CLI/API 双传输 + faux 经扩展注册；EchoEngine 替换、abort 落地；faux 全链路 E2E 验收（含 docker rm -f 重播种恢复与沙箱 inspect 清单） |

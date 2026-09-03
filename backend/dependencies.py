@@ -34,8 +34,12 @@ def get_skill_loader(settings: Settings = Depends(get_settings)) -> SkillLoader:
 
 
 def get_extension_generator(settings: Settings = Depends(get_settings)) -> ExtensionGenerator:
-    """任务扩展生成器（§7.4）：task.ts 写盘到控制面扩展目录。"""
-    return ExtensionGenerator(Path(settings.HOST_DATA_ROOT) / "extensions")
+    """任务扩展生成器（§7.4）：task.ts 写盘到控制面扩展目录。
+
+    路径必须绝对化：生成产物将作为 Docker bind mount source（相对路径
+    在 docker CLI 会直接报 invalid Windows path）。
+    """
+    return ExtensionGenerator((Path(settings.HOST_DATA_ROOT) / "extensions").resolve())
 
 
 @lru_cache(maxsize=1)

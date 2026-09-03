@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     PI_WORKER_IMAGE: str = "agentcraft-pi-worker:0.84.3"
     PI_RUNTIME: str = "auto"  # auto | docker | cli | subprocess
     PI_ROUND_TIMEOUT_SECONDS: int = 300
+    PI_FAUX_CHUNK_DELAY_MS: int = 15  # faux 回显分帧节奏（0=即时；供 abort 观察流式）
     PI_NETWORK_NAME: str = "agentcraft-internal"
     AGENTCRAFT_BACKEND_URL: str = "http://agentcraft-control:8000"
     DOCKER_API_URL: str = "http://docker-socket-proxy:2375"

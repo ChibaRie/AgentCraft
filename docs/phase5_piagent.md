@@ -286,15 +286,31 @@ fixture 来源：步骤 1 手工实验录制的 stdout 全量，比手造帧可�
 
 ## 八、阶段验收（对照 PRD §4.5.5）
 
-- [ ] faux 下创建任务 → 发消息 → P09 逐字流式渲染，非首条消息 2s 内出字、首条 10s 内
-- [ ] 连续 3 轮对话，第 3 轮能引用第 1 轮内容（内存连续性）
-- [ ] `docker rm -f` 容器后发新消息 → 自动重建 + 重播种，上下文不丢
-- [ ] abort 生效：轮停止、半截回复不落库、任务可继续
-- [ ] `docker inspect` 任务容器：只有三个规定挂载、internal 网络、无真实 Key env
-- [ ] 全部消息（user/assistant/tool）落库，刷新 P09 历史完整
-- [ ] `tests/test_pi_engine.py` 全绿
+> **2026-09-03 验收通过**（`acceptance_pi_e2e.py`，faux + Docker CLI 容器运行时）。实测修正记录见 §九。
+
+- [x] faux 下创建任务 → 发消息 → P09 逐字流式渲染，非首条消息 2s 内出字（实测 0.03s）、首条 10s 内
+- [x] 连续 3 轮对话，第 3 轮能引用第 1 轮内容（内存连续性）
+- [x] `docker rm -f` 容器后发新消息 → 自动重建 + 重播种，上下文不丢（回复含 `[历史对话回顾]` 中的第 1 轮暗号）
+- [x] abort 生效：done(finish_reason=aborted)、半截回复不落库、任务可继续
+- [x] `docker inspect` 任务容器：只有三个规定挂载、internal 网络、无真实 Key env（含只读 rootfs/cap_drop ALL/非 root/资源限额核验）
+- [x] 全部消息（user/assistant）落库，刷新历史完整；中止残片不入库
+- [x] `tests/test_pi_engine.py` 全绿（协议 13 + manager 9 + handler 8）
 
 **通过后进入阶段 6（MCP 桥）**——阶段 5 写的 registerTool 扩展模板和任务令牌直接就是 MCP 桥的地基，投入完全复用。
+
+---
+
+## 九、实现期规格修正（以 pi 0.84.3 源码/实测为准，待规格升版补记）
+
+| # | 修正 | 依据 |
+|---|---|---|
+| 1 | **CLI 无内置 faux provider**（`Unknown provider "faux"`）——faux 由任务扩展经 `pi.registerProvider` + 自定义 `streamSimple` 注册（回显上下文尾部，回复引用第 1 轮事实即连续性证据）；`AGENTCRAFT_FAUX_CHUNK_DELAY_MS` 控制分帧节奏 | 实测 + `docs/custom-provider.md` + jiti alias/virtualModules 解析确认 |
+| 2 | **abort 后 assistant 的 `message_end` 仍会发出（stopReason=aborted）且 `agent_settled` 照常收尾**——落库必须按 stopReason=stop 过滤（坑位 #9 的具体形态） | faux_abort.jsonl 实录帧序 |
+| 3 | **只读 rootfs 下 pi 需要可写 `~/.pi`**（凭证存储 mkdir ENOENT）——沙箱清单 tmpfs 增加 `/home/piworker/.pi`（随容器销毁） | 容器实测 |
+| 4 | **--mount 语法**：只读是 `readonly` 标志（`ro` 后缀非法）；bind source 必须绝对路径 | docker CLI 实测 |
+| 5 | **user 消息也有 `message_start/end` 帧**——EventHandler 落库按 role 过滤 | faux_basic.jsonl 实录 |
+| 6 | **轮超时按整轮 deadline 计**（逐段 wait_for 重置会允许慢流无限延长轮占用）；stdout 读取加 1MiB 行长上限；轮事件队列有界（增量可丢、关键事件必达） | 阶段 5 安全审查 |
+| 7 | **步骤 1 手工实验**：Windows 下 npm shim 是 .cmd，直接以 `node <dist/bundle/cli.js>` 形态运行（与容器 argv 一致）；录制脚本 `probe_pi_rpc.py` | 实测 |
 
 ---
 

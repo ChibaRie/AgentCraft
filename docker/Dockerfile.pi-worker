@@ -1,8 +1,15 @@
+# Pi 任务沙箱镜像（§7.1 预构建固定 worker 镜像）
+# Pi 锁定 @earendil-works/pi-coding-agent@0.84.3（§12 决策 #8）；
+# 受限网络环境可用 --build-arg NPM_REGISTRY=https://registry.npmmirror.com
 FROM node:22-slim
 
-RUN npm install -g @earendil-works/pi-coding-agent@0.84.3 && \
+ARG NPM_REGISTRY=https://registry.npmjs.org
+
+RUN npm config set registry ${NPM_REGISTRY} && \
+    npm install -g @earendil-works/pi-coding-agent@0.84.3 && \
     useradd --create-home --shell /bin/bash piworker
 
+# 非 root 运行（§7.2 沙箱清单；rootfs 只读由容器运行时施加）
 USER piworker
 WORKDIR /workspace
 

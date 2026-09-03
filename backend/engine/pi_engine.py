@@ -26,6 +26,10 @@ logger = logging.getLogger("agentcraft")
 # extension_ui_request 应答时限（§3.2：必须在 2s 内应答，否则扩展调用挂起）
 UI_RESPONSE_DEADLINE_SECONDS = 2.0
 
+# 单行长度上限：JSONL 帧正常远小于此；超限视为异常输出直接丢弃（内存防线）。
+# 64KiB 系统提示词 + 32KiB 消息经 echo 类引擎回放仍远低于 1MiB。
+MAX_LINE_BYTES = 1024 * 1024
+
 
 class PiEngineError(Exception):
     """Pi 引擎协议层错误基类。"""
@@ -212,6 +216,11 @@ class PiEngine:
                     logger.info("Task %s: stdout EOF，容器已退出", self.task_id)
                     self._fail_pending(PiEngineError("container exited"))
                     return
+                if len(line) > MAX_LINE_BYTES:
+                    logger.error(
+                        "Task %s: stdout 行超长（%d 字符），已丢弃", self.task_id, len(line)
+                    )
+                    continue
                 await self.handle_line(line)
         except asyncio.CancelledError:
             raise

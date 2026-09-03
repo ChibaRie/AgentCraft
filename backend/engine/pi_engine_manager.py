@@ -29,6 +29,7 @@ from backend.engine.docker_transport import (
     DockerApiTransport,
     DockerCliTransport,
     build_container_spec,
+    docker_ensure_network,
     docker_remove_container,
 )
 from backend.engine.event_handler import EventHandler
@@ -42,6 +43,9 @@ logger = logging.getLogger("agentcraft")
 HistoryFetcher = Callable[[int, int], Awaitable[list[dict]]]
 
 _ROLE_LABELS = {"user": "用户", "assistant": "助手", "tool": "工具"}
+
+# 轮事件队列上限：text_delta 洪泛时的内存防线（超出部分丢弃流式增量）
+_ROUND_QUEUE_MAX = 2000
 
 
 class EngineStateError(Exception):
@@ -69,7 +73,7 @@ class PiEngineManager:
         self._task_files_root = (
             task_files_root
             if task_files_root is not None
-            else Path(settings.HOST_DATA_ROOT) / "task-files"
+            else (Path(settings.HOST_DATA_ROOT) / "task-files").resolve()
         )
         self._containers: dict[int, PiEngine] = {}
         self._removal_hooks: dict[int, Callable[[], Awaitable[None]]] = {}
@@ -125,6 +129,10 @@ class PiEngineManager:
         extension_path = self._extension_generator.generate(
             task_id, mcp_tools, self._settings.PI_PROVIDER
         )
+        # §7.9：挂载源全部服务端派生且必须绝对化
+        workdir_host = self._absolute(workdir_host, "工作目录")
+        task_files_host = self._absolute(task_files_host, "任务文件目录")
+        extension_path = self._absolute(extension_path, "扩展文件")
 
         task_token = secrets.token_urlsafe(32)
         self._task_tokens[task_id] = task_token
@@ -141,6 +149,11 @@ class PiEngineManager:
             task_token=task_token,
             backend_url=self._settings.AGENTCRAFT_BACKEND_URL,
             network_name=self._settings.PI_NETWORK_NAME,
+            faux_chunk_delay_ms=(
+                self._settings.PI_FAUX_CHUNK_DELAY_MS
+                if self._settings.PI_PROVIDER == "faux"
+                else 0
+            ),
         )
 
         transport, removal = await self._make_runtime(spec, workdir_host, extension_path)
@@ -167,6 +180,7 @@ class PiEngineManager:
             logger.warning("Docker API 不可达，回退 docker CLI 传输")
         if runtime in ("auto", "cli"):
             if shutil.which("docker"):
+                await docker_ensure_network(spec.network_name)
                 return DockerCliTransport(spec), self._cli_removal(spec.container_name)
             if runtime == "cli":
                 raise EngineStateError("docker CLI 不可用")
@@ -226,6 +240,14 @@ class PiEngineManager:
         if target != root and root not in target.parents:
             raise EngineStateError(f"工作目录越界: {stored_workdir}")
         return target
+
+    @staticmethod
+    def _absolute(path: Path, label: str) -> Path:
+        """bind mount source 必须是绝对路径（docker CLI 相对路径直接报错）。"""
+        resolved = Path(path).resolve()
+        if not resolved.is_absolute():
+            raise EngineStateError(f"{label} 不是绝对路径: {path}")
+        return resolved
 
     async def _teardown(self, task_id: int) -> None:
         engine = self._containers.pop(task_id, None)
@@ -287,10 +309,16 @@ class PiEngineManager:
         )
 
         handler = EventHandler(persist_assistant, persist_tool)
-        queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
+        # 有界队列：慢消费时丢弃可再生的流式增量（done/message_saved/tool_event/
+        # error 等关键事件必须送达，宁可短暂阻塞读取协程形成背压）
+        queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue(maxsize=_ROUND_QUEUE_MAX)
 
         async def on_frame(frame: dict) -> None:
             for sse_event in await handler.handle_frame(frame):
+                if queue.qsize() >= _ROUND_QUEUE_MAX:
+                    if sse_event[0] in ("text_delta", "thinking_delta"):
+                        logger.warning("Task %s: 轮队列已满，丢弃流式增量帧", task_id)
+                        continue
                 await queue.put(sse_event)
 
         unsubscribe = engine.on_event(on_frame)
@@ -298,14 +326,33 @@ class PiEngineManager:
             message = await self._build_outgoing_message(engine, task_id, content)
             await engine.send_prompt(message)
             engine.needs_reseed = False
+            # §7.8 轮超时以整轮为限：deadline 一次计算，逐次扣减剩余时间，
+            # 防止慢速事件流把每段等待都重置成完整超时（DoS 加长轮占用）
+            deadline = asyncio.get_running_loop().time() + self._settings.PI_ROUND_TIMEOUT_SECONDS
             while True:
-                try:
-                    name, payload = await asyncio.wait_for(
-                        queue.get(), timeout=self._settings.PI_ROUND_TIMEOUT_SECONDS
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    await self._round_timeout(task_id, engine)
+                    yield (
+                        "error",
+                        {
+                            "code": "ROUND_TIMEOUT",
+                            "message": "回复超时，请重试",
+                            "recoverable": True,
+                        },
                     )
+                    yield (
+                        "done",
+                        {
+                            "finish_reason": "aborted",
+                            "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+                        },
+                    )
+                    return
+                try:
+                    name, payload = await asyncio.wait_for(queue.get(), timeout=remaining)
                 except asyncio.TimeoutError:
-                    # §7.8：无 agent_settled 超时兜底 → abort → 可重试错误
-                    await engine.abort()
+                    await self._round_timeout(task_id, engine)
                     logger.error("Task %s: 轮超时，已发送 abort", task_id)
                     yield (
                         "error",
@@ -331,6 +378,11 @@ class PiEngineManager:
                     return
         finally:
             unsubscribe()
+
+    async def _round_timeout(self, task_id: int, engine: PiEngine) -> None:
+        """§7.8：无 agent_settled 超时兜底 → abort → 可重试错误。"""
+        await engine.abort()
+        logger.error("Task %s: 轮超时，已发送 abort", task_id)
 
     async def _build_outgoing_message(
         self, engine: PiEngine, task_id: int, content: str

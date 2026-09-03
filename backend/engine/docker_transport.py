@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger("agentcraft")
@@ -41,6 +41,12 @@ class ContainerSpec:
     user: str = "piworker"
     memory_bytes: int = 512 * 1024 * 1024
     nano_cpus: int = 1_000_000_000  # 1 CPU
+    # 只读 rootfs 下的可写点：/tmp 常规临时；~/.pi 供 pi 凭证存储
+    # （auth.json 含任务令牌，tmpfs 随容器销毁，不入镜像层）
+    tmpfs: dict = field(default_factory=lambda: {
+        "/tmp": "rw,size=64m,nosuid,nodev,noexec",
+        "/home/piworker/.pi": "rw,size=16m,nosuid,nodev,noexec",
+    })
 
     def to_cli_config(self) -> dict:
         """`docker run` 参数（DockerCliTransport 用）。"""
@@ -65,11 +71,16 @@ class ContainerSpec:
                 "--read-only",
                 "--cap-drop", "ALL",
                 "--security-opt", "no-new-privileges",
-                "--tmpfs", "/tmp:rw,size=64m,nosuid,nodev,noexec",
+                *[f"--tmpfs={target}:{opts}" for target, opts in sorted(self.tmpfs.items())],
                 *label_args,
                 *env_args,
                 *[
-                    f"--mount=type=bind,src={src},target={tgt},{mode}"
+                    # --mount 语法：只读用 readonly 标志（缺省即 rw）
+                    (
+                        f"--mount=type=bind,src={src},target={tgt},readonly"
+                        if mode == "ro"
+                        else f"--mount=type=bind,src={src},target={tgt}"
+                    )
                     for src, tgt, mode in self.mounts
                 ],
             ],
@@ -102,7 +113,7 @@ class ContainerSpec:
                 "ReadonlyRootfs": True,
                 "CapDrop": ["ALL"],
                 "SecurityOpt": ["no-new-privileges"],
-                "Tmpfs": {"/tmp": "rw,size=64m,nosuid,nodev,noexec"},
+                "Tmpfs": dict(self.tmpfs),
                 "AutoRemove": False,
             },
         }
@@ -153,6 +164,7 @@ class DockerCliTransport:
         self._spec = spec
         self._docker_bin = docker_bin
         self._proc: asyncio.subprocess.Process | None = None
+        self._stderr_task: asyncio.Task | None = None
 
     async def start(self) -> str:
         config = self._spec.to_cli_config()
@@ -162,9 +174,21 @@ class DockerCliTransport:
             *argv,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
         return self._spec.container_name
+
+    async def _drain_stderr(self) -> None:
+        """容器 stderr 接入日志（§7.8：记录容器 stderr 诊断）。"""
+        assert self._proc is not None and self._proc.stderr is not None
+        while True:
+            raw = await self._proc.stderr.readline()
+            if not raw:
+                return
+            text = raw.decode("utf-8", "replace").rstrip()
+            if text:
+                logger.warning("容器 %s stderr: %s", self._spec.container_name, text)
 
     async def write_line(self, line: str) -> None:
         assert self._proc is not None and self._proc.stdin is not None
@@ -180,6 +204,9 @@ class DockerCliTransport:
         return raw.decode("utf-8").rstrip("\r\n")
 
     async def close(self) -> None:
+        if self._stderr_task is not None:
+            self._stderr_task.cancel()
+            self._stderr_task = None
         if self._proc is None:
             return
         try:
@@ -192,6 +219,27 @@ class DockerCliTransport:
 # ---------------------------------------------------------------------------
 # 容器生命周期 CLI 助手（manager 的 stop_hook / 巡检使用）
 # ---------------------------------------------------------------------------
+
+
+async def docker_ensure_network(
+    name: str, *, docker_bin: str = "docker"
+) -> None:
+    """确保 internal 任务网络存在（§7.2 网络：仅 control 与 provider-proxy）。"""
+    proc = await asyncio.create_subprocess_exec(
+        docker_bin, "network", "inspect", name,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    if await proc.wait() == 0:
+        return
+    create = await asyncio.create_subprocess_exec(
+        docker_bin, "network", "create", "--internal", name,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await create.communicate()
+    if create.returncode != 0:
+        logger.warning("创建网络 %s 失败: %s", name, stderr.decode(errors="replace").strip())
 
 
 async def docker_remove_container(name: str, *, docker_bin: str = "docker") -> None:
