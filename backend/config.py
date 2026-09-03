@@ -24,7 +24,11 @@ class Settings(BaseSettings):
     PI_ROUND_TIMEOUT_SECONDS: int = 300
     PI_FAUX_CHUNK_DELAY_MS: int = 15  # faux 回显分帧节奏（0=即时；供 abort 观察流式）
     PI_NETWORK_NAME: str = "agentcraft-internal"
+    MCP_SANDBOX_IMAGE: str = "agentcraft-mcp-sandbox:latest"  # stdio MCP Server 沙箱镜像
+    MCP_CALL_TIMEOUT_SECONDS: int = 30  # /internal/mcp/call 单请求超时（§6.8）
+    MCP_RESULT_MAX_BYTES: int = 102400  # 工具结果截断上限（100KB，§6.8）
     AGENTCRAFT_BACKEND_URL: str = "http://agentcraft-control:8000"
+    AGENTCRAFT_BACKEND_PORT: int = 8000  # dev 转发容器回源宿主机控制面的端口
     DOCKER_API_URL: str = "http://docker-socket-proxy:2375"
     UPLOAD_MAX_FILE_BYTES: int = 20971520
     UPLOAD_MAX_FILES_PER_REQUEST: int = 10

@@ -3,7 +3,7 @@
 管理面全部要求专家身份；发现面（discover_router）匿名可访问，仅暴露 published 专家。
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
@@ -26,7 +26,7 @@ from backend.schemas.expert import (
     ExpertUpdateRequest,
     UnboundResponse,
 )
-from backend.services import expert_service
+from backend.services import expert_service, mcp_service
 
 router = APIRouter(prefix="/experts", tags=["experts"])
 discover_router = APIRouter(prefix="/discover/experts", tags=["discover"])
@@ -98,8 +98,8 @@ async def get_expert(
             )
             for binding, skill in bindings
         ],
-        # MCP Server 绑定随 MCP 管理阶段接入；连接信息（command/url/env）不在此返回（§6.3）
-        mcps=[],
+        # MCP 绑定列表（server id/name/status/enabled）；连接信息不在此返回（§6.3）
+        mcps=await mcp_service.list_expert_bindings(db, user.id, expert_id),
     )
     return {"data": detail}
 
@@ -196,8 +196,15 @@ async def bind_mcp(
     expert_id: int,
     payload: ExpertMCPBindingRequest,
     user: User = Depends(require_expert_role),
+    db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "MCP 绑定在 MCP 管理阶段实现")
+    binding = await mcp_service.bind_server(
+        db, user.id, expert_id, payload.server_id, enabled=payload.enabled
+    )
+    return {
+        "data": {"expert_id": binding.expert_id, "server_id": binding.server_id,
+                 "enabled": bool(binding.enabled)}
+    }
 
 
 @router.put("/{expert_id}/mcp/{server_id}")
@@ -206,8 +213,15 @@ async def update_mcp_binding(
     server_id: int,
     payload: ExpertMCPUpdateRequest,
     user: User = Depends(require_expert_role),
+    db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "MCP 绑定在 MCP 管理阶段实现")
+    binding = await mcp_service.update_binding(
+        db, user.id, expert_id, server_id, enabled=payload.enabled
+    )
+    return {
+        "data": {"expert_id": binding.expert_id, "server_id": binding.server_id,
+                 "enabled": bool(binding.enabled)}
+    }
 
 
 @router.delete("/{expert_id}/mcp/{server_id}")
@@ -215,8 +229,10 @@ async def unbind_mcp(
     expert_id: int,
     server_id: int,
     user: User = Depends(require_expert_role),
+    db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "MCP 绑定在 MCP 管理阶段实现")
+    await mcp_service.unbind_server(db, user.id, expert_id, server_id)
+    return {"data": UnboundResponse(message="unbound")}
 
 
 # ---------------------------------------------------------------------------

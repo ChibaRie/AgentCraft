@@ -12,9 +12,10 @@ SSE 事件 schema 严格按 §6.6 冻结契约：
 - message_end：role=user 忽略（用户消息发送前已落库）；role=assistant 且
   stopReason=stop 才落库（content 取 text 块按序拼接，usage 映射为
   prompt_tokens/completion_tokens）；stopReason=aborted → 不落库、finish=aborted
-  （§7.6 落库纪律：残缺回复不得经重播种喂回上下文）；stopReason=error → 不落库、
-  发 error 帧，流照常以 done 收尾（§6.6 done 枚举仅 stop|aborted，错误在流层面
-  与中止同形，前端以 error 帧展示原因）
+  （§7.6 落库纪律：残缺回复不得经重播种喂回上下文）；stopReason=toolUse →
+  工具循环正常中间步，静默忽略（真实模型每发起一次工具调用都会经过）；
+  stopReason=error → 不落库、发 error 帧，流照常以 done 收尾（§6.6 done
+  枚举仅 stop|aborted，错误在流层面与中止同形，前端以 error 帧展示原因）
 - agent_settled → done（权威完成信号，释放轮锁由轮处理器执行）
 - 其余事件（turn_*/agent_end/queue_update/compaction_* 等）v1 忽略
 """
@@ -153,6 +154,11 @@ class EventHandler:
         if stop_reason == "aborted":
             # 中止：丢弃半截回复（§7.6），done 以 aborted 收尾
             self.finish_reason = "aborted"
+            return []
+
+        if stop_reason == "toolUse":
+            # Agent 工具循环的正常中间步（模型请求调用工具）：不落库、不发
+            # error 帧，等待 tool_execution_* 与后续推理；最终回复以 stop 收尾
             return []
 
         # error 等：不落库；发 error 帧告知可重试，流以 done 收尾

@@ -40,6 +40,11 @@ def provider_key_aad(user_id: int) -> str:
     return f"agentcraft:user_providers:{int(user_id)}:api_key:v1"
 
 
+def mcp_env_aad(server_id: int) -> str:
+    """MCP Server env_vars 的 AAD（§11.3：绑定归属 Server，防跨行搬用密文）。"""
+    return f"agentcraft:mcp_servers:{int(server_id)}:env_vars:v1"
+
+
 def make_keyring(raw: str, active_kid: str | None = None) -> tuple[str, dict[str, bytes]]:
     """解析 `MCP_ENCRYPTION_KEYRING=primary:<b64url32B>,old:<b64url32B>`。
 

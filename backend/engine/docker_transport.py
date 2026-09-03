@@ -314,6 +314,85 @@ async def docker_remove_container(name: str, *, docker_bin: str = "docker") -> N
     await proc.wait()
 
 
+# 开发形态后端转发器（阶段 6 MCP 桥）：任务容器只入 internal 网络（§10.2），
+# 而 /internal/mcp/call 需要容器回调控制面。开发机控制面跑在宿主机时，
+# 用一个 双网络（internal+bridge）转发容器 在 internal 网络内以
+# `agentcraft-control` 别名监听并转发到 host.docker.internal:<port>——
+# 与 provider-proxy 同款双网络模式；compose 形态（存在 agentcraft-control
+# 容器）自动跳过。Pi 容器网络隔离不变。
+_FORWARDER_NAME = "agentcraft-control-forwarder"
+
+# node TCP 转发（pi-worker 镜像自带 node，免新增镜像）
+_FORWARDER_SCRIPT = (
+    "const net=require('net');const HOST=process.env.FWD_HOST||'host.docker.internal';"
+    "const PORT=Number(process.env.FWD_PORT||8000);"
+    "net.createServer((client)=>{const up=net.connect(PORT,HOST);"
+    "client.pipe(up);up.pipe(client);"
+    "client.on('error',()=>up.destroy());up.on('error',()=>client.destroy());"
+    "}).listen(PORT,'0.0.0.0');"
+)
+
+
+async def docker_ensure_backend_forwarder(
+    *,
+    network_name: str,
+    image: str,
+    target_port: int,
+    docker_bin: str = "docker",
+) -> None:
+    """确保 dev 后端转发容器运行；compose 形态（控制面已容器化）自动跳过。"""
+    inspect = await asyncio.create_subprocess_exec(
+        docker_bin, "inspect", "agentcraft-control",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    if await inspect.wait() == 0:
+        return  # 控制面已在网络内（compose 形态），DNS 直达
+
+    exists = await asyncio.create_subprocess_exec(
+        docker_bin, "inspect", _FORWARDER_NAME,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    if await exists.wait() == 0:
+        start = await asyncio.create_subprocess_exec(
+            docker_bin, "start", _FORWARDER_NAME,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await start.communicate()
+        return
+
+    run = await asyncio.create_subprocess_exec(
+        docker_bin, "run", "-d",
+        "--name", _FORWARDER_NAME,
+        "--network", network_name,
+        "--network-alias", "agentcraft-control",
+        "-e", f"FWD_PORT={target_port}",
+        image,
+        "node", "-e", _FORWARDER_SCRIPT,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await run.communicate()
+    if run.returncode != 0:
+        logger.warning(
+            "启动后端转发容器失败（容器回调 /internal/mcp/call 将不可达）: %s",
+            stderr.decode(errors="replace").strip(),
+        )
+        return
+    # bridge 供转发容器访问宿主机（internal 网络本身无 host 路由）
+    connect = await asyncio.create_subprocess_exec(
+        docker_bin, "network", "connect", "bridge", _FORWARDER_NAME,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await connect.communicate()
+    if connect.returncode != 0:
+        logger.warning("转发容器 bridge 连接失败: %s", stderr.decode(errors="replace").strip())
+    logger.info("后端转发容器已就绪（internal 别名 agentcraft-control → host:%s）", target_port)
+
+
 async def docker_list_task_containers(
     label_filter: str, *, docker_bin: str = "docker"
 ) -> list[str]:

@@ -111,6 +111,20 @@ IMPLEMENTED = {
     ("GET", "/api/providers/1"),
     ("PUT", "/api/providers/1"),
     ("DELETE", "/api/providers/1"),
+    # 阶段 6：MCP 管理 + 内部调用（行为由 test_mcp_api/test_internal_mcp 覆盖）
+    ("POST", "/api/mcp/servers"),
+    ("GET", "/api/mcp/servers"),
+    ("GET", "/api/mcp/servers/1"),
+    ("PUT", "/api/mcp/servers/1"),
+    ("POST", "/api/mcp/servers/1/discover"),
+    ("PUT", "/api/mcp/servers/1/tools/1"),
+    ("POST", "/api/mcp/servers/1/publish"),
+    ("POST", "/api/mcp/servers/1/offline"),
+    ("DELETE", "/api/mcp/servers/1"),
+    ("POST", "/api/experts/1/mcp"),
+    ("PUT", "/api/experts/1/mcp/1"),
+    ("DELETE", "/api/experts/1/mcp/1"),
+    ("POST", "/internal/mcp/call"),
 }
 
 # 挂载了真实 JWT 依赖的占位端点：匿名请求先被 401 拦截，轮不到 501

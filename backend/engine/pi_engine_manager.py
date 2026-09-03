@@ -29,6 +29,7 @@ from backend.engine.docker_transport import (
     DockerApiTransport,
     DockerCliTransport,
     build_container_spec,
+    docker_ensure_backend_forwarder,
     docker_ensure_network,
     docker_ensure_proxy_container,
     docker_remove_container,
@@ -218,6 +219,16 @@ class PiEngineManager:
             )
         except Exception:  # noqa: BLE001 - proxy 启动失败不阻塞 faux/容器创建
             logger.exception("Provider Proxy 容器保障失败")
+        # dev 形态（控制面在宿主机）：确保容器可回调 /internal/mcp/call（MCP 桥）。
+        # compose 形态函数内自动跳过；faux 无工具调用无需回调
+        try:
+            await docker_ensure_backend_forwarder(
+                network_name=self._settings.PI_NETWORK_NAME,
+                image=self._settings.PI_WORKER_IMAGE,
+                target_port=self._settings.AGENTCRAFT_BACKEND_PORT,
+            )
+        except Exception:  # noqa: BLE001 - 转发器失败不阻塞容器创建
+            logger.exception("后端转发容器保障失败")
 
     async def _make_runtime(self, spec, workdir_host: Path, extension_path: Path):
         """按 PI_RUNTIME 选择传输：docker(API) / cli / subprocess；auto 依序回退。"""
@@ -250,6 +261,7 @@ class PiEngineManager:
         )
 
     async def _try_docker_api(self, spec):
+        docker = None
         try:
             import aiodocker
 
@@ -258,6 +270,11 @@ class PiEngineManager:
             return DockerApiTransport(docker, spec)
         except Exception as exc:  # noqa: BLE001 - 探测失败即回退
             logger.info("Docker API 探测失败: %s", exc)
+            if docker is not None:
+                try:
+                    await docker.close()  # 探测失败的会话必须关闭（防 Unclosed 警告泄漏）
+                except Exception:  # noqa: BLE001
+                    pass
             return None
 
     def _api_removal(self, container_name: str) -> Callable[[], Awaitable[None]]:

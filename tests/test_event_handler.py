@@ -139,6 +139,53 @@ async def test_aborted_round_discards_partial_reply():
     assert [payload for name, payload in sse if name == "message_saved"] == []
 
 
+async def test_tooluse_message_end_is_normal_loop_step():
+    """stopReason=toolUse 是 Agent 工具循环的正常中间步（模型请求调用工具）：
+    不落库、不发 error 帧，等待工具结果后的后续推理（真实模型 E2E 回归）。"""
+    handler, spy = make_handler()
+    sse = []
+    for frame in [
+        {"type": "agent_start"},
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "toolCall", "id": "c1", "name": "list_directory",
+                             "arguments": {"path": "/workspace"}}],
+                "stopReason": "toolUse",
+                "usage": {},
+            },
+        },
+        {
+            "type": "tool_execution_start",
+            "toolCallId": "c1", "toolName": "list_directory", "args": {},
+        },
+        {
+            "type": "tool_execution_end",
+            "toolCallId": "c1", "toolName": "list_directory", "isError": False, "args": {},
+            "result": {"content": [{"type": "text", "text": "[DIR] sub"}]},
+        },
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "DONE"}],
+                "stopReason": "stop",
+                "usage": {"input": 5, "output": 1},
+            },
+        },
+        {"type": "agent_settled"},
+    ]:
+        sse.extend(await handler.handle_frame(frame))
+
+    assert [name for name, _ in sse if name == "error"] == [], "toolUse 不得触发 error 帧"
+    assert [call["content"] for call in spy.assistant_calls] == ["DONE"]
+    assert [
+        (c["tool_call_id"], c["tool_name"], c["content"], c["is_error"])
+        for c in spy.tool_calls
+    ] == [("c1", "list_directory", "[DIR] sub", False)]
+
+
 async def test_error_message_not_persisted_and_reports_error():
     handler, spy = make_handler()
     sse = []
