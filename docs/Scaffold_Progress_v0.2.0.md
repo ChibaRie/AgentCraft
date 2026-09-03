@@ -445,7 +445,22 @@ pi-worker 镜像 `agentcraft-pi-worker:0.84.3`（node:22-slim，非 root piworke
 
 ---
 
-## 12. 变更记录
+## 12. 阶段 5.5：Provider 双模式 BYOK（2026-09-03 完成，真实流量打通归阶段 6 proxy）
+
+按修订后的 PRD/DB/手册基线（BYOK 提入 P0）实现用户自带 Provider：
+
+- **加密信封**：`utils/crypto.py` AES-256-GCM（§11.3 同款方案换 AAD=`agentcraft:user_providers:{user_id}:api_key:v1`）；密钥环复用 `MCP_ENCRYPTION_*`，ACTIVE_KID 显式校验；写时派生 `api_key_hint`（尾 4 位）避免读路径解密
+- **DB**：`user_providers` 表（用户内名称唯一 / protocol CHECK / is_default）+ `tasks.provider_config_id`(SET NULL)/`provider_snapshot`（含 Key 信封密文，快照自足——删除配置不阻塞既有任务）；迁移用 batch 模式（SQLite 不支持 ALTER 加 FK）
+- **API**：`/api/providers` CRUD——Key 仅写入（响应只有掩码）、三态更新（缺席/清 null/换值）、is_default 用户内互斥、所有权统一 404（消除存在性预言）、密钥环未配置 503 `ENCRYPTION_UNCONFIGURED`；base_url URL 解析校验（scheme/主机名/禁内嵌凭据；回环不封禁——本地 Ollama 合法，出口防线在 proxy）
+- **任务侧**：`POST /api/tasks` 可选 `provider_config_id`，回退链（显式→用户默认→系统 `.env`）→ `provider_snapshot` 冻结；详情返回 `provider` 摘要（`api_key_set` 布尔，无任何 Key 形态）
+- **指纹重建**：`ensure_container()` 当前生效配置（新鲜解析）vs 容器启动指纹，不一致 → teardown+重建+重播种；DB 快照保持冻结（历史事实源）；容器 argv 按解析值的 protocol/model_id
+- **前端 P10**：`/settings/providers` 列表（默认徽标/掩码）+ 表单（三态 Key 语义）+ 删除确认 + NavBar 入口；TaskCreatePage Provider 选择器（默认项=用户默认/系统）
+
+边界：**容器 env 的 OPENAI_BASE_URL 仍指向 provider-proxy**——非 faux 用户 Provider 的真实流量在阶段 6 proxy 按令牌路由 + Responses→Completions 兼容转换后打通（faux 链路与全部数据/快照/指纹行为已于本阶段完整验收）。faux 为内置测试项不经 user_providers 表。
+
+---
+
+## 13. 变更记录
 
 | 版本 | 时间 | 说明 |
 |---|---|---|
@@ -455,4 +470,5 @@ pi-worker 镜像 `agentcraft-pi-worker:0.84.3`（node:22-slim，非 root piworke
 | v0.4.0 | 2026-09-02 | 阶段 2 Skill 管理垂直切片：validate_skill 纯文本校验器 + Skill 全生命周期 API（状态机）+ P08 前端（列表/弹窗/ValidateButton）+ 61 个新测试 |
 | v0.5.0 | 2026-09-02 | 阶段 3 专家 CRUD/绑定/专家中心：闭环一收口；P03/P04/P06/P07；41 个新测试；审查修复 13 处 |
 | v0.6.0 | 2026-09-03 | 阶段 4 任务数据层 + SSE 链路（EchoEngine 冻结契约）：任务/文件/工作区 API + P09 前端 + 启动巡检/体量守卫/任务锁；47 个新测试；审查修复 15 项 |
+| v0.8.0 | 2026-09-03 | 阶段 5.5 Provider 双模式 BYOK：加密信封/user_providers 表/CRUD/任务快照冻结/Provider 指纹重建/P10 设置页；测试基线 274/36；安全审查修复（ACTIVE_KID 校验、所有权 404 化、SSRF 立场注释） |
 | v0.7.0 | 2026-09-03 | 阶段 5 Pi 引擎集成：PiEngine 协议层 + SkillLoader + EventHandler + PiEngineManager（重播种/abort/容器池）+ Docker CLI/API 双传输 + faux 经扩展注册；EchoEngine 替换、abort 落地；faux 全链路 E2E 验收（含 docker rm -f 重播种恢复与沙箱 inspect 清单） |
