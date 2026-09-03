@@ -35,6 +35,8 @@ const TOOLS: Array<{
 const BACKEND = process.env.AGENTCRAFT_BACKEND_URL!;
 const TASK_TOKEN = process.env.AGENTCRAFT_TASK_TOKEN!;
 const TASK_ID = __TASK_ID__;
+const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL!;
+const PROVIDER_MODEL = process.env.AGENTCRAFT_PROVIDER_MODEL!;
 
 function contentToText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -157,7 +159,27 @@ _FAUX_BLOCK_TEMPLATE = """\
     },
   });"""
 
-_NO_FAUX_BLOCK = "  // faux Provider 未启用（PI_PROVIDER != faux）"
+_NO_FAUX_BLOCK = """  // OpenAI 兼容上游走 chat/completions 协议：经扩展注册覆盖内置 openai
+  // provider（内置实现使用新版 Responses API，DeepSeek/Ollama 等第三方
+  // 端点普遍未实现，直连会 404）。Base URL 指向 provider-proxy，真实
+  // Key 由 proxy 按任务令牌侧解密注入，容器内只有任务令牌（§7.7）。
+  pi.registerProvider("openai", {
+    name: "AgentCraft Provider",
+    baseUrl: OPENAI_BASE_URL,
+    apiKey: TASK_TOKEN,
+    api: "openai-completions",
+    models: [
+      {
+        id: PROVIDER_MODEL,
+        name: PROVIDER_MODEL,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 16384,
+      },
+    ],
+  });"""
 
 
 class ExtensionGenerator:

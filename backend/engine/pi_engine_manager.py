@@ -30,6 +30,7 @@ from backend.engine.docker_transport import (
     DockerCliTransport,
     build_container_spec,
     docker_ensure_network,
+    docker_ensure_proxy_container,
     docker_remove_container,
 )
 from backend.engine.event_handler import EventHandler
@@ -192,6 +193,8 @@ class PiEngineManager:
             ),
         )
 
+        if provider != "faux":
+            await self.ensure_proxy(provider)
         transport, removal = await self._make_runtime(spec, workdir_host, extension_path)
         self._removal_hooks[task_id] = removal
 
@@ -201,6 +204,20 @@ class PiEngineManager:
         await engine.start()
         logger.info("Task %s: Pi 引擎就绪（%s）", task_id, type(transport).__name__)
         return engine
+
+    async def ensure_proxy(self, provider: str) -> None:
+        """非 faux Provider 需要 provider-proxy 容器（internal 网络内可达）。"""
+        if provider == "faux" or not shutil.which("docker"):
+            return
+        try:
+            await docker_ensure_proxy_container(
+                image=self._settings.PROVIDER_PROXY_IMAGE,
+                container_name="provider-proxy",
+                network_name=self._settings.PI_NETWORK_NAME,
+                app_dir=Path(__file__).resolve().parents[2],
+            )
+        except Exception:  # noqa: BLE001 - proxy 启动失败不阻塞 faux/容器创建
+            logger.exception("Provider Proxy 容器保障失败")
 
     async def _make_runtime(self, spec, workdir_host: Path, extension_path: Path):
         """按 PI_RUNTIME 选择传输：docker(API) / cli / subprocess；auto 依序回退。"""

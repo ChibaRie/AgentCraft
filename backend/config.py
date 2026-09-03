@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     PI_MAX_CONCURRENT_CONTAINERS: int = 4
     PI_IDLE_TIMEOUT_MINUTES: int = 10
     PI_WORKER_IMAGE: str = "agentcraft-pi-worker:0.84.3"
+    PROVIDER_PROXY_IMAGE: str = "agentcraft-provider-proxy:latest"
     PI_RUNTIME: str = "auto"  # auto | docker | cli | subprocess
     PI_ROUND_TIMEOUT_SECONDS: int = 300
     PI_FAUX_CHUNK_DELAY_MS: int = 15  # faux 回显分帧节奏（0=即时；供 abort 观察流式）

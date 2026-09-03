@@ -12,8 +12,8 @@
 | 4 | 任务数据层 + SSE 链路（EchoEngine 冻结契约 + P09） | ✅ | `f6f76e5` |
 | 5 | Pi 引擎集成（容器沙箱/重播种/abort，faux 全链路验收） | ✅ | `d153a22`/`afaae05` |
 | P09 增强 | 原型功能对齐（md/工具卡片/上下文面板/视口锁定） | ✅ | `852dbe3` |
-| **5.5** | **Provider 双模式 BYOK（用户自带 Key）** | ⬜ | 本文档 §阶段 5.5 |
-| 6 | MCP 桥 + Provider Proxy 按令牌路由 | ⬜ | — |
+| **5.5** | **Provider 双模式 BYOK（用户自带 Key）** | ✅ | 本文档 §阶段 5.5 |
+| 6 | MCP 桥 + Provider Proxy 按令牌路由 | 🚧 | proxy 核心（JWT 令牌/completions 扩展/容器化双网络）已随 5.5 实测提前落地；余 MCP 桥 |
 | 7 | 生命周期完善（mutation lock 跨进程/回收/崩溃恢复/看门狗/complete/delete） | ⬜ | — |
 
 ---

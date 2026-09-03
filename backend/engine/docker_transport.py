@@ -242,6 +242,68 @@ async def docker_ensure_network(
         logger.warning("创建网络 %s 失败: %s", name, stderr.decode(errors="replace").strip())
 
 
+async def docker_ensure_proxy_container(
+    *,
+    image: str,
+    container_name: str,
+    network_name: str,
+    app_dir: Path,
+    docker_bin: str = "docker",
+) -> None:
+    """确保 provider-proxy 容器运行（§7.7 唯一双网络服务）。
+
+    - 双网络：默认 bridge（出公网到用户上游）+ agentcraft-internal（被 Pi 容器
+      以 provider-proxy:8080 访问）
+    - 业务代码与 .env 只读挂载（Key/密钥环不入镜像层）
+    - 已存在则 start（崩溃自愈）；不存在则 create+connect+start
+    """
+    inspect = await asyncio.create_subprocess_exec(
+        docker_bin, "inspect", container_name,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    if await inspect.wait() == 0:
+        start = await asyncio.create_subprocess_exec(
+            docker_bin, "start", container_name,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await start.communicate()
+        if start.returncode != 0:
+            detail = stderr.decode(errors="replace").strip()
+            logger.warning("启动 %s 失败: %s", container_name, detail)
+        return
+
+    env_file = app_dir / ".env"
+    run = await asyncio.create_subprocess_exec(
+        docker_bin, "run", "-d",
+        "--name", container_name,
+        "--network", network_name,
+        "-v", f"{app_dir}:/app:ro",
+        "-v", f"{env_file}:/app/.env:ro",
+        image,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await run.communicate()
+    if run.returncode != 0:
+        logger.warning("创建 %s 失败: %s", container_name, stderr.decode(errors="replace").strip())
+        return
+    # 连接默认 bridge 获得出站公网能力（internal 网络无路由）
+    connect = await asyncio.create_subprocess_exec(
+        docker_bin, "network", "connect", "bridge", container_name,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await connect.communicate()
+    if connect.returncode != 0:
+        logger.warning(
+            "proxy 出站网络连接失败（用户上游可能不可达）: %s",
+            stderr.decode(errors="replace").strip(),
+        )
+    logger.info("Provider Proxy 容器已就绪: %s", container_name)
+
+
 async def docker_remove_container(name: str, *, docker_bin: str = "docker") -> None:
     """`docker rm -f` 尽力删除（容器不存在视为成功）。"""
     proc = await asyncio.create_subprocess_exec(
@@ -295,6 +357,7 @@ def build_container_spec(
         "AGENTCRAFT_BACKEND_URL": backend_url,
         "AGENTCRAFT_TASK_TOKEN": task_token,
         "AGENTCRAFT_PROVIDER": provider,
+        "AGENTCRAFT_PROVIDER_MODEL": model,  # 扩展注册 completions provider 用
         "NODE_ENV": "production",
     }
     if faux_chunk_delay_ms:

@@ -1,0 +1,14 @@
+# Provider Proxy 镜像（§7.7 薄代理：按任务令牌路由）
+# 业务代码经只读挂载注入（/app = 仓库根），镜像只装依赖。
+FROM python:3.12-slim
+
+ARG PIP_INDEX=https://pypi.org/simple
+
+RUN pip install --no-cache-dir --index-url ${PIP_INDEX} \
+    "fastapi>=0.115" "uvicorn>=0.30" "httpx>=0.27" \
+    "python-jose[cryptography]>=3.3" "cryptography>=42" \
+    "sqlalchemy>=2.0" "aiosqlite>=0.20" "pydantic-settings>=2.2"
+
+WORKDIR /app
+EXPOSE 8080
+CMD ["uvicorn", "backend.provider_proxy:app", "--host", "0.0.0.0", "--port", "8080"]
