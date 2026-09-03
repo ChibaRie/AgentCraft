@@ -123,6 +123,9 @@ export default function NavBar() {
           <NavLink to="/discover" className="navbar-link">
             专家中心
           </NavLink>
+          <NavLink to="/tasks" className="navbar-link">
+            任务
+          </NavLink>
         </nav>
         {isAuthenticated ? (
           <UserMenu />

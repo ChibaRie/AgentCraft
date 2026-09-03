@@ -1,4 +1,6 @@
 import logging
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -7,11 +9,47 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.api import api_router, internal_router
+from backend.config import get_settings
+from backend.database import async_session_factory
+from backend.middleware.upload_guard import UploadSizeGuardMiddleware
+from backend.services.file_service import sweep_stale_storage
 from backend.services.user_service import UserSystemError
+from backend.services.workspace import CANONICAL_AGENT_ROOT
 
 logger = logging.getLogger("agentcraft")
 
-app = FastAPI(title="AgentCraft API", version="0.4.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """启动巡检（§6.6/§10.2）：校验配置一致性、确保存储根存在、清理崩溃遗留。"""
+    settings = get_settings()
+    if settings.AGENTCRAFT_WORKSPACE_ROOT != CANONICAL_AGENT_ROOT:
+        # tasks.workdir 的 CHECK 约束硬编码此前缀；可配置化需同步迁移约束
+        raise RuntimeError(
+            "AGENTCRAFT_WORKSPACE_ROOT 必须为 /workspaces/authorized"
+            "（tasks.workdir CHECK 约束硬编码）"
+        )
+    Path(settings.HOST_WORKSPACE_ROOT).mkdir(parents=True, exist_ok=True)
+    task_file_root = Path(settings.HOST_DATA_ROOT) / "task-files"
+    task_file_root.mkdir(parents=True, exist_ok=True)
+    try:
+        stats = await sweep_stale_storage(async_session_factory, task_file_root)
+        if stats["staging_batches"] or stats["orphan_files"]:
+            logger.info("启动清理完成：%s", stats)
+    except Exception:
+        # 清理失败不阻塞启动，下次启动重试
+        logger.exception("启动文件巡检失败")
+    yield
+
+
+app = FastAPI(title="AgentCraft API", version="0.4.0", lifespan=lifespan)
+# 单请求体量上限 = 单次文件数 × 单文件上限 + 32MB 表单余量（防 multipart 预落盘 DoS）
+_settings = get_settings()
+app.add_middleware(
+    UploadSizeGuardMiddleware,
+    max_bytes=_settings.UPLOAD_MAX_FILES_PER_REQUEST * _settings.UPLOAD_MAX_FILE_BYTES
+    + 32 * 1024 * 1024,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],

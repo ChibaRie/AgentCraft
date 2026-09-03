@@ -18,7 +18,11 @@ export function setToken(token) {
  * 成功返回完整响应体（调用方按需取 .data / .total），失败抛出携带 code 的错误。
  */
 export async function request(path, options = {}) {
-  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  const headers = { ...(options.headers || {}) };
+  // FormData（文件上传）交给浏览器自动生成 multipart 边界，不能手动设 Content-Type
+  if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
   const token = getToken();
   if (token) {
     headers.Authorization = `Bearer ${token}`;

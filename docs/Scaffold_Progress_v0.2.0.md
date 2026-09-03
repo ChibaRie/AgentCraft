@@ -356,7 +356,49 @@ Pi 容器默认不启动。
 
 ---
 
-## 10. 变更记录
+## 10. 阶段 4：任务数据层 + SSE 链路（2026-09-03 完成，EchoEngine 冻结契约）
+
+按 Engineering Spec §6.6/§8.3、DB 设计 §3.5-§3.8/§5.5/§6 实现。用 EchoEngine（Mock 引擎）把 SSE 事件契约固定下来，Pi 真引擎阶段只替换引擎实现，前端与事件 schema 不动。
+
+### 10.1 任务 API（§6.6，47 个测试）
+
+| 端点 | 行为 |
+|---|---|
+| `GET /api/workspaces` | 浏览授权根内子目录（只列目录，不收内容）；相对路径解析 + 越界/符号链接拒绝（junction 以 resolve 包含性校验兜底，`Path.is_symlink` 在 Windows 不识别 junction）；400 非法/404 不存在 |
+| `POST /api/tasks` | 201 `{task_id, conversation_id, status, workdir}`；workdir 仅接受根内相对路径（缺省/空=根），派生存储值 `/workspaces/authorized[/<relative>]` 取自规范常量（与 `ck_tasks_workdir` CHECK 绑定，启动 fail-fast 校验配置一致）；专家必须 published（404）；title=description 前 200 字符；派生路径超 VARCHAR(500) 拒绝 |
+| `GET /api/tasks` | 分页信封，仅本人，最新在前 |
+| `GET /api/tasks/{id}` | 详情含 files + messages（id 兜底秒级 created_at 次序）；他人 403 / 缺失 404 |
+| `POST /api/tasks/{id}/messages` | SSE（text/event-stream）；前置校验失败返回统一 JSON 信封（403/404/409）；created/failed→running 原子流转在 data lock 内完成；帧序 `meta → text_delta×N → message_saved → done`，schema 严格按 §6.6；轮锁持有全程，忙时 429 + `Retry-After: 5`（§6.1/§7.2.1 的阶段 4 进程内替代） |
+| `POST /api/tasks/{id}/files` | 前置（status=created 且无用户消息）+ 落库前在 data lock 内复核（manifest 冻结与首条消息互斥）；文件名规则（basename/控制字符/255）+ 单文件 20MB + 单次 10 个 + 任务累计 100MB；流式 SHA-256；失败补偿整批回滚；413 细分 `FILE_TOO_LARGE/FILE_COUNT_EXCEEDED/FILE_QUOTA_EXCEEDED`；mime_type 白名单消毒（仅展示用） |
+| `GET /api/tasks/{id}/files` | 元数据列表，`agent_path=/task-files/<uuid>` |
+
+快照冻结（DB 设计 §6）：expert_name/avatar、skill_snapshot（enabled ∩ published 的完整内容 + persona/methodology + loaded_at，段标签「角色/目标/工作步骤/输出要求/约束」）、mcp_snapshot（v1 空 tools）；创建后专家改名/Skill 改内容不影响快照（测试冻结验证）。
+
+启动巡检（lifespan）：确保 workspace/task-files 存储根存在；清理超时 staging（>1h）与无 TaskFile 元数据的孤儿文件（崩溃补偿兜底）；`UploadSizeGuard` 中间件在 multipart 预落盘前按 Content-Length 拒绝超量请求（认证用户磁盘 DoS 防护）。
+
+### 10.2 前端 P09
+
+- `/tasks/new`：专家选择器（`?expert=` 预选，P04 召唤按钮解锁）→ 任务描述 → WorkdirSelector（授权根内钻取，仅提交相对路径）→ 创建后进入对话
+- `/tasks(/{id})`：左侧任务列表（状态徽标/点击切换）+ 顶部信息栏（快照专家名/workdir/状态脉冲徽标）+ MessageList 流式渲染（text_delta 逐字追加 + 流式光标动画）+ 附件 chips；附件仅首条消息前可传，发送后按钮禁用
+- `api/sse.js`：SseClient（Fetch + ReadableStream + Bearer；EventSource 因仅支持 GET 且无法携带 Authorization 弃用，§8.3）；非 OK 响应解析统一错误信封透出 403/404/409
+- 切换任务路由 `key` 强制重挂载 + 组件内 activeTaskIdRef 双保险：旧流 abort、状态全重置（含输入草稿）、过期 refresh 响应丢弃；对账失败保留乐观回复并显式提示；near-bottom 检测后才自动滚底
+
+### 10.3 验证记录
+
+| 验证项 | 结果 |
+|---|---|
+| `uv run pytest` | 204 passed, 31 skipped（新增任务 47） |
+| `uv run ruff check .` | PASS |
+| `npm run build` | PASS（gzip 87KB） |
+| Playwright 闭环二 | P04 召唤→创建任务（workdir 浏览）→首条消息前上传附件→发消息→EchoEngine 流式回复→多轮→刷新历史可查→发送后附件禁用，全通过 |
+
+对抗式审查（25 代理，21 发现 → 18 确认）修复 15 项：上传配额 TOCTOU + manifest 冻结复核（per-task data lock）、running 并发发送 429（per-task round lock，seq 锁内计算）、multipart 预落盘 DoS 守卫、Windows junction 逃逸、mime_type 消毒、workdir 别名/超长拒绝、AGENTCRAFT_WORKSPACE_ROOT 与 CHECK 一致性 fail-fast、快照「工作步骤」标签对齐、前端切任务旧 SSE 流污染（CRITICAL）、refresh 乱序守卫、对账失败乐观保留、草稿重置、near-bottom 滚动、死代码清理。3 项被怀疑者否决（并发上传 SQLite 锁误报等）。
+
+遗留接缝：complete/abort/delete 与 MCP 绑定端点仍 501；EchoEngine→PiEngineManager（§7.2）替换时轮锁升级为跨进程 mutation lock；description≤2000 / content≤32000 为规格未记载的实现上限（待规格补记）。
+
+---
+
+## 11. 变更记录
 
 | 版本 | 时间 | 说明 |
 |---|---|---|
@@ -365,3 +407,4 @@ Pi 容器默认不启动。
 | v0.3.0 | 2026-09-02 | 阶段 1 用户系统垂直切片：4 个端点 + JWT/bcrypt + 统一错误信封 + P01/P05/NavBar 前端 + 23 个后端用例；修复 User 反向 relationship 缺失 |
 | v0.4.0 | 2026-09-02 | 阶段 2 Skill 管理垂直切片：validate_skill 纯文本校验器 + Skill 全生命周期 API（状态机）+ P08 前端（列表/弹窗/ValidateButton）+ 61 个新测试 |
 | v0.5.0 | 2026-09-02 | 阶段 3 专家 CRUD/绑定/专家中心：闭环一收口；P03/P04/P06/P07；41 个新测试；审查修复 13 处 |
+| v0.6.0 | 2026-09-03 | 阶段 4 任务数据层 + SSE 链路（EchoEngine 冻结契约）：任务/文件/工作区 API + P09 前端 + 启动巡检/体量守卫/任务锁；47 个新测试；审查修复 15 项 |

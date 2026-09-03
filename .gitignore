@@ -8,3 +8,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .impeccable/
+data/
+workspaces/
+.playwright-mcp/

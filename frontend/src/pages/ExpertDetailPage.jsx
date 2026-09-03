@@ -106,8 +106,7 @@ export default function ExpertDetailPage({ expertId }) {
             <button
               type="button"
               className="btn btn-primary detail-summon"
-              title="任务对话将在任务阶段开放"
-              disabled
+              title="创建任务并开始对话"
               onClick={() => navigate(`/tasks/new?expert=${expert.id}`)}
             >
               召唤专家

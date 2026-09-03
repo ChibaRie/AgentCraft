@@ -35,4 +35,4 @@ mccabe = { max-complexity = 10 }
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI 依赖注入的标准写法即函数默认值中调用 Depends()
-extend-immutable-calls = ["fastapi.Depends"]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.File"]

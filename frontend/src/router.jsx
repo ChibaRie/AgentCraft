@@ -10,6 +10,7 @@ import MyExpertsPage from "./pages/MyExpertsPage.jsx";
 import ProfilePage from "./pages/ProfilePage.jsx";
 import SkillManagePage from "./pages/SkillManagePage.jsx";
 import TaskChatPage from "./pages/TaskChatPage.jsx";
+import TaskCreatePage from "./pages/TaskCreatePage.jsx";
 
 function ExpertDetailRoute() {
   const { id } = useParams();
@@ -23,7 +24,7 @@ function ExpertEditRoute() {
 
 function TaskChatRoute() {
   const { id } = useParams();
-  return <TaskChatPage taskId={id} />;
+  return <TaskChatPage key={id} />;
 }
 
 /** 应用壳：导航栏 + 页面容器。/login 独立于壳外（P01 全屏构图）。 */
@@ -88,6 +89,22 @@ export default function AppRoutes() {
           element={
             <RequireAuth requireExpert>
               <SkillManagePage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/tasks"
+          element={
+            <RequireAuth>
+              <TaskChatPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/tasks/new"
+          element={
+            <RequireAuth>
+              <TaskCreatePage />
             </RequireAuth>
           }
         />

@@ -94,6 +94,13 @@ IMPLEMENTED = {
     ("DELETE", "/api/experts/1/skills/1"),
     ("GET", "/api/discover/experts"),
     ("GET", "/api/discover/experts/1"),
+    ("GET", "/api/workspaces"),
+    ("POST", "/api/tasks"),
+    ("GET", "/api/tasks"),
+    ("GET", "/api/tasks/1"),
+    ("POST", "/api/tasks/1/files"),
+    ("GET", "/api/tasks/1/files"),
+    ("POST", "/api/tasks/1/messages"),
 }
 
 # 挂载了真实 JWT 依赖的占位端点：匿名请求先被 401 拦截，轮不到 501
