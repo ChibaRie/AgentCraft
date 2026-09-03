@@ -46,8 +46,29 @@
     "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
+/* 夜间主题：显式 data-theme 优先；未显式选择时跟随系统偏好。
+   令牌与浅色同构（灰阶/层次/发丝线全量覆盖），组件层零改动。 */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #131316;
+  --surface: #1b1b1f;
+  --surface-2: #232327;
+  --surface-3: #2b2b30;
+  --ink: #e4e4e7;
+  --ink-strong: #f4f4f5;
+  --text-2: #a1a1aa;
+  --text-3: #8b8b93;
+  --hairline: #2b2b30;
+  --hairline-strong: #3a3a40;
+  --on-ink: #18181b;
+  --on-ink-muted: #71717a;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-3: 0 2px 4px rgba(0, 0, 0, 0.45), 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     color-scheme: dark;
     --paper: #131316;
     --surface: #1b1b1f;
@@ -383,9 +404,38 @@ a {
 
 /* ---------- 用户菜单 ---------- */
 
+.navbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
 .usermenu {
   position: relative;
-  margin-left: auto;
+}
+
+/* 日间/夜间切换：与头像同尺寸的圆形描边按钮（发丝线，非新色） */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+.theme-toggle:hover {
+  color: var(--ink-strong);
+  border-color: var(--ink);
+  background: var(--surface-2);
 }
 
 .usermenu-trigger {
@@ -3284,4 +3334,251 @@ a {
   font-size: 12px;
   line-height: 1.6;
   color: var(--text-3);
+}
+
+/* ---------- P02 首页（仿智能体中心信息架构；墨与纸语言） ---------- */
+
+.home {
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+  padding-top: 32px;
+}
+
+/* Hero：非对称双栏。左为问候文案，右为恒暗墨面速览板（主题无关，
+   与登录页品牌侧同语系），形成第一屏的层次与深度对比 */
+.home-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr);
+  gap: 0;
+  align-items: stretch;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+
+.home-hero-copy {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+  padding: 44px 48px;
+}
+
+.home-hero-eyebrow {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: var(--text-3);
+  text-transform: uppercase;
+}
+
+.home-hero-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(28px, 3.2vw, 40px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--ink-strong);
+}
+
+.home-hero-sub {
+  margin: 0;
+  max-width: 46ch;
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--text-2);
+}
+
+.home-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+/* 墨面速览板：深色底 + 发丝网格 + 大数字（主题无关，恒暗） */
+.home-ink {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 32px 30px;
+  color: #f4f4f5;
+  background:
+    radial-gradient(120% 90% at 85% -10%, rgba(244, 244, 245, 0.09), transparent 55%),
+    linear-gradient(165deg, #2a2a2f 0%, #1b1b1f 48%, #131316 100%);
+}
+
+.home-ink::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(0deg, rgba(244, 244, 245, 0.035) 0 1px, transparent 1px 64px),
+    repeating-linear-gradient(90deg, rgba(244, 244, 245, 0.035) 0 1px, transparent 1px 64px);
+  pointer-events: none;
+}
+
+.home-ink > * {
+  position: relative;
+}
+
+.home-ink-title {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: #a1a1aa;
+}
+
+.home-ink-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.home-ink-stats li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.home-ink-stats strong {
+  min-width: 2.2ch;
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  color: #f4f4f5;
+  font-variant-numeric: tabular-nums;
+}
+
+.home-ink-stats span {
+  font-size: 13px;
+  color: #a1a1aa;
+}
+
+.home-ink-foot {
+  margin: 0;
+  font-size: 12px;
+  color: #71717a;
+}
+
+/* 区块头：标题 + 右侧次级入口 */
+.home-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.home-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.home-section-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ink-strong);
+}
+
+.home-section-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-3);
+  text-decoration: none;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.home-section-more:hover {
+  color: var(--ink-strong);
+}
+
+/* 最近任务：行式摘要（非卡片栅格，与精选区形成节奏对比） */
+.home-task-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.home-task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  color: inherit;
+  text-decoration: none;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.home-task-list li + li .home-task-row {
+  border-top: 1px solid var(--hairline);
+}
+
+.home-task-row:hover {
+  background: var(--surface-2);
+}
+
+.home-task-title {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-strong);
+}
+
+.home-task-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.home-loading,
+.home-empty,
+.home-expert-total {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--text-3);
+}
+
+.home-expert-total {
+  margin-top: -4px;
+}
+
+@media (max-width: 880px) {
+  .home-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .home-hero-copy {
+    padding: 32px 26px;
+  }
+
+  .home-task-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
 }

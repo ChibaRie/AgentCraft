@@ -1,7 +1,39 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
-import { CaretDown, Plug, SignOut, UserCircle, Users, Wrench } from "@phosphor-icons/react";
+import {
+  CaretDown,
+  Moon,
+  Plug,
+  SignOut,
+  Sun,
+  UserCircle,
+  Users,
+  Wrench,
+} from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
+import { getEffectiveTheme, toggleTheme } from "../lib/theme.js";
+
+/** 右上角日间/夜间切换：选择持久化（localStorage），未选择时跟随系统。 */
+function ThemeToggle() {
+  const [theme, setThemeState] = useState(getEffectiveTheme);
+
+  function handleClick() {
+    setThemeState(toggleTheme());
+  }
+
+  const isDark = theme === "dark";
+  return (
+    <button
+      type="button"
+      className="theme-toggle"
+      onClick={handleClick}
+      aria-label={isDark ? "切换到日间模式" : "切换到夜间模式"}
+      title={isDark ? "切换到日间模式" : "切换到夜间模式"}
+    >
+      {isDark ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
+    </button>
+  );
+}
 
 function UserMenu() {
   const { user, isExpert, logout } = useAuth();
@@ -136,13 +168,16 @@ export default function NavBar() {
             任务
           </NavLink>
         </nav>
-        {isAuthenticated ? (
-          <UserMenu />
-        ) : (
-          <Link to="/login" className="btn btn-primary navbar-login">
-            登录
-          </Link>
-        )}
+        <div className="navbar-actions">
+          <ThemeToggle />
+          {isAuthenticated ? (
+            <UserMenu />
+          ) : (
+            <Link to="/login" className="btn btn-primary navbar-login">
+              登录
+            </Link>
+          )}
+        </div>
       </div>
     </header>
   );

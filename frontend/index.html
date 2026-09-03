@@ -10,6 +10,22 @@
     <title>AgentCraft</title>
   </head>
   <body>
+    <script>
+      // 首帧前落主题：localStorage 显式选择优先，否则跟随系统（防主题闪烁）
+      (function () {
+        try {
+          var t = localStorage.getItem("agentcraft_theme");
+          if (t !== "light" && t !== "dark") {
+            t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+          }
+          document.documentElement.dataset.theme = t;
+        } catch (e) {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

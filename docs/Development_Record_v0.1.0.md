@@ -1,7 +1,7 @@
 # AgentCraft 开发记录
 
 **文档类型**：开发记录（面向项目成员与后续阶段的 AI Coding 智能体）
-**文档版本**：v0.6.0
+**文档版本**：v0.7.0
 **记录周期**：2026-09-02 至 2026-09-03
 **项目位置**：`C:\Users\ChibaRie\Desktop\AgentCraft\agentcraft`
 **上游文档**：PRD v0.4.1、Engineering Spec v0.4.0、Database Design v0.4.0、Scaffold Plan v0.4.0
@@ -360,6 +360,7 @@ CLI 无内置 faux（经任务扩展 `pi.registerProvider`+自定义 streamSimpl
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| v0.7.0 | 2026-09-03 | 收尾增补：沙箱隔离性测试 15 项（§7.9 清单双通道校验）、P02 首页、日间/夜间主题切换、tools/seed_demo.py 幂等演示种子、README 重写；基线 382/52 |
 | v0.6.0 | 2026-09-03 | 增补阶段 7（任务生命周期完善）：complete/delete/abort 锁语义、并发上限 queued、空闲回收、看门狗+总超时、崩溃恢复、check_code_style、P05/P09 前端；PRD §4.5.7 逐条验收；基线 368/52 |
 | v0.5.0 | 2026-09-03 | 增补阶段 6（MCP 管理 + MCP 桥，闭环三收口）：MCP 客户端/服务层/API 全套/内部调用端点/mcp-sandbox/dev 转发器/前端三页；闭环三 E2E（真实模型+真实 Server + kill switch 即时阻断）；toolUse 误报修复；基线 337/49 |
 | v0.4.1 | 2026-09-03 | 5.5 补验收：Proxy 提前落地（JWT 令牌/按令牌路由/completions 扩展/容器化），DeepSeek BYOK 真实对话用户实测通过 |
