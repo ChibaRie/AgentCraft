@@ -47,12 +47,23 @@ SNAPSHOT = {
 def make_manager(tmp_path: Path, history: list[dict]):
     settings = make_settings(tmp_path)
     transports: list[FakePiTransport] = []
+    # 可编程 Provider 解析器：测试按序弹出快照（默认恒为 system）
+    provider_snapshots: list[dict] = []
+
+    async def resolve_provider(user_id: int, provider_config_id: int | None) -> dict:
+        if provider_snapshots:
+            return provider_snapshots.pop(0)
+        return {"source": "system", "protocol": "openai",
+                "base_url": "http://provider-proxy:8080/v1", "model_id": "gpt-4o-mini"}
+
     manager = PiEngineManager(
         settings,
         history_fetcher=_fake_history_fetcher(history),
         extension_generator=ExtensionGenerator(tmp_path / "ext"),
+        provider_resolver=resolve_provider,
     )
     manager._removal = []  # type: ignore[attr-defined]
+    manager._provider_snapshots = provider_snapshots  # type: ignore[attr-defined]
 
     async def fake_make_runtime(spec, workdir_host, extension_path):
         transport = FakePiTransport()
@@ -84,6 +95,7 @@ async def drive_round(manager: PiEngineManager, transports, content: str):
     events = []
     async for name, payload in manager.run_round(
         task_id=1,
+        user_id=1,
         stored_workdir="/workspaces/authorized",
         skill_snapshot=SNAPSHOT,
         task_files=[],
@@ -184,6 +196,8 @@ async def test_request_abort_bypasses_and_writes_abort(tmp_path):
     manager, transports = make_manager(tmp_path, [])
     engine = await manager.ensure_container(
         task_id=1,
+        user_id=1,
+        provider_config_id=None,
         stored_workdir="/workspaces/authorized",
         skill_snapshot=SNAPSHOT,
         task_files=[],
@@ -199,6 +213,8 @@ async def test_id_mismatch_rebuilds_on_next_ensure(tmp_path):
     manager, transports = make_manager(tmp_path, [])
     engine = await manager.ensure_container(
         task_id=1,
+        user_id=1,
+        provider_config_id=None,
         stored_workdir="/workspaces/authorized",
         skill_snapshot=SNAPSHOT,
         task_files=[],
@@ -209,6 +225,8 @@ async def test_id_mismatch_rebuilds_on_next_ensure(tmp_path):
     assert engine.needs_rebuild is True
     rebuilt = await manager.ensure_container(
         task_id=1,
+        user_id=1,
+        provider_config_id=None,
         stored_workdir="/workspaces/authorized",
         skill_snapshot=SNAPSHOT,
         task_files=[],
@@ -221,6 +239,8 @@ async def test_task_token_rotates_on_rebuild(tmp_path):
     manager, transports = make_manager(tmp_path, [])
     await manager.ensure_container(
         task_id=1,
+        user_id=1,
+        provider_config_id=None,
         stored_workdir="/workspaces/authorized",
         skill_snapshot=SNAPSHOT,
         task_files=[],
@@ -231,6 +251,8 @@ async def test_task_token_rotates_on_rebuild(tmp_path):
     await asyncio.sleep(0.05)
     await manager.ensure_container(
         task_id=1,
+        user_id=1,
+        provider_config_id=None,
         stored_workdir="/workspaces/authorized",
         skill_snapshot=SNAPSHOT,
         task_files=[],
@@ -260,3 +282,39 @@ async def test_error_round_emits_error_and_done(tmp_path):
     assert "error" in names
     assert names[-1] == "done"
     assert spy.assistant == [], "error 回复不落库"
+
+
+# ---------------------------------------------------------------------------
+# Provider 指纹（§7.7 双模式：改配置 → 下一轮重建 + 重播种）
+# ---------------------------------------------------------------------------
+
+
+async def test_provider_fingerprint_change_rebuilds_and_reseeds(tmp_path):
+    manager, transports = make_manager(tmp_path, [])
+    await drive_round(manager, transports, "第一轮")
+
+    # 当前生效配置变化（用户改了默认 Provider 的模型）
+    manager._provider_snapshots.append(  # type: ignore[attr-defined]
+        {"source": "user", "protocol": "openai",
+         "base_url": "https://api.deepseek.com/v1", "model_id": "deepseek-chat",
+         "api_key_encrypted": {"v": 1, "alg": "A256GCM", "kid": "primary",
+                               "nonce": "x", "ciphertext": "y", "tag": "z"}}
+    )
+    history = [
+        {"role": "user", "content": "历史一"},
+        {"role": "assistant", "content": "历史答一"},
+        {"role": "user", "content": "换源后第一条"},
+    ]
+    manager._history_fetcher = _fake_history_fetcher(history)  # type: ignore[method-assign]
+    await drive_round(manager, transports, "换源后第一条")
+
+    assert len(transports) == 2, "Provider 指纹变化必须重建容器"
+    outgoing = transports[1].written[0]["message"]
+    assert outgoing.startswith("[历史对话回顾]"), "重建后必须重播种"
+
+
+async def test_same_provider_fingerprint_reuses_container(tmp_path):
+    manager, transports = make_manager(tmp_path, [])
+    await drive_round(manager, transports, "第一轮")
+    await drive_round(manager, transports, "第二轮")
+    assert len(transports) == 1, "指纹未变化不得重建"

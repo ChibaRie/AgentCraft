@@ -26,8 +26,9 @@ from backend.engine.pi_engine import PiEngineError
 from backend.engine.pi_engine_manager import EngineStateError, PiEngineManager
 from backend.engine.skill_loader import PromptTooLargeError, SkillLoader
 from backend.middleware.auth import get_current_user_id
+from backend.config import Settings, get_settings
 from backend.schemas.task import TaskCreateRequest, TaskMessageRequest
-from backend.services import task_service, workspace
+from backend.services import provider_service, task_service, workspace
 from backend.services.task_locks import task_round_lock
 from backend.services.workspace import WorkspaceNotFoundError
 
@@ -83,8 +84,11 @@ async def create_task(
     db: AsyncSession = Depends(get_db),
     root: Path = Depends(get_workspace_root),
     loader: SkillLoader = Depends(get_skill_loader),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, object]:
-    task, conversation = await task_service.create_task(db, user_id, payload, root, loader)
+    task, conversation = await task_service.create_task(
+        db, user_id, payload, root, loader, settings
+    )
     return {
         "data": {
             "task_id": task.id,
@@ -141,6 +145,9 @@ async def get_task(
             "skills": json.loads(task.skill_snapshot or "{}").get("skills", []),
             "snapshot_loaded_at": json.loads(task.skill_snapshot or "{}").get("loaded_at"),
             "mcp_tools": json.loads(task.mcp_snapshot or "{}").get("tools", []),
+            "provider": provider_service.provider_summary(
+                json.loads(task.provider_snapshot or "{}")
+            ),
             "files": [task_service.task_file_payload(item) for item in files],
             "messages": [
                 {
@@ -208,6 +215,8 @@ async def send_message(
             )
             async for name, sse_payload in manager.run_round(
                 task_id=task_id,
+                user_id=task.user_id,
+                provider_config_id=task.provider_config_id,
                 stored_workdir=task.workdir,
                 skill_snapshot=skill_snapshot,
                 task_files=task_files,

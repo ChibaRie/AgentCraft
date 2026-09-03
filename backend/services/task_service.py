@@ -16,6 +16,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.engine.skill_loader import PromptTooLargeError, SkillLoader
+from backend.config import Settings
 from backend.models.conversation import Conversation
 from backend.models.expert import Expert
 from backend.models.expert_skill import ExpertSkill
@@ -23,6 +24,7 @@ from backend.models.message import Message
 from backend.models.skill import Skill
 from backend.models.task import Task
 from backend.models.task_file import TaskFile
+from backend.services import provider_service
 from backend.schemas.task import TaskCreateRequest
 from backend.services.task_locks import task_data_lock
 from backend.services.user_service import UserSystemError
@@ -133,6 +135,7 @@ async def create_task(
     payload: TaskCreateRequest,
     workspace_root: Path,
     loader: "SkillLoader | None" = None,
+    settings: "Settings | None" = None,
 ) -> tuple[Task, Conversation]:
     relative = parse_relative_workdir(payload.workdir)
     if relative:
@@ -167,6 +170,12 @@ async def create_task(
     except PromptTooLargeError as exc:
         raise TaskPromptTooLargeError(str(exc)) from exc
 
+    # Provider 解析与快照冻结（§7.7：显式 → 用户默认 → 系统默认）
+    assert settings is not None
+    provider_snapshot, provider_config_id = await provider_service.resolve_task_provider(
+        db, user_id, payload.provider_config_id, settings
+    )
+
     task = Task(
         user_id=user_id,
         expert_id=expert.id,
@@ -176,6 +185,8 @@ async def create_task(
         status="created",
         skill_snapshot=json.dumps(skill_snapshot, ensure_ascii=False),
         mcp_snapshot=json.dumps(mcp_snapshot, ensure_ascii=False),
+        provider_config_id=provider_config_id,
+        provider_snapshot=json.dumps(provider_snapshot, ensure_ascii=False),
         workdir=stored_workdir,
     )
     conversation = Conversation(task_id=0)

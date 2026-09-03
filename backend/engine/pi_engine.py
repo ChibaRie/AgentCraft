@@ -70,6 +70,8 @@ class PiEngine:
         self._event_callbacks: list = []
         self._reader_task: asyncio.Task | None = None
         self.needs_rebuild = False
+        # 容器启动时的 Provider 指纹（ensure_container 写入，§7.7 指纹判定）
+        self.provider_fingerprint = ""
         # 完成信号只认 agent_settled（§12 决策 #6）：轮处理器以此判断轮结束
         self.is_round_settled = True  # 初始无轮，视为已收尾
 

@@ -10,6 +10,7 @@ from backend.models.skill import Skill
 from backend.models.task import Task
 from backend.models.task_file import TaskFile
 from backend.models.user import User
+from backend.models.user_provider import UserProvider
 
 __all__ = [
     "Base",
@@ -24,4 +25,5 @@ __all__ = [
     "Task",
     "TaskFile",
     "User",
+    "UserProvider",
 ]

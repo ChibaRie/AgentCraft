@@ -37,10 +37,13 @@ from backend.engine.extension_generator import ExtensionGenerator
 from backend.engine.pi_engine import PiEngine
 from backend.engine.skill_loader import SkillLoader
 from backend.engine.subprocess_transport import SubprocessPiTransport, resolve_pi_cli_js
+from backend.services.provider_service import provider_fingerprint
 
 logger = logging.getLogger("agentcraft")
 
 HistoryFetcher = Callable[[int, int], Awaitable[list[dict]]]
+# (user_id, provider_config_id) -> 当前生效 Provider 快照（§7.7 双模式回退链）
+ProviderResolver = Callable[[int, int | None], Awaitable[dict]]
 
 _ROLE_LABELS = {"user": "用户", "assistant": "助手", "tool": "工具"}
 
@@ -61,11 +64,13 @@ class PiEngineManager:
         *,
         history_fetcher: HistoryFetcher,
         extension_generator: ExtensionGenerator,
+        provider_resolver: ProviderResolver,
         skill_loader: SkillLoader | None = None,
         task_files_root: Path | None = None,
     ) -> None:
         self._settings = settings
         self._history_fetcher = history_fetcher
+        self._provider_resolver = provider_resolver
         self._extension_generator = extension_generator
         self._skill_loader = skill_loader or SkillLoader(
             max_bytes=settings.SKILL_PROMPT_MAX_BYTES
@@ -85,18 +90,40 @@ class PiEngineManager:
         self,
         *,
         task_id: int,
+        user_id: int,
+        provider_config_id: int | None,
         stored_workdir: str,
         skill_snapshot: dict,
         task_files: list[dict],
         expert_name: str,
         mcp_tools: list[dict] | None = None,
     ) -> PiEngine:
-        """取用健康容器，否则重建；返回的引擎带 needs_reseed 标记。"""
+        """取用健康容器；Skill/Provider 指纹变化或引擎死亡时重建。
+
+        Provider 指纹（§7.7）：当前生效配置（新鲜解析，回退链=显式→用户默认→
+        系统）vs 容器启动时指纹。DB 的 provider_snapshot 保持冻结（历史事实源），
+        容器级配置按最新解析值生效——改配置不影响进行中一轮，下一轮重建生效。
+        """
+        current_provider = await self._provider_resolver(user_id, provider_config_id)
+        current_fingerprint = provider_fingerprint(current_provider)
+
         engine = self._containers.get(task_id)
-        if engine is not None and not engine.needs_rebuild and engine._reader_task is not None:
-            if not engine._reader_task.done():  # noqa: SLF001 - 同模块生命周期管理
-                return engine
-            logger.warning("Task %s: 引擎读取协程已退出，重建容器", task_id)
+        healthy = (
+            engine is not None
+            and not engine.needs_rebuild
+            and engine._reader_task is not None
+            and not engine._reader_task.done()
+        )
+        if healthy and engine.provider_fingerprint != current_fingerprint:
+            logger.info(
+                "Task %s: Provider 指纹变化（%s → %s），重建容器",
+                task_id,
+                engine.provider_fingerprint,
+                current_fingerprint,
+            )
+            healthy = False
+        if healthy:
+            return engine
         if engine is not None:
             await self._teardown(task_id)
         engine = await self._create_engine(
@@ -106,7 +133,9 @@ class PiEngineManager:
             task_files=task_files,
             expert_name=expert_name,
             mcp_tools=mcp_tools or [],
+            provider_snapshot=current_provider,
         )
+        engine.provider_fingerprint = current_fingerprint
         self._containers[task_id] = engine
         return engine
 
@@ -119,16 +148,19 @@ class PiEngineManager:
         task_files: list[dict],
         expert_name: str,
         mcp_tools: list[dict],
+        provider_snapshot: dict,
     ) -> PiEngine:
         system_prompt = self._skill_loader.build_system_prompt(
             skill_snapshot, task_files, expert_name=expert_name
         )
+        # 容器 argv 用当前解析的 Provider（协议/模型）；base_url 与 Key 由
+        # provider-proxy 按任务令牌侧解析（真实 Key 永不进容器，§7.7）
+        provider = provider_snapshot.get("protocol") or self._settings.PI_PROVIDER
+        model_id = provider_snapshot.get("model_id") or self._settings.PI_MODEL
         workdir_host = self._resolve_workdir_host(stored_workdir)
         task_files_host = self._task_files_root / f"task-{task_id}"
         task_files_host.mkdir(parents=True, exist_ok=True)  # 空目录也需可 bind
-        extension_path = self._extension_generator.generate(
-            task_id, mcp_tools, self._settings.PI_PROVIDER
-        )
+        extension_path = self._extension_generator.generate(task_id, mcp_tools, provider)
         # §7.9：挂载源全部服务端派生且必须绝对化
         workdir_host = self._absolute(workdir_host, "工作目录")
         task_files_host = self._absolute(task_files_host, "任务文件目录")
@@ -140,8 +172,8 @@ class PiEngineManager:
         spec = build_container_spec(
             task_id=task_id,
             image=self._settings.PI_WORKER_IMAGE,
-            provider=self._settings.PI_PROVIDER,
-            model=self._settings.PI_MODEL,
+            provider=provider,
+            model=model_id,
             system_prompt=system_prompt,
             workdir_host=workdir_host,
             task_files_host=task_files_host,
@@ -150,9 +182,7 @@ class PiEngineManager:
             backend_url=self._settings.AGENTCRAFT_BACKEND_URL,
             network_name=self._settings.PI_NETWORK_NAME,
             faux_chunk_delay_ms=(
-                self._settings.PI_FAUX_CHUNK_DELAY_MS
-                if self._settings.PI_PROVIDER == "faux"
-                else 0
+                self._settings.PI_FAUX_CHUNK_DELAY_MS if provider == "faux" else 0
             ),
         )
 
@@ -286,6 +316,8 @@ class PiEngineManager:
         self,
         *,
         task_id: int,
+        user_id: int,
+        provider_config_id: int | None = None,
         stored_workdir: str,
         skill_snapshot: dict,
         task_files: list[dict],
@@ -295,12 +327,14 @@ class PiEngineManager:
         persist_assistant: Callable,
         persist_tool: Callable,
     ) -> AsyncIterator[tuple[str, dict]]:
-        """执行一轮：容器 → 重播种 → prompt → SSE 事件直到 done。
+        """执行一轮：容器（含 Provider 指纹判定）→ 重播种 → prompt → SSE 事件直到 done。
 
         调用方（API 层）已持有轮锁并完成 prepare_send（用户消息已落库）。
         """
         engine = await self.ensure_container(
             task_id=task_id,
+            user_id=user_id,
+            provider_config_id=provider_config_id,
             stored_workdir=stored_workdir,
             skill_snapshot=skill_snapshot,
             task_files=task_files,

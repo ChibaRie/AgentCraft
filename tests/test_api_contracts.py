@@ -39,6 +39,11 @@ CONTRACTS = [
     ("POST", "/api/tasks/1/files"),
     ("GET", "/api/tasks/1/files"),
     ("POST", "/api/tasks/1/messages"),
+    ("POST", "/api/providers"),
+    ("GET", "/api/providers"),
+    ("GET", "/api/providers/1"),
+    ("PUT", "/api/providers/1"),
+    ("DELETE", "/api/providers/1"),
     ("POST", "/api/tasks/1/complete"),
     ("POST", "/api/tasks/1/abort"),
     ("DELETE", "/api/tasks/1"),
@@ -101,6 +106,11 @@ IMPLEMENTED = {
     ("POST", "/api/tasks/1/files"),
     ("GET", "/api/tasks/1/files"),
     ("POST", "/api/tasks/1/messages"),
+    ("POST", "/api/providers"),
+    ("GET", "/api/providers"),
+    ("GET", "/api/providers/1"),
+    ("PUT", "/api/providers/1"),
+    ("DELETE", "/api/providers/1"),
 }
 
 # 挂载了真实 JWT 依赖的占位端点：匿名请求先被 401 拦截，轮不到 501

@@ -32,6 +32,10 @@ class Task(Base):
     status: Mapped[str] = mapped_column(String(20), default="created", nullable=False)
     skill_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
     mcp_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_config_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user_providers.id", ondelete="SET NULL"), nullable=True
+    )
+    provider_snapshot: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     workdir: Mapped[str] = mapped_column(String(500), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
@@ -40,6 +44,7 @@ class Task(Base):
         DateTime, server_default=func.now(), nullable=False
     )
     user = relationship("User", back_populates="tasks")
+    provider_config = relationship("UserProvider")
     expert = relationship("Expert", back_populates="tasks")
     conversation = relationship("Conversation", back_populates="task", uselist=False)
     files = relationship("TaskFile", back_populates="task", cascade="all, delete-orphan")

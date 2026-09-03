@@ -51,9 +51,20 @@ def get_pi_engine_manager() -> PiEngineManager:
     async def fetch_history(task_id: int, limit: int) -> list[dict]:
         return await task_service.fetch_recent_messages(None, task_id, limit)
 
+    async def resolve_provider(user_id: int, provider_config_id: int | None) -> dict:
+        from backend.database import async_session_factory
+        from backend.services import provider_service
+
+        async with async_session_factory() as session:
+            snapshot, _ = await provider_service.resolve_task_provider(
+                session, user_id, provider_config_id, settings
+            )
+            return snapshot
+
     return PiEngineManager(
         settings,
         history_fetcher=fetch_history,
+        provider_resolver=resolve_provider,
         extension_generator=ExtensionGenerator(
             Path(settings.HOST_DATA_ROOT) / "extensions"
         ),

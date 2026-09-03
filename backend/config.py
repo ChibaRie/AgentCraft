@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     SKILL_PROMPT_MAX_BYTES: int = 65536
     SECRET_KEY: str = "replace-me"
     JWT_ALGORITHM: str = "HS256"
+    MCP_ENCRYPTION_ACTIVE_KID: str = "primary"
+    MCP_ENCRYPTION_KEYRING: str = ""  # kid:<base64url 32B>[:,...];Provider Key/MCP env 信封加密
     JWT_EXPIRE_MINUTES: int = 120
     DATABASE_URL: str = "sqlite+aiosqlite:///./agentcraft.db"
 
