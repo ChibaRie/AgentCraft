@@ -86,15 +86,17 @@ export default function TaskContextPanel({ skills = [], mcpTools = [], toolCalls
             <p className="context-empty">本任务未绑定 MCP 工具</p>
           ) : (
             mcpTools.map((tool) => (
-              <div className="context-tool-row" key={`${tool.serverId}-${tool.name}`}>
-                <Wrench size={13} aria-hidden="true" />
-                <span className="context-tool-name">{tool.name}</span>
-                {tool.sensitive && (
-                  <span className="skill-status is-offline" title="敏感工具：需专家用户授权">
-                    敏感
-                  </span>
-                )}
-                <span className="context-tool-desc">{tool.description}</span>
+              <div className="context-tool-card" key={`${tool.serverId}-${tool.name}`}>
+                <div className="context-tool-head">
+                  <Wrench size={12} aria-hidden="true" />
+                  <span className="context-tool-name">{tool.name}</span>
+                  {tool.sensitive && (
+                    <span className="skill-status is-offline" title="敏感工具：启用已记录授权">
+                      敏感
+                    </span>
+                  )}
+                </div>
+                <p className="context-tool-desc">{tool.description}</p>
               </div>
             ))
           )}

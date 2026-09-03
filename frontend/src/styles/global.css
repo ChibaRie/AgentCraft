@@ -2098,6 +2098,7 @@ a {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden; /* 气泡宽度固定：横向内容在表格/代码块内自行滚动 */
   overscroll-behavior: contain;
   padding: 22px;
   background:
@@ -2162,6 +2163,22 @@ a {
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* markdown 表格在气泡内自滚动，不撑破气泡宽度 */
+.md-body table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.md-body pre {
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .message.is-user .message-bubble {
@@ -3005,6 +3022,53 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.context-tool-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--surface);
+  min-width: 0;
+}
+
+.context-tool-card + .context-tool-card {
+  margin-top: 8px;
+}
+
+.context-tool-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.context-tool-head .skill-status {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.context-tool-card .context-tool-name {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-strong);
+  overflow-wrap: anywhere;
+}
+
+.context-tool-card .context-tool-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .context-tool-row {
