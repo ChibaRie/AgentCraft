@@ -38,6 +38,7 @@ from backend.engine.pi_engine import PiEngine
 from backend.engine.skill_loader import SkillLoader
 from backend.engine.subprocess_transport import SubprocessPiTransport, resolve_pi_cli_js
 from backend.services.provider_service import provider_fingerprint
+from backend.services.task_token import create_task_token
 
 logger = logging.getLogger("agentcraft")
 
@@ -166,7 +167,12 @@ class PiEngineManager:
         task_files_host = self._absolute(task_files_host, "任务文件目录")
         extension_path = self._absolute(extension_path, "扩展文件")
 
-        task_token = secrets.token_urlsafe(32)
+        # JWT 任务令牌：proxy 无状态校验（task_id/model scope），instance 随容器轮换
+        task_token = create_task_token(
+            task_id,
+            instance=secrets.token_hex(8),
+            model_id=provider_snapshot.get("model_id") or self._settings.PI_MODEL,
+        )
         self._task_tokens[task_id] = task_token
 
         spec = build_container_spec(

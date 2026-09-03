@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     PI_PROVIDER: str = "openai"
     PI_MODEL: str = "gpt-4o-mini"
     PI_PROXY_BASE_URL: str = "http://provider-proxy:8080/v1"
+    PROVIDER_PROXY_UPSTREAM: str = "https://api.openai.com"  # 系统默认模式的上游
+    OPENAI_API_KEY: str = ""  # 系统默认模式的真实上游 Key（仅 proxy 读取，§7.7）
     PI_MAX_CONCURRENT_CONTAINERS: int = 4
     PI_IDLE_TIMEOUT_MINUTES: int = 10
     PI_WORKER_IMAGE: str = "agentcraft-pi-worker:0.84.3"
