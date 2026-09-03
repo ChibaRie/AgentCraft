@@ -1,8 +1,9 @@
-"""任务与对话接口（Engineering Spec §6.6）+ EchoEngine SSE 契约冻结。
+"""任务与对话接口（Engineering Spec §6.6）+ Pi 引擎轮编排（§7.2/§7.6）。
 
-SSE 帧格式：`event: <name>\\ndata: <json>\\n\\n`；事件序 meta → text_delta×N →
-message_saved → done；前置校验失败仍返回统一 JSON 错误信封（非 SSE）。
-complete/abort/delete 随 Pi 引擎阶段实现（§7.2 mutation lock）。
+SSE 帧格式：`event: <name>\\ndata: <json>\\n\\n`；事件序 meta →
+（queued）→ text_delta×N / tool_event×N → message_saved → done；
+事件 schema 严格按 §6.6（EventHandler 翻译）。前置校验失败仍返回统一
+JSON 错误信封（非 SSE）。轮锁从发送持有到流结束（§7.2.1）。
 """
 
 import json
@@ -16,8 +17,14 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
-from backend.dependencies import get_workspace_root
-from backend.engine.echo import EchoEngine
+from backend.dependencies import (
+    get_pi_engine_manager,
+    get_skill_loader,
+    get_workspace_root,
+)
+from backend.engine.pi_engine import PiEngineError
+from backend.engine.pi_engine_manager import EngineStateError, PiEngineManager
+from backend.engine.skill_loader import PromptTooLargeError, SkillLoader
 from backend.middleware.auth import get_current_user_id
 from backend.schemas.task import TaskCreateRequest, TaskMessageRequest
 from backend.services import task_service, workspace
@@ -75,8 +82,9 @@ async def create_task(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
     root: Path = Depends(get_workspace_root),
+    loader: SkillLoader = Depends(get_skill_loader),
 ) -> dict[str, object]:
-    task, conversation = await task_service.create_task(db, user_id, payload, root)
+    task, conversation = await task_service.create_task(db, user_id, payload, root, loader)
     return {
         "data": {
             "task_id": task.id,
@@ -148,8 +156,9 @@ async def send_message(
     payload: TaskMessageRequest,
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
+    manager: PiEngineManager = Depends(get_pi_engine_manager),
 ):
-    """发送消息并以 SSE 流式返回 Agent 回复（EchoEngine 原样回显）。
+    """发送消息并以 SSE 流式返回 Agent 回复（Pi 引擎轮编排，§7.2/§7.6）。
 
     轮锁（round lock）从发送持有到流结束：当前轮未结束时再次发送返回
     429 + Retry-After（§6.6/§7.2.1，Pi 阶段替换为跨进程 mutation lock）。
@@ -167,7 +176,23 @@ async def send_message(
     except Exception:
         round_lock.release()
         raise
-    engine = EchoEngine()
+
+    task = context.task
+    task_files = await task_service.list_task_file_payloads(db, task_id)
+    conversation_id = context.conversation_id
+
+    async def persist_assistant(content: str, usage: dict) -> dict:
+        message = await task_service.persist_assistant_message(db, conversation_id, content)
+        return {"message_id": message.id, "content": message.content, "usage": usage}
+
+    async def persist_tool(tool_call_id: str, tool_name: str, content: str, is_error: bool) -> dict:
+        message = await task_service.persist_tool_message(
+            db, conversation_id, tool_call_id, tool_name, content, is_error
+        )
+        return {"message_id": message.id}
+
+    mcp_tools = json.loads(task.mcp_snapshot or "{}").get("tools", [])
+    skill_snapshot = json.loads(task.skill_snapshot or "{}")
 
     async def event_stream() -> AsyncIterator[str]:
         try:
@@ -175,21 +200,38 @@ async def send_message(
                 "meta",
                 {"task_id": context.task_id, "seq": context.seq, "started_at": _now_iso()},
             )
-            async for event in engine.stream(context.content):
-                if event.name == "final":
-                    message = await task_service.persist_assistant_message(
-                        db, context.conversation_id, event.payload["content"]
-                    )
-                    yield _sse_frame(
-                        "message_saved",
-                        {"message_id": message.id, "content": message.content},
-                    )
-                    yield _sse_frame(
-                        "done",
-                        {"finish_reason": "stop", "usage": event.payload["usage"]},
-                    )
-                else:
-                    yield _sse_frame(event.name, event.payload)
+            async for name, sse_payload in manager.run_round(
+                task_id=task_id,
+                stored_workdir=task.workdir,
+                skill_snapshot=skill_snapshot,
+                task_files=task_files,
+                expert_name=task.expert_name_snapshot,
+                mcp_tools=mcp_tools,
+                content=context.content,
+                persist_assistant=persist_assistant,
+                persist_tool=persist_tool,
+            ):
+                yield _sse_frame(name, sse_payload)
+        except PromptTooLargeError:
+            logger.exception("Task %s prompt too large", task_id)
+            yield _sse_frame(
+                "error",
+                {
+                    "code": "PROMPT_TOO_LARGE",
+                    "message": "系统提示词超过上限，请精简专家配置",
+                    "recoverable": False,
+                },
+            )
+        except (PiEngineError, EngineStateError) as exc:
+            logger.exception("Task %s engine failure", task_id)
+            yield _sse_frame(
+                "error",
+                {
+                    "code": "ENGINE_ERROR",
+                    "message": str(exc) or "引擎异常，请重试",
+                    "recoverable": True,
+                },
+            )
         except Exception:
             # 流已开始，无法改状态码；按 §6.6 以 error 帧告知可重试
             logger.exception("Task %s stream failed", task_id)
@@ -216,9 +258,19 @@ async def complete_task(
 
 @router.post("/{task_id}/abort", status_code=status.HTTP_202_ACCEPTED)
 async def abort_task(
-    task_id: int, user_id: int = Depends(get_current_user_id)
+    task_id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+    manager: PiEngineManager = Depends(get_pi_engine_manager),
 ) -> dict[str, object]:
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "业务代码待填充")
+    """用户中止（§7.8/§7.8.1）：只读所有权检查后绕锁发 abort，不等待轮结束。
+
+    任务保持 running（可继续）；未完成回复由 EventHandler 按 stopReason=aborted
+    丢弃不落库。
+    """
+    await task_service.get_task_detail(db, user_id, task_id)  # 404/403 所有权检查
+    await manager.request_abort(task_id)
+    return {"data": {"task_id": task_id, "abort_requested": True}}
 
 
 @router.delete("/{task_id}")

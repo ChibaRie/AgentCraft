@@ -9,6 +9,8 @@ ExpertSkill 绑定行）使用。
 """
 
 import asyncio
+import json
+import threading
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
@@ -18,9 +20,156 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from backend.config import Settings
 from backend.database import get_db
+from backend.engine.extension_generator import ExtensionGenerator
+from backend.engine.pi_engine_manager import PiEngineManager
 from backend.main import app
 from backend.models import Base
+
+_TEXT_CHUNK = 3  # 与 EchoEngine 相同的分帧粒度，验证前端流式拼帧
+
+
+class FakePiTransport:
+    """脚本化假 Pi（共享测试仿真）：prompt → ACK + 回显整条 outgoing 消息。
+
+    - 回复按 _TEXT_CHUNK 分帧 text_delta，与 EchoEngine 行为一致，
+      使 SSE 契约测试无需感知引擎替换
+    - ``release``（threading.Event）可令回复暂停，供轮忙 429 测试；``
+      on_round_start`` 在轮帧开始时回调
+    - 重播种语义测试断言 outgoing 消息本身（含回顾壳），见 test_pi_manager
+    """
+
+    def __init__(self) -> None:
+        self.written: list[dict] = []
+        self.aborted = False  # 曾收到 abort（断言用）
+        self._round_cancelled = False  # 仅取消当前轮；新一轮不受影响
+        self.closed = False
+        self.fail_after_prompt = False
+        self.release: threading.Event | None = None
+        self.on_round_start = None
+        self._lines: asyncio.Queue[str | None] = asyncio.Queue()
+
+    def emit(self, frame: dict) -> None:
+        self._lines.put_nowait(json.dumps(frame, ensure_ascii=False))
+
+    def emit_eof(self) -> None:
+        self._lines.put_nowait(None)
+
+    async def write_line(self, line: str) -> None:
+        cmd = json.loads(line)
+        self.written.append(cmd)
+        if cmd.get("type") == "prompt":
+            self.emit({"id": cmd["id"], "type": "response", "command": "prompt", "success": True})
+            self._schedule_round(cmd["message"])
+        elif cmd.get("type") == "abort":
+            self.aborted = True
+            self._round_cancelled = True
+            # 真实 Pi 中止帧序（tests/fixtures/pi_frames/faux_abort.jsonl）：
+            # 半截回复以 stopReason=aborted 的 message_end 交付，settled 照常收尾
+            self.emit(
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "半截"}],
+                        "stopReason": "aborted",
+                        "usage": {},
+                    },
+                }
+            )
+            self.emit({"type": "agent_settled"})
+
+    def _schedule_round(self, message: str) -> None:
+        async def run() -> None:
+            if self.on_round_start:
+                self.on_round_start()
+            if self.release is not None:
+                while not self.release.is_set():
+                    await asyncio.sleep(0.02)
+            if self._round_cancelled:
+                self._round_cancelled = False
+                return  # 当前轮已被 abort 收尾，静默退出；新一轮不受影响
+            self.emit({"type": "agent_start"})
+            self.emit({"type": "message_end", "message": {"role": "user", "content": message}})
+            if self.fail_after_prompt:
+                self.emit(
+                    {
+                        "type": "message_end",
+                        "message": {
+                            "role": "assistant",
+                            "content": [],
+                            "stopReason": "error",
+                            "errorMessage": "boom",
+                        },
+                    }
+                )
+            else:
+                for start in range(0, len(message), _TEXT_CHUNK):
+                    self.emit(
+                        {
+                            "type": "message_update",
+                            "assistantMessageEvent": {
+                                "type": "text_delta",
+                                "delta": message[start : start + _TEXT_CHUNK],
+                            },
+                        }
+                    )
+                self.emit(
+                    {
+                        "type": "message_end",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": message}],
+                            "stopReason": "stop",
+                            "usage": {"input": 3, "output": 2},
+                        },
+                    }
+                )
+            self.emit({"type": "agent_settled"})
+
+        asyncio.get_running_loop().create_task(run())
+
+    async def readline(self) -> str | None:
+        return await self._lines.get()
+
+    async def start(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def make_scripted_manager(tmp_path: Path):
+    """构造 PiEngineManager + FakePiTransport 注入（不启动真实容器/子进程）。"""
+    settings = Settings(
+        PI_RUNTIME="subprocess",
+        HOST_DATA_ROOT=str(tmp_path / "data"),
+        HOST_WORKSPACE_ROOT=str(tmp_path / "workspaces"),
+        PI_ROUND_TIMEOUT_SECONDS=5,
+    )
+    transports: list[FakePiTransport] = []
+
+    async def fetch_history(task_id: int, limit: int) -> list[dict]:
+        return []
+
+    manager = PiEngineManager(
+        settings,
+        history_fetcher=fetch_history,
+        extension_generator=ExtensionGenerator(tmp_path / "extensions"),
+    )
+
+    async def fake_make_runtime(spec, workdir_host, extension_path):
+        transport = FakePiTransport()
+        transports.append(transport)
+
+        async def noop() -> None:
+            return None
+
+        return transport, noop
+
+    manager._make_runtime = fake_make_runtime  # type: ignore[method-assign]
+    return manager, transports
 
 
 class TestDatabase:

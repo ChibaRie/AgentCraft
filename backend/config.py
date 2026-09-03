@@ -17,10 +17,15 @@ class Settings(BaseSettings):
     PI_MAX_CONCURRENT_CONTAINERS: int = 4
     PI_IDLE_TIMEOUT_MINUTES: int = 10
     PI_WORKER_IMAGE: str = "agentcraft-pi-worker:0.84.3"
+    PI_RUNTIME: str = "auto"  # auto | docker | cli | subprocess
+    PI_ROUND_TIMEOUT_SECONDS: int = 300
+    PI_NETWORK_NAME: str = "agentcraft-internal"
+    AGENTCRAFT_BACKEND_URL: str = "http://agentcraft-control:8000"
     DOCKER_API_URL: str = "http://docker-socket-proxy:2375"
     UPLOAD_MAX_FILE_BYTES: int = 20971520
     UPLOAD_MAX_FILES_PER_REQUEST: int = 10
     UPLOAD_MAX_TASK_BYTES: int = 104857600
+    SKILL_PROMPT_MAX_BYTES: int = 65536
     SECRET_KEY: str = "replace-me"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 120

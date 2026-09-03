@@ -15,6 +15,7 @@ from pathlib import Path
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.engine.skill_loader import PromptTooLargeError, SkillLoader
 from backend.models.conversation import Conversation
 from backend.models.expert import Expert
 from backend.models.expert_skill import ExpertSkill
@@ -63,6 +64,11 @@ class TaskAlreadyStartedError(UserSystemError):
     code = "TASK_ALREADY_STARTED"
 
 
+class TaskPromptTooLargeError(UserSystemError):
+    status_code = 413
+    code = "PROMPT_TOO_LARGE"
+
+
 _TITLE_MAX_LENGTH = 200
 _WORKDIR_MAX_LENGTH = 500  # tasks.workdir VARCHAR(500)，DB 设计 §3.5
 _SKILL_CONTENT_SECTIONS = (
@@ -89,6 +95,7 @@ class SendContext:
     conversation_id: int
     content: str
     seq: int
+    task: Task
 
 
 def _now() -> datetime:
@@ -121,7 +128,11 @@ async def _load_enabled_published_skills(db: AsyncSession, expert_id: int) -> li
 
 
 async def create_task(
-    db: AsyncSession, user_id: int, payload: TaskCreateRequest, workspace_root: Path
+    db: AsyncSession,
+    user_id: int,
+    payload: TaskCreateRequest,
+    workspace_root: Path,
+    loader: "SkillLoader | None" = None,
 ) -> tuple[Task, Conversation]:
     relative = parse_relative_workdir(payload.workdir)
     if relative:
@@ -147,6 +158,14 @@ async def create_task(
     }
     # v1 尚未开放 MCP 绑定管理（/api/experts/{id}/mcp 仍为 501），能力上限快照为空集
     mcp_snapshot = {"tools": [], "loaded_at": _now().isoformat()}
+
+    # 64KiB 上限在创建时把关（§7.5）：超长 prompt 禁止进入后续 argv
+    try:
+        (loader or SkillLoader()).build_system_prompt(
+            skill_snapshot, [], expert_name=expert.name
+        )
+    except PromptTooLargeError as exc:
+        raise TaskPromptTooLargeError(str(exc)) from exc
 
     task = Task(
         user_id=user_id,
@@ -276,7 +295,9 @@ async def prepare_send(
                 .where(Message.conversation_id == conversation_id, Message.role == "user")
             )
         ).scalar_one()
-    return SendContext(task_id=task_id, conversation_id=conversation_id, content=content, seq=seq)
+    return SendContext(
+        task_id=task_id, conversation_id=conversation_id, content=content, seq=seq, task=task
+    )
 
 
 async def persist_assistant_message(
@@ -288,6 +309,73 @@ async def persist_assistant_message(
     await db.commit()
     await db.refresh(message)
     return message
+
+
+async def persist_tool_message(
+    db: AsyncSession,
+    conversation_id: int,
+    tool_call_id: str,
+    tool_name: str,
+    content: str,
+    is_error: bool,
+) -> Message:
+    """工具执行结果落库（tool_execution_end，§7.6；错误结果同样入库供上下文追溯）。"""
+    prefix = f"[tool_error] {content}" if is_error else content
+    message = Message(
+        conversation_id=conversation_id,
+        role="tool",
+        content=prefix,
+        tool_call_id=tool_call_id[:50] if tool_call_id else None,
+        tool_name=tool_name[:50] if tool_name else None,
+    )
+    db.add(message)
+    await db.commit()
+    await db.refresh(message)
+    return message
+
+
+async def fetch_recent_messages(
+    session_factory, task_id: int, limit: int
+) -> list[dict]:
+    """重播种取数（§7.6）：最近 limit 条持久化消息（user/assistant/tool），时间升序。
+
+    使用独立会话：轮处理器在流式生成期间调用，不能复用请求级 session。
+    """
+    from backend.database import async_session_factory as _factory  # 局部避免循环导入
+
+    factory = session_factory or _factory
+    async with factory() as session:
+        conversation = (
+            await session.execute(
+                select(Conversation).where(Conversation.task_id == task_id)
+            )
+        ).scalar_one_or_none()
+        if conversation is None:
+            return []
+        rows = list(
+            (
+                await session.execute(
+                    select(Message)
+                    .where(Message.conversation_id == conversation.id)
+                    .order_by(Message.created_at.desc(), Message.id.desc())
+                    .limit(limit)
+                )
+            ).scalars()
+        )
+        rows.reverse()
+        return [{"role": item.role, "content": item.content} for item in rows]
+
+
+async def list_task_file_payloads(db: AsyncSession, task_id: int) -> list[dict]:
+    """容器启动所需的 TaskFile manifest（SkillLoader/扩展挂载用）。"""
+    rows = list(
+        (
+            await db.execute(
+                select(TaskFile).where(TaskFile.task_id == task_id).order_by(TaskFile.id)
+            )
+        ).scalars()
+    )
+    return [task_file_payload(item) for item in rows]
 
 
 # ---------------------------------------------------------------------------

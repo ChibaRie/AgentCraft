@@ -16,20 +16,36 @@ import asyncio
 import hashlib
 import json
 import os
+import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from backend.dependencies import get_file_service, get_workspace_root
+from backend.dependencies import get_file_service, get_pi_engine_manager, get_workspace_root
 from backend.main import app
 from backend.models.conversation import Conversation
 from backend.models.task import Task
 from backend.services.file_service import FilenameInvalidError, FileService, sweep_stale_storage
+from tests.conftest import make_scripted_manager
 from tests.test_experts import bind_skill, create_expert, valid_expert
 from tests.test_skills import auth_header, create_skill, register_expert
 
 pytestmark = pytest.mark.usefixtures("client")
+
+
+@pytest.fixture(autouse=True)
+def scripted_pi_engine(tmp_path: Path):
+    """以脚本化假 Pi 替换 PiEngineManager：SSE 契约测试与引擎实现解耦。
+
+    假引擎行为与 EchoEngine 一致（原样回显、3 字符分帧），重播种/abort/
+    重建语义由 test_pi_manager.py 与验收阶段覆盖。
+    """
+    manager, transports = make_scripted_manager(tmp_path)
+    app.dependency_overrides[get_pi_engine_manager] = lambda: manager
+    yield SimpleNamespace(manager=manager, transports=transports)
+    app.dependency_overrides.pop(get_pi_engine_manager, None)
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +218,24 @@ def test_create_task_derives_relative_workdir(client, workspace_root):
     response = create_task(client, token, expert_id, workdir="proj/sub")
     assert response.status_code == 201
     assert response.json()["data"]["workdir"] == "/workspaces/authorized/proj/sub"
+
+
+def test_create_task_413_when_prompt_exceeds_limit(client, workspace_root):
+    """64KiB 系统提示词上限在创建时把关（§7.5），禁止超长 prompt 进入 argv。"""
+    from backend.dependencies import get_skill_loader
+    from backend.engine.skill_loader import DEFAULT_SKILL_PROMPT_MAX_BYTES, SkillLoader
+    from backend.main import app
+
+    token, _, expert_id, _ = make_published_expert(client)
+    tiny = SkillLoader(max_bytes=256)
+    app.dependency_overrides[get_skill_loader] = lambda: tiny
+    try:
+        response = create_task(client, token, expert_id)
+    finally:
+        app.dependency_overrides.pop(get_skill_loader, None)
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "PROMPT_TOO_LARGE"
+    assert DEFAULT_SKILL_PROMPT_MAX_BYTES == 64 * 1024
 
 
 def test_create_task_rejects_invalid_workdir(client, workspace_root):
@@ -805,28 +839,28 @@ def test_sweep_stale_storage_cleans_orphans(client, test_db, file_root):
     assert len(list(task_dir.iterdir())) == 1
 
 
-def test_send_message_429_when_round_active(client, test_db, monkeypatch):
+def test_send_message_429_when_round_active(client, scripted_pi_engine):
     """轮锁（§6.6/§7.2.1）：当前一轮未结束时再次发送返回 429 + Retry-After。"""
     import concurrent.futures
-    import threading
 
-    from backend.engine.echo import EngineEvent
-
+    manager = scripted_pi_engine.manager
     entered = threading.Event()
     release = threading.Event()
 
-    class SlowEngine:
-        async def stream(self, content):
-            entered.set()
-            while not release.is_set():
-                await asyncio.sleep(0.02)
-            yield EngineEvent("text_delta", {"delta": content})
-            yield EngineEvent(
-                "final",
-                {"content": content, "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
-            )
+    async def held_make_runtime(spec, workdir_host, extension_path):
+        from tests.conftest import FakePiTransport
 
-    monkeypatch.setattr("backend.api.tasks.EchoEngine", SlowEngine)
+        transport = FakePiTransport()
+        transport.on_round_start = entered.set
+        transport.release = release
+        scripted_pi_engine.transports.append(transport)
+
+        async def noop() -> None:
+            return None
+
+        return transport, noop
+
+    manager._make_runtime = held_make_runtime  # type: ignore[method-assign]
     token, _, expert_id, _ = make_published_expert(client)
     task_id = create_task(client, token, expert_id).json()["data"]["task_id"]
 
@@ -845,6 +879,66 @@ def test_send_message_429_when_round_active(client, test_db, monkeypatch):
 
     detail = client.get(f"/api/tasks/{task_id}", headers=auth_header(token))
     assert [m["role"] for m in detail.json()["data"]["messages"]] == ["user", "assistant"]
+
+
+def test_abort_stops_round_and_keeps_task_running(client, scripted_pi_engine):
+    """abort（§7.8）：绕锁写 abort 帧；半截回复不落库；任务保持 running 可继续。"""
+    import concurrent.futures
+
+    token, _, expert_id, _ = make_published_expert(client)
+    task_id = create_task(client, token, expert_id).json()["data"]["task_id"]
+    manager = scripted_pi_engine.manager
+    transports = scripted_pi_engine.transports
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    async def held_make_runtime(spec, workdir_host, extension_path):
+        from tests.conftest import FakePiTransport
+
+        transport = FakePiTransport()
+        transport.on_round_start = entered.set
+        transport.release = release
+        transports.append(transport)
+
+        async def noop() -> None:
+            return None
+
+        return transport, noop
+
+    manager._make_runtime = held_make_runtime  # type: ignore[method-assign]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(send_message, client, token, task_id, "会被中止的消息")
+        assert entered.wait(timeout=5), "轮未开始"
+        aborted = client.post(f"/api/tasks/{task_id}/abort", headers=auth_header(token))
+        assert aborted.status_code == 202
+        assert aborted.json()["data"]["abort_requested"] is True
+        response = first.result(timeout=10)
+
+    frames = parse_sse(response.text)
+    names = [name for name, _ in frames]
+    done = [payload for name, payload in frames if name == "done"]
+    assert done and done[-1]["finish_reason"] == "aborted"
+    assert transports[0].aborted is True
+    assert "message_saved" not in names, "中止的回复不得落库"
+
+    detail = client.get(f"/api/tasks/{task_id}", headers=auth_header(token))
+    assert detail.json()["data"]["status"] == "running"
+    roles = [m["role"] for m in detail.json()["data"]["messages"]]
+    assert roles == ["user"], "半截回复不落库，仅用户消息在"
+
+    # 任务可继续：新一轮正常回复
+    release.set()
+    followup = send_message(client, token, task_id, "继续")
+    assert followup.status_code == 200
+    followup_roles = [
+        m["role"]
+        for m in client.get(f"/api/tasks/{task_id}", headers=auth_header(token)).json()["data"][
+            "messages"
+        ]
+    ]
+    assert followup_roles == ["user", "user", "assistant"]
 
 
 def test_upload_size_guard_rejects_before_multipart():
