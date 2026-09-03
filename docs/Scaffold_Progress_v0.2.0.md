@@ -458,6 +458,17 @@ pi-worker 镜像 `agentcraft-pi-worker:0.84.3`（node:22-slim，非 root piworke
 
 边界：**容器 env 的 OPENAI_BASE_URL 仍指向 provider-proxy**——非 faux 用户 Provider 的真实流量在阶段 6 proxy 按令牌路由 + Responses→Completions 兼容转换后打通（faux 链路与全部数据/快照/指纹行为已于本阶段完整验收）。faux 为内置测试项不经 user_providers 表。
 
+### 12.1 Proxy 提前落地 + 真实模型验收（2026-09-03，用户实测通过）
+
+用户实测 BYOK 对话报 `Connection error.`（容器指向的 provider-proxy 不存在）——按既定架构决策把 proxy 核心提前实现并验收：
+
+- **JWT 任务令牌**（`services/task_token.py`）：SECRET_KEY 签名，claims={task_id, instance, model, exp=24h}；instance 随容器启动轮换；proxy 无状态校验（撤销列表留阶段 7，本地单操作者可接受）
+- **provider-proxy**（`backend/provider_proxy.py`，容器 `agentcraft-provider-proxy`）：`/v1/chat/completions` 认证→model scope→查任务快照→解密 Key→路由上游，SSE 流式中继/JSON 缓冲透传，上游错误原样透传、不可达 502；`/v1/models` 返回快照模型；免钥上游（Ollama）不发认证头；系统默认模式走 `PROVIDER_PROXY_UPSTREAM`+`OPENAI_API_KEY`
+- **协议兼容（实测确认）**：Pi 内置 openai provider 使用 **Responses API**（`openai.ts` 引 `openAIResponsesApi`），DeepSeek/Ollama 等普遍未实现——任务扩展对非 faux 注册 `api: "openai-completions"` 的 openai provider 覆盖，Pi 改说 chat/completions，**无需转换层**
+- **容器化**：proxy 容器双网络（bridge 出公网 + agentcraft-internal 被 Pi 以 `provider-proxy:8080` 访问；实测 internal 网络对 host-gateway 为 ENETUNREACH，故 proxy 必须容器化）；代码与 .env 只读挂载；`manager.ensure_proxy()` 自动保障存活
+- **验收（用户实测）**：绑定 DeepSeek（deepseek-v4-flash）→ 建任务 → 对话全链路通过；proxy 无令牌 401、出站可达上游均验证；容器内 11 个 proxy 测试 + 5 个令牌测试全绿
+- 网络实测记录：Docker Desktop 自定义 internal 网络不解析 `host.docker.internal`（EAI_AGAIN）、host-gateway 不可达（ENETUNREACH）——「proxy 必须同网络容器化」的依据
+
 ---
 
 ## 13. 变更记录
@@ -470,5 +481,6 @@ pi-worker 镜像 `agentcraft-pi-worker:0.84.3`（node:22-slim，非 root piworke
 | v0.4.0 | 2026-09-02 | 阶段 2 Skill 管理垂直切片：validate_skill 纯文本校验器 + Skill 全生命周期 API（状态机）+ P08 前端（列表/弹窗/ValidateButton）+ 61 个新测试 |
 | v0.5.0 | 2026-09-02 | 阶段 3 专家 CRUD/绑定/专家中心：闭环一收口；P03/P04/P06/P07；41 个新测试；审查修复 13 处 |
 | v0.6.0 | 2026-09-03 | 阶段 4 任务数据层 + SSE 链路（EchoEngine 冻结契约）：任务/文件/工作区 API + P09 前端 + 启动巡检/体量守卫/任务锁；47 个新测试；审查修复 15 项 |
+| v0.9.0 | 2026-09-03 | Proxy 提前落地 + 真实模型验收：JWT 任务令牌/provider-proxy 按令牌路由/completions 协议扩展/双网络容器化；DeepSeek BYOK 真实对话用户实测通过 |
 | v0.8.0 | 2026-09-03 | 阶段 5.5 Provider 双模式 BYOK：加密信封/user_providers 表/CRUD/任务快照冻结/Provider 指纹重建/P10 设置页；测试基线 274/36；安全审查修复（ACTIVE_KID 校验、所有权 404 化、SSRF 立场注释） |
 | v0.7.0 | 2026-09-03 | 阶段 5 Pi 引擎集成：PiEngine 协议层 + SkillLoader + EventHandler + PiEngineManager（重播种/abort/容器池）+ Docker CLI/API 双传输 + faux 经扩展注册；EchoEngine 替换、abort 落地；faux 全链路 E2E 验收（含 docker rm -f 重播种恢复与沙箱 inspect 清单） |

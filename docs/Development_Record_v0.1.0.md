@@ -318,6 +318,7 @@ CLI 无内置 faux（经任务扩展 `pi.registerProvider`+自定义 streamSimpl
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| v0.4.1 | 2026-09-03 | 5.5 补验收：Proxy 提前落地（JWT 令牌/按令牌路由/completions 扩展/容器化），DeepSeek BYOK 真实对话用户实测通过 |
 | v0.4.0 | 2026-09-03 | 增补阶段 5.5（Provider BYOK 双模式）：加密信封/user_providers/CRUD/任务快照/指纹重建/P10；文档基线四份修订；安全审查修复 3 项 |
 | v0.3.0 | 2026-09-03 | 增补阶段 5（Pi 引擎集成：协议层/SkillLoader/EventHandler/容器池/重播种/abort + faux 全链路验收）与 P09 原型功能增强（Markdown/工具卡片/上下文面板/视口锁定）；基线 244/31；实测规格修正 7 项 |
 | v0.2.0 | 2026-09-03 | 增补阶段 4（任务数据层 + SSE 链路，EchoEngine 冻结契约）：交付内容、审查修复 15 项、闭环二验收；刷新测试基线 204/31、错误码注册表、已知边界 |
