@@ -76,7 +76,15 @@ def create_task(client, token, expert_id, **overrides):
 
 
 def test_task_without_provider_falls_back_to_system(client):
-    """未配置任何 Provider：source=system（现行为不变）。"""
+    """未配置任何 Provider：source=system（现行为不变；显式注入系统默认保证封闭）。"""
+    from backend.config import Settings as _Settings
+
+    settings = _Settings(
+        PI_PROVIDER="openai",
+        PI_MODEL="gpt-4o-mini",
+        PI_PROXY_BASE_URL="http://provider-proxy:8080/v1",
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
     token, expert_id = make_task_owner(client)
     response = create_task(client, token, expert_id)
     assert response.status_code == 201
@@ -90,6 +98,7 @@ def test_task_without_provider_falls_back_to_system(client):
     assert provider["model_id"] == "gpt-4o-mini"
     assert provider["api_key_set"] is False
     assert "encrypted" not in json.dumps(provider) and "sk-" not in json.dumps(provider)
+    app.dependency_overrides.pop(get_settings, None)
 
 
 def test_task_with_explicit_provider_snapshots_user_config(client, crypto_settings):

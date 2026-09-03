@@ -97,6 +97,26 @@ export default function TaskCreatePage() {
   const [notice, setNotice] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Provider 选择（§7.7 BYOK）：缺省项 = 我的默认 / 系统默认
+  const [providers, setProviders] = useState([]);
+  const [providerId, setProviderId] = useState(""); // "" = 默认（用户默认或系统）
+
+  useEffect(() => {
+    let cancelled = false;
+    request("/api/providers")
+      .then((payload) => {
+        if (!cancelled) {
+          setProviders(payload.data);
+        }
+      })
+      .catch(() => {
+        // Provider 列表是可选项，失败不阻塞任务创建
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     if (!expertParam) {
       setExpert(null);
@@ -134,6 +154,7 @@ export default function TaskCreatePage() {
           expert_id: expert.id,
           description,
           workdir: workdir || undefined,
+          provider_config_id: providerId ? Number(providerId) : undefined,
         }),
       });
       navigate(`/tasks/${payload.data.task_id}`);
@@ -142,6 +163,8 @@ export default function TaskCreatePage() {
       setIsSubmitting(false);
     }
   }
+
+  const userDefaultName = providers.find((provider) => provider.is_default)?.name;
 
   return (
     <main className="page">
@@ -187,6 +210,31 @@ export default function TaskCreatePage() {
                 </div>
 
                 <WorkdirSelector value={workdir} onChange={setWorkdir} />
+
+                <div className="field">
+                  <label className="field-label" htmlFor="task-provider">
+                    模型服务（Provider）
+                  </label>
+                  <select
+                    id="task-provider"
+                    className="field-input"
+                    value={providerId}
+                    onChange={(event) => setProviderId(event.target.value)}
+                  >
+                    <option value="">
+                      默认{userDefaultName ? `（${userDefaultName}）` : "（系统级配置）"}
+                    </option>
+                    {providers.map((provider) => (
+                      <option key={provider.id} value={provider.id}>
+                        {provider.name} · {provider.model_id}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="field-note">
+                    所选 Provider 会在创建时冻结为任务快照；之后修改配置不影响本任务，
+                    下一次容器重建时生效。
+                  </p>
+                </div>
 
                 {notice && (
                   <div className="form-alert" role="alert">

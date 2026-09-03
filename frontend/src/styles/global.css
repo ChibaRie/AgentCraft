@@ -3132,3 +3132,136 @@ a {
     animation: none;
   }
 }
+
+/* ---------- P10 Provider 设置 ---------- */
+
+.provider-settings {
+  max-width: 760px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.provider-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.provider-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+.provider-form-title {
+  margin: 0;
+  font-size: 16px;
+  color: var(--ink-strong);
+}
+
+.provider-default-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+
+.provider-empty {
+  text-align: center;
+  padding: 40px 20px;
+  border: 1px dashed var(--hairline);
+  border-radius: var(--radius-panel);
+  color: var(--text-2);
+}
+
+.provider-empty p {
+  margin: 4px 0;
+}
+
+.provider-empty-note {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.provider-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.provider-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+.provider-card-main {
+  min-width: 0;
+}
+
+.provider-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  color: var(--ink-strong);
+}
+
+.badge-default {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--on-ink);
+  font-size: 11px;
+}
+
+.provider-card-meta,
+.provider-card-key {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+  word-break: break-all;
+}
+
+.provider-card-key {
+  color: var(--text-3);
+}
+
+.provider-card-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.provider-delete:hover {
+  color: var(--ink-strong);
+  border-color: var(--ink);
+}
+
+.field-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-3);
+}

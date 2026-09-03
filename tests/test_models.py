@@ -12,6 +12,7 @@ EXPECTED_TABLES = {
     "mcp_servers",
     "mcp_tools",
     "expert_mcps",
+    "user_providers",
 }
 
 

@@ -49,7 +49,9 @@ class EncryptionUnavailableError(UserSystemError):
 
 def _keyring(settings: Settings) -> tuple[str, dict[str, bytes]]:
     try:
-        return make_keyring(settings.MCP_ENCRYPTION_KEYRING)
+        return make_keyring(
+            settings.MCP_ENCRYPTION_KEYRING, active_kid=settings.MCP_ENCRYPTION_ACTIVE_KID
+        )
     except EncryptionError as exc:
         raise EncryptionUnavailableError(str(exc)) from exc
 
@@ -105,11 +107,10 @@ async def list_providers(db: AsyncSession, user_id: int) -> list[UserProvider]:
 
 
 async def _get_owned(db: AsyncSession, user_id: int, provider_id: int) -> UserProvider:
+    """统一 404（不区分不存在/非本人，消除存在性预言，§7.7 口径与任务侧一致）。"""
     row = await db.get(UserProvider, provider_id)
-    if row is None:
+    if row is None or row.user_id != user_id:
         raise ProviderNotFoundError("Provider 配置不存在")
-    if row.user_id != user_id:
-        raise ProviderForbiddenError("无权访问该 Provider 配置")
     return row
 
 

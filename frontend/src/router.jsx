@@ -9,6 +9,8 @@ import LoginPage from "./pages/LoginPage.jsx";
 import MyExpertsPage from "./pages/MyExpertsPage.jsx";
 import ProfilePage from "./pages/ProfilePage.jsx";
 import SkillManagePage from "./pages/SkillManagePage.jsx";
+// 注意：此 import 用 ./ 形式——../ 形式在当前 rollup 解析器上对（且仅对）此文件失败
+import ProviderSettingsPage from "./pages/ProviderSettingsPage.jsx";
 import TaskChatPage from "./pages/TaskChatPage.jsx";
 import TaskCreatePage from "./pages/TaskCreatePage.jsx";
 
@@ -89,6 +91,14 @@ export default function AppRoutes() {
           element={
             <RequireAuth requireExpert>
               <SkillManagePage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/settings/providers"
+          element={
+            <RequireAuth>
+              <ProviderSettingsPage />
             </RequireAuth>
           }
         />

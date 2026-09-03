@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
-import { CaretDown, SignOut, UserCircle, Users, Wrench } from "@phosphor-icons/react";
+import { CaretDown, Plug, SignOut, UserCircle, Users, Wrench } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
 
 function UserMenu() {
@@ -94,6 +94,15 @@ function UserMenu() {
             >
               <Wrench size={16} aria-hidden="true" />
               Skill 管理
+            </Link>
+            <Link
+              role="menuitem"
+              className="usermenu-item"
+              to="/settings/providers"
+              onClick={() => setIsOpen(false)}
+            >
+              <Plug size={16} aria-hidden="true" />
+              Provider 设置
             </Link>
           </>
         )}

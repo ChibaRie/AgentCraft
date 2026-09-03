@@ -110,7 +110,9 @@ def test_create_provider_validation_errors(client, crypto_settings):
 
 
 def test_create_provider_encryption_unconfigured(client):
-    """未配置密钥环时写 Key → 503（读/免 Key 配置不受影响）。"""
+    """未配置密钥环时写 Key → 503（读/免 Key 配置不受影响；显式注入空密钥环保证封闭）。"""
+    settings = Settings(MCP_ENCRYPTION_ACTIVE_KID="primary", MCP_ENCRYPTION_KEYRING="")
+    app.dependency_overrides[get_settings] = lambda: settings
     token, _ = register_expert(client, username="prov-e", email="prov-e@example.com")
     response = create_provider(client, token)
     assert response.status_code == 503
@@ -118,6 +120,7 @@ def test_create_provider_encryption_unconfigured(client):
     # 免 Key 配置仍可创建
     ok = create_provider(client, token, name="免钥", api_key=None)
     assert ok.status_code == 201
+    app.dependency_overrides.pop(get_settings, None)
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +146,7 @@ def test_get_provider_ownership(client, crypto_settings):
     own = client.get(f"/api/providers/{provider_id}", headers=auth_header(token_a))
     assert own.status_code == 200
     other = client.get(f"/api/providers/{provider_id}", headers=auth_header(token_b))
-    assert other.status_code == 403
+    assert other.status_code == 404  # 不暴露他人配置存在性
     missing = client.get("/api/providers/99999", headers=auth_header(token_a))
     assert missing.status_code == 404
 
@@ -270,4 +273,4 @@ def test_delete_provider(client, crypto_settings):
     other_id = create_provider(client, token, name="他人的").json()["data"]["id"]
     token_b, _ = register_expert(client, username="prov-n", email="prov-n@example.com")
     forbidden = client.delete(f"/api/providers/{other_id}", headers=auth_header(token_b))
-    assert forbidden.status_code == 403
+    assert forbidden.status_code == 404  # 不暴露他人配置存在性

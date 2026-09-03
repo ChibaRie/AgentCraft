@@ -40,14 +40,17 @@ def provider_key_aad(user_id: int) -> str:
     return f"agentcraft:user_providers:{int(user_id)}:api_key:v1"
 
 
-def make_keyring(raw: str) -> tuple[str, dict[str, bytes]]:
-    """解析 `MCP_ENCRYPTION_KEYRING=primary:<b64url32B>,old:<b64url32B>`。"""
+def make_keyring(raw: str, active_kid: str | None = None) -> tuple[str, dict[str, bytes]]:
+    """解析 `MCP_ENCRYPTION_KEYRING=primary:<b64url32B>,old:<b64url32B>`。
+
+    active_kid（MCP_ENCRYPTION_ACTIVE_KID）显式指定写入密钥；缺省取首个条目。
+    """
     if not raw or not raw.strip():
         raise EncryptionError(
             "未配置 MCP_ENCRYPTION_KEYRING（格式：kid:<base64url 32 字节密钥>[,...]）"
         )
     keyring: dict[str, bytes] = {}
-    active_kid: str | None = None
+    active_kid_ref: str | None = None
     for entry in raw.split(","):
         entry = entry.strip()
         if ":" not in entry:
@@ -60,11 +63,15 @@ def make_keyring(raw: str) -> tuple[str, dict[str, bytes]]:
         if not kid:
             raise EncryptionError("keyring kid 不能为空")
         keyring[kid] = key
-        if active_kid is None:
-            active_kid = kid
-    if active_kid is None:
+        if active_kid_ref is None:
+            active_kid_ref = kid
+    if active_kid_ref is None:
         raise EncryptionError("keyring 为空")
-    return active_kid, keyring
+    if active_kid is not None:
+        if active_kid not in keyring:
+            raise EncryptionError(f"ACTIVE_KID {active_kid} 不在 keyring 中")
+        active_kid_ref = active_kid
+    return active_kid_ref, keyring
 
 
 def encrypt_text(
