@@ -28,7 +28,6 @@ from backend.services import mcp_service
 from backend.services.mcp_service import (
     MCPServerInvalidError,
     MCPServerNotFoundError,
-    MCPToolNotAuthorizableError,
 )
 from backend.utils.crypto import decrypt_text, make_keyring, mcp_env_aad
 
@@ -224,9 +223,7 @@ async def test_discover_refreshes_but_preserves_state(test_db):
         client_factory=lambda s: FakeMcpClient([tool_entry("list_directory")]),
     )
     # 手动启用后再次 discover：状态保留，schema 更新
-    tool = await mcp_service.update_tool(
-        db, owner, server.id, 1, enabled=True, confirm_sensitive=False
-    )
+    tool = await mcp_service.update_tool(db, owner, server.id, 1, enabled=True)
     assert tool.enabled is True
     tools = await mcp_service.discover_tools(
         db, owner, server.id, make_settings(),
@@ -302,17 +299,12 @@ async def _server_with_tool(
         return server.id
 
 
-async def test_sensitive_tool_requires_confirmation(test_db):
+async def test_sensitive_tool_enable_records_authorization(test_db):
+    """敏感工具直接开关：启用即记录授权时点，禁用清空（用户要求免多次提醒）。"""
     owner = await seed_user(test_db.session_factory)
     server_id = await _server_with_tool(test_db.session_factory, owner, sensitive=True)
     db = test_db.session_factory()
-    with pytest.raises(MCPToolNotAuthorizableError):
-        await mcp_service.update_tool(
-            db, owner, server_id, 1, enabled=True, confirm_sensitive=False
-        )
-    tool = await mcp_service.update_tool(
-        db, owner, server_id, 1, enabled=True, confirm_sensitive=True
-    )
+    tool = await mcp_service.update_tool(db, owner, server_id, 1, enabled=True)
     assert tool.enabled is True
     assert tool.authorized_at is not None
     # 禁用清空授权

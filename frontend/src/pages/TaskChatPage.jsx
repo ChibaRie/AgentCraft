@@ -20,7 +20,7 @@ const AUTOSCROLL_THRESHOLD_PX = 120;
 
 function TaskSidebar({ tasks, activeId }) {
   return (
-    <aside className="task-sidebar" aria-label="任务列表">
+    <aside className="task-sidebar rise" aria-label="任务列表">
       <Link to="/tasks/new" className="btn btn-primary btn-sm task-sidebar-new">
         <Plus size={14} aria-hidden="true" /> 新任务
       </Link>
@@ -417,7 +417,7 @@ export default function TaskChatPage() {
 
         {taskId && !isMissing && task && (
           <>
-            <header className="task-header">
+            <header className="task-header rise" style={{ "--rise-index": 1 }}>
               <span className="task-avatar" aria-hidden="true">
                 {(task.expert_name_snapshot || "专").slice(0, 1)}
               </span>
@@ -547,7 +547,7 @@ export default function TaskChatPage() {
               </ul>
             )}
 
-            <form className="composer" onSubmit={handleSend}>
+            <form className="composer rise" style={{ "--rise-index": 2 }} onSubmit={handleSend}>
               <div className="composer-row">
                 <input
                   ref={fileInputRef}
@@ -591,9 +591,6 @@ export default function TaskChatPage() {
                   发送
                 </button>
               </div>
-              <p className="composer-hint">
-                专家经 Pi 引擎多轮推理完成任务；回复为流式输出，可随时中止。
-              </p>
             </form>
           </>
         )}

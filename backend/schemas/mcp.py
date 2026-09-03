@@ -20,4 +20,3 @@ class MCPServerUpdateRequest(BaseModel):
 
 class MCPToolUpdateRequest(BaseModel):
     enabled: bool
-    confirm_sensitive: bool = False  # 敏感工具启用需显式确认（§6.7）

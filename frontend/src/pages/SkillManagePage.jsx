@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle, Warning } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { request } from "../api/client.js";
@@ -169,6 +169,39 @@ export default function SkillManagePage() {
   const [validation, setValidation] = useState(null);
   const [binding, setBinding] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const fileInputRef = useRef(null);
+
+  async function handleImportFile(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    clearInline();
+    setIsImporting(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const payload = await request("/api/skills/import", {
+        method: "POST",
+        body: formData,
+      });
+      const imported = payload.data.skill;
+      setSkills((current) => [imported, ...current]);
+      setTotal((current) => current + 1);
+      setPageNotice(
+        payload.data.files.length > 0
+          ? `已导入「${imported.name}」草稿（${payload.data.files.length} 个包文件已存档）；请检查各栏目后保存。`
+          : `已导入「${imported.name}」草稿；请检查 LLM 拆解结果后保存。`
+      );
+      setEditorSkill(imported); // 打开编辑器预审 LLM 填充结果
+    } catch (error) {
+      setPageNotice(error.message || "导入失败，请稍后重试");
+    } finally {
+      setIsImporting(false);
+    }
+  }
 
   const loadSkills = useCallback(async () => {
     setIsLoading(true);
@@ -282,9 +315,13 @@ export default function SkillManagePage() {
   return (
     <main className="app-main">
       <header className="page-header rise">
-        <h1 className="page-title">Skill 管理</h1>
+        <h1 className="page-title">
+          {activeTab === "mcp" ? "MCP Server 管理" : "Skill 管理"}
+        </h1>
         <p className="page-sub">
-          把能力封装为可复用的 Skill：校验通过后发布，才能绑定到你的专家。
+          {activeTab === "mcp"
+            ? "注册 MCP Server 并发现工具，发布后即可绑定到专家，让 Agent 真实调用。"
+            : "把能力封装为可复用的 Skill：校验通过后发布，才能绑定到你的专家。"}
         </p>
       </header>
 
@@ -313,16 +350,35 @@ export default function SkillManagePage() {
         <>
       <div className="manage-toolbar rise" style={{ "--rise-index": 2 }}>
         <span className="manage-count">{isLoading ? "" : `共 ${total} 个 Skill`}</span>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => {
-            clearInline();
-            setEditorSkill({});
-          }}
-        >
-          新建 Skill
-        </button>
+        <div className="manage-toolbar-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={isImporting}
+            onClick={() => fileInputRef.current?.click()}
+            title="上传 .md 由 LLM 拆解填充，或 .zip 包（scripts/assets/references）"
+          >
+            {isImporting ? "导入中…" : "导入 Skill"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              clearInline();
+              setEditorSkill({});
+            }}
+          >
+            新建 Skill
+          </button>
+        </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".md,.markdown,.zip"
+          style={{ display: "none" }}
+          aria-label="选择要导入的 Skill 文件"
+          onChange={handleImportFile}
+        />
       </div>
 
       <div className="form-alert" role="alert" hidden={!pageNotice} style={{ marginBottom: 16 }}>

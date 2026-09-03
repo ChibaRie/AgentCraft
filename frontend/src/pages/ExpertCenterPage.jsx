@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { MagnifyingGlass } from "@phosphor-icons/react";
+import { MagnifyingGlass, Plus, UserCircle } from "@phosphor-icons/react";
+import { useAuth } from "../auth/AuthContext.jsx";
 import { request } from "../api/client.js";
 import { CATEGORY_LABELS, CATEGORY_OPTIONS } from "../lib/categories.js";
 
@@ -27,6 +28,7 @@ function ExpertCard({ expert, index }) {
 }
 
 export default function ExpertCenterPage() {
+  const { isAuthenticated, isExpert } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const search = searchParams.get("search") || "";
   const category = searchParams.get("category") || "";
@@ -95,8 +97,24 @@ export default function ExpertCenterPage() {
   return (
     <main className="app-main">
       <header className="page-header rise">
-        <h1 className="page-title">专家中心</h1>
-        <p className="page-sub">浏览社区公开的专家，找到匹配你任务的那一位。</p>
+        <div className="page-header-row">
+          <div>
+            <h1 className="page-title">专家中心</h1>
+            <p className="page-sub">浏览社区公开的专家，找到匹配你任务的那一位。</p>
+          </div>
+          {isAuthenticated && isExpert && (
+            <div className="manage-toolbar-actions">
+              <Link to="/my-experts/new" className="btn btn-primary">
+                <Plus size={14} aria-hidden="true" />
+                新建专家
+              </Link>
+              <Link to="/my-experts" className="btn btn-ghost">
+                <UserCircle size={14} aria-hidden="true" />
+                我的专家
+              </Link>
+            </div>
+          )}
+        </div>
       </header>
 
       <div className="discover-toolbar rise" style={{ "--rise-index": 1 }}>

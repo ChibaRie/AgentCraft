@@ -4,7 +4,7 @@
   env_vars 以 AES-256-GCM 信封落库（AAD 绑定 server_id），API 只回变量名
 - discover：tools/list 落库；新工具默认 sensitive=1 + enabled=0（保守判定，
   仅可信只读 allowlist 置非敏感）；重复 discover 更新描述/schema 并保留状态
-- 工具开关：sensitive 工具启用必须 confirm（写入 authorized_at）；禁用清空
+- 工具开关：直接生效；敏感工具启用时记录授权时点 authorized_at，禁用清空
 - publish 需 ≥1 已发现工具；offline 仅限 published；删除需无绑定且无
   tasks.mcp_snapshot 引用（409；可先下架立即止损）
 - 专家绑定：owner 归属一致、Server 必须 published、UNIQUE(expert, server)
@@ -81,11 +81,6 @@ class MCPAlreadyBoundError(UserSystemError):
 class MCPBindingNotFoundError(UserSystemError):
     status_code = 404
     code = "NOT_FOUND"
-
-
-class MCPToolNotAuthorizableError(UserSystemError):
-    status_code = 400
-    code = "SENSITIVE_CONFIRM_REQUIRED"
 
 
 class MCPUpstreamError(UserSystemError):
@@ -416,16 +411,16 @@ async def update_tool(
     tool_id: int,
     *,
     enabled: bool,
-    confirm_sensitive: bool = False,
 ) -> MCPTool:
-    """工具开关（Server 全局，影响所有绑定专家的后续任务，§6.7）。"""
+    """工具开关（Server 全局，影响所有绑定专家的后续任务，§6.7）。
+
+    敏感工具启用时直接记录授权时点（authorized_at）；禁用即撤销授权。
+    """
     await _get_owned_server(db, owner_id, server_id)
     tool = await db.get(MCPTool, tool_id)
     if tool is None or tool.server_id != server_id:
         raise MCPServerNotFoundError("工具不存在")
     if enabled:
-        if tool.sensitive and not confirm_sensitive:
-            raise MCPToolNotAuthorizableError("敏感工具启用需确认风险")
         if tool.sensitive:
             tool.authorized_at = _now()
         tool.enabled = True

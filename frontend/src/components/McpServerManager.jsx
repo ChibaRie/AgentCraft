@@ -12,7 +12,7 @@ function StatusBadge({ status }) {
 }
 
 function SensitiveBadge() {
-  return <span className="skill-status is-offline" title="敏感工具：启用需确认风险">敏感</span>;
+  return <span className="skill-status is-offline" title="敏感工具：启用将记录授权时点">敏感</span>;
 }
 
 function EnvVarRows({ rows, onChange }) {
@@ -203,11 +203,13 @@ function CreateServerForm({ onCreated, onCancel }) {
 
 function ToolRow({ serverId, tool, busy, onToggle }) {
   return (
-    <li className="binding-row" key={tool.id}>
-      <div className="binding-row-main">
-        <strong>{tool.name}</strong>
-        {tool.sensitive && <SensitiveBadge />}
-        <span className="context-tool-desc">{tool.description}</span>
+    <li className="tool-row" key={tool.id}>
+      <div className="tool-row-info">
+        <div className="tool-row-head">
+          <strong className="tool-row-name">{tool.name}</strong>
+          {tool.sensitive && <SensitiveBadge />}
+        </div>
+        <p className="tool-row-desc">{tool.description}</p>
       </div>
       <div className="binding-row-actions">
         <button
@@ -227,7 +229,7 @@ function ToolRow({ serverId, tool, busy, onToggle }) {
   );
 }
 
-function ServerCard({ server, busy, expandedTools, sensitiveConfirm, onAction }) {
+function ServerCard({ server, busy, expandedTools, onAction }) {
   const tools = expandedTools[server.id];
   return (
     <article className="skill-card rise">
@@ -318,39 +320,11 @@ function ServerCard({ server, busy, expandedTools, sensitiveConfirm, onAction })
                   serverId={server.id}
                   tool={tool}
                   busy={busy}
-                  onToggle={(serverId, item, next) =>
-                    onAction(next && item.sensitive ? "tool-sensitive" : "tool", server, item, next)
-                  }
+                  onToggle={(serverId, item, next) => onAction("tool", server, item, next)}
                 />
               ))}
             </ul>
           )}
-        </div>
-      )}
-
-      {sensitiveConfirm?.serverId === server.id && (
-        <div className="confirm-strip" role="alert">
-          <span>
-            「{sensitiveConfirm.tool.name}」是敏感工具（{sensitiveConfirm.tool.description}）。
-            启用后专家任务将可真实执行它，确认已知晓风险？
-          </span>
-          <span className="confirm-strip-actions">
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              disabled={busy}
-              onClick={() => onAction("tool-sensitive-confirm", server, sensitiveConfirm.tool)}
-            >
-              已知晓风险，启用
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() => onAction("tool-sensitive-cancel")}
-            >
-              取消
-            </button>
-          </span>
         </div>
       )}
     </article>
@@ -366,7 +340,6 @@ export default function McpServerManager() {
   const [busy, setBusy] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [expandedTools, setExpandedTools] = useState({});
-  const [sensitiveConfirm, setSensitiveConfirm] = useState(null);
 
   const loadServers = useCallback(async () => {
     setIsLoading(true);
@@ -394,7 +367,6 @@ export default function McpServerManager() {
 
   function clearTransient() {
     setPageNotice("");
-    setSensitiveConfirm(null);
     setServers((current) => current.map(({ confirmDelete: _flag, ...rest }) => rest));
   }
 
@@ -419,14 +391,6 @@ export default function McpServerManager() {
     }
     if (action === "delete-cancel") {
       patchServer(server.id, { confirmDelete: false });
-      return;
-    }
-    if (action === "tool-sensitive") {
-      setSensitiveConfirm({ serverId: server.id, tool });
-      return;
-    }
-    if (action === "tool-sensitive-cancel") {
-      setSensitiveConfirm(null);
       return;
     }
 
@@ -470,18 +434,6 @@ export default function McpServerManager() {
         if (!next) {
           setPageNotice(`「${tool.name}」已禁用：既有任务对它的后续调用会被立即阻断。`);
         }
-      } else if (action === "tool-sensitive-confirm") {
-        const payload = await request(
-          `/api/mcp/servers/${server.id}/tools/${tool.id}`,
-          { method: "PUT", body: JSON.stringify({ enabled: true, confirm_sensitive: true }) }
-        );
-        setSensitiveConfirm(null);
-        setExpandedTools((current) => ({
-          ...current,
-          [server.id]: (current[server.id] || []).map((item) =>
-            item.id === tool.id ? payload.data : item
-          ),
-        }));
       }
     });
   }
@@ -546,7 +498,6 @@ export default function McpServerManager() {
               server={server}
               busy={busy}
               expandedTools={expandedTools}
-              sensitiveConfirm={sensitiveConfirm}
               onAction={handleAction}
             />
           ))}

@@ -34,7 +34,7 @@ export default function TaskContextPanel({ skills = [], mcpTools = [], toolCalls
   ];
 
   return (
-    <aside className="context-panel" aria-label="专家上下文">
+    <aside className="context-panel rise" style={{ "--rise-index": 2 }} aria-label="专家上下文">
       <div className="context-tabs" role="tablist" aria-label="上下文面板">
         {tabs.map((tab) => (
           <button

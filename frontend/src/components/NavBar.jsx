@@ -167,6 +167,9 @@ export default function NavBar() {
           <NavLink to="/tasks" className="navbar-link">
             任务
           </NavLink>
+          <NavLink to="/skills" className="navbar-link">
+            Skill / MCP 管理
+          </NavLink>
         </nav>
         <div className="navbar-actions">
           <ThemeToggle />

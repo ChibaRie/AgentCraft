@@ -124,7 +124,6 @@ async def update_tool(
         server_id,
         tool_id,
         enabled=payload.enabled,
-        confirm_sensitive=payload.confirm_sensitive,
     )
     return {"data": mcp_service.tool_payload(tool)}
 

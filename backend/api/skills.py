@@ -1,8 +1,9 @@
 """Skill 管理接口（Engineering Spec §6.5）。全部端点要求专家身份。"""
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import Settings, get_settings
 from backend.database import get_db
 from backend.middleware.permission import require_expert_role
 from backend.models.user import User
@@ -16,7 +17,7 @@ from backend.schemas.skill import (
     SkillValidateResponse,
     ValidationIssue,
 )
-from backend.services import skill_service
+from backend.services import skill_import_service, skill_service
 
 router = APIRouter(prefix="/skills", tags=["skills"])
 
@@ -106,6 +107,34 @@ async def validate_skill(
             valid=result["valid"],
             issues=[ValidationIssue(**issue) for issue in result["issues"]],
         )
+    }
+
+
+@router.post("/import", status_code=status.HTTP_201_CREATED)
+async def import_skill(
+    file: UploadFile,
+    user: User = Depends(require_expert_role),
+    db: AsyncSession = Depends(get_db),
+    settings: "Settings" = Depends(get_settings),
+) -> dict[str, object]:
+    """导入 Skill（.md → LLM 拆解；.zip → LLM 拆解 + 包落盘），产物为草稿。"""
+    from pathlib import Path
+
+    content = await file.read()
+    result = await skill_import_service.import_skill_file(
+        db,
+        user.id,
+        filename=file.filename or "",
+        content=content,
+        settings=settings,
+        packages_root=Path(settings.HOST_DATA_ROOT) / "skill-packages",
+    )
+    return {
+        "data": {
+            "skill": SkillResponse.model_validate(result["skill"]),
+            "files": result["files"],
+            "prompt_preview": result["prompt_preview"],
+        }
     }
 
 

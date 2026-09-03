@@ -181,27 +181,20 @@ def test_discover_upstream_failure_502(client, crypto_settings, monkeypatch):
     assert response.status_code == 502
 
 
-def test_tool_enable_sensitive_requires_confirm(client, crypto_settings, monkeypatch):
+def test_tool_enable_sensitive_records_authorization(client, crypto_settings, monkeypatch):
     token, _ = register_expert(client)
     server_id = create_server(client, token).json()["data"]["id"]
     _stub_discover_tools(monkeypatch, [tool_entry("write_file")])
     client.post(f"/api/mcp/servers/{server_id}/discover", headers=auth_header(token))
     detail = client.get(f"/api/mcp/servers/{server_id}", headers=auth_header(token))
     tool_id = detail.json()["data"]["tools"][0]["id"]
-    denied = client.put(
+    enabled = client.put(
         f"/api/mcp/servers/{server_id}/tools/{tool_id}",
         json={"enabled": True},
         headers=auth_header(token),
     )
-    assert denied.status_code == 400
-    assert denied.json()["error"]["code"] == "SENSITIVE_CONFIRM_REQUIRED"
-    confirmed = client.put(
-        f"/api/mcp/servers/{server_id}/tools/{tool_id}",
-        json={"enabled": True, "confirm_sensitive": True},
-        headers=auth_header(token),
-    )
-    assert confirmed.status_code == 200
-    assert confirmed.json()["data"]["authorized_at"] is not None
+    assert enabled.status_code == 200
+    assert enabled.json()["data"]["authorized_at"] is not None
     disabled = client.put(
         f"/api/mcp/servers/{server_id}/tools/{tool_id}",
         json={"enabled": False},
