@@ -74,6 +74,9 @@ class PiEngine:
         self.provider_fingerprint = ""
         # 完成信号只认 agent_settled（§12 决策 #6）：轮处理器以此判断轮结束
         self.is_round_settled = True  # 初始无轮，视为已收尾
+        # 容器播种时已写入 system prompt manifest 的附件 id（_create_engine 写入）；
+        # 之后的轮次里出现的新 id → 运行中补传的附件，需在消息中主动告知
+        self.seeded_file_ids: set[int] = set()
 
     # -- 生命周期 -----------------------------------------------------------
 

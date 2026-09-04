@@ -63,3 +63,10 @@
 - ~~check_code_style 内部接口（§6.8）~~ ✅ + 扩展注册块
 - ~~P05 个人中心（任务列表）~~ ✅；WorkdirSelector 已于阶段 4 落地（目录浏览，无目录上传）
 - mutation lock 跨进程化不实施（§7.2.1：v1 单实例进程内 asyncio.Lock 足够，Redis 不引入）
+
+## 迭代：任务对话附件补传（§6.6 放宽）✅ 2026-09-05 完成
+
+- 上传门禁从「首条消息前」放宽为「任务活跃期（created/running/failed）」；终态（completed/aborted）仍拒绝；`TaskAlreadyStartedError` 废弃，统一 `TaskStateError`（409 INVALID_STATE_TRANSITION）
+- 运行中补传的新文件感知：`PiEngine.seeded_file_ids`（容器播种集合）+ `_build_outgoing_message` 末尾追加 `[附件更新]` 块（只列新增、只告知一次）；容器重建路径由 system prompt manifest 全量覆盖，两路收敛
+- 前端 P09 `canAttach` 三状态放开 + tooltip 更新
+- Spec §3.3/§6.6/§8/§10/验收表共 6 处契约同步；测试：上传放开/终态拒绝 2 例 + 引擎告知块 3 例

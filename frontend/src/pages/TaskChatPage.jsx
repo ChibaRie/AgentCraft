@@ -46,7 +46,7 @@ function TaskSidebar({ tasks, activeId }) {
   );
 }
 
-/** P09 任务对话页：左侧任务列表 + 消息流式渲染 + 首条消息前可上传附件。
+/** P09 任务对话页：左侧任务列表 + 消息流式渲染 + 任务活跃期可上传附件。
 
   切换任务时中止在途 SSE 流并重置全部状态；refresh 带乱序守卫，
   过期响应直接丢弃；流结束后以服务端历史对账，对账失败保留乐观回复并提示。
@@ -355,7 +355,10 @@ export default function TaskChatPage() {
   const messages = task?.messages ?? [];
   const isCompleted = task?.status === "completed";
   const isFailed = task?.status === "failed";
-  const canAttach = Boolean(task) && task.status === "created" && !hasUserMessage;
+  // §6.6：任务活跃期（created/running/failed）可补传附件，终态拒绝；
+  // 新文件由后端在下一轮对话中自动告知 Agent
+  const canAttach =
+    Boolean(task) && ["created", "running", "failed"].includes(task.status);
   const canSend = Boolean(task) && !isCompleted && !streaming.active;
   // 中止仅在有活动轮时可见；结束仅 running 可见；删除对已建任务始终可见
   const canAbort = Boolean(task) && task.status === "running" && streaming.active;
@@ -560,7 +563,11 @@ export default function TaskChatPage() {
                   type="button"
                   className="btn btn-ghost btn-sm composer-attach"
                   disabled={!canAttach || isUploading}
-                  title={canAttach ? "上传附件（仅首条消息前）" : "首条消息发送后不可再上传"}
+                  title={
+                    canAttach
+                      ? "上传附件（下一轮对话中自动告知 Agent）"
+                      : "任务已结束，不能上传附件"
+                  }
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <Paperclip size={15} aria-hidden="true" />

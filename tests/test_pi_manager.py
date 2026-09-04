@@ -90,7 +90,9 @@ def _fake_history_fetcher(history: list[dict]):
     return fetch
 
 
-async def drive_round(manager: PiEngineManager, transports, content: str):
+async def drive_round(
+    manager: PiEngineManager, transports, content: str, *, task_files: list[dict] | None = None
+):
     spy = SpyPersistence()
     events = []
     async for name, payload in manager.run_round(
@@ -98,7 +100,7 @@ async def drive_round(manager: PiEngineManager, transports, content: str):
         user_id=1,
         stored_workdir="/workspaces/authorized",
         skill_snapshot=SNAPSHOT,
-        task_files=[],
+        task_files=task_files or [],
         expert_name="周报管家",
         content=content,
         persist_assistant=spy.persist_assistant,
@@ -185,6 +187,75 @@ async def test_reseed_skipped_when_no_prior_history(tmp_path):
     await drive_round(manager, transports, "首条消息")
     outgoing = transports[0].written[0]["message"]
     assert outgoing == "首条消息", "无历史时不包回顾壳"
+
+
+# ---------------------------------------------------------------------------
+# 运行中补传附件（§6.6）
+# ---------------------------------------------------------------------------
+
+
+def _file(fid: int, name: str, path: str, size: int) -> dict:
+    return {
+        "id": fid, "original_name": name, "agent_path": path, "size_bytes": size,
+    }
+
+
+async def test_midchat_attachment_notice_appended_once(tmp_path):
+    """运行中补传：新文件只在下一轮告知一次，且只列新增项。"""
+    manager, transports = make_manager(tmp_path, [])
+    f1 = _file(1, "a.md", "/task-files/a1", 2048)
+    f2 = _file(2, "b.txt", "/task-files/b2", 3)
+
+    await drive_round(manager, transports, "第一轮", task_files=[f1])
+    first = transports[0].written[0]["message"]
+    assert "[附件更新]" not in first, "容器播种时 manifest 已含 f1，无需告知"
+
+    await drive_round(manager, transports, "看新附件", task_files=[f1, f2])
+    second = transports[0].written[1]["message"]
+    assert second.startswith("[附件更新]") is False
+    assert "[附件更新]" in second
+    assert "b.txt → /task-files/b2" in second
+    assert "3 B" in second
+    assert "a.md" not in second, "已播种文件不重复告知"
+
+    await drive_round(manager, transports, "继续", task_files=[f1, f2])
+    third = transports[0].written[2]["message"]
+    assert third == "继续", "告知一次后不再重复"
+
+
+async def test_attachment_notice_seeds_and_formats():
+    """告知块格式正确，且告知后文件并入播种集合（幂等）。"""
+    from types import SimpleNamespace
+
+    manager, _ = make_manager(Path("."), [])
+    engine = SimpleNamespace(seeded_file_ids=set(), task_id=1)
+    files = [_file(7, "数据.csv", "/task-files/x7", 15360)]
+
+    notice = manager._attachment_notice(engine, files)
+    assert notice.startswith("[附件更新]")
+    assert "数据.csv → /task-files/x7" in notice
+    assert "15.0 KB" in notice
+    assert engine.seeded_file_ids == {7}
+    assert manager._attachment_notice(engine, files) == ""
+
+
+async def test_reseed_message_places_notice_after_current(tmp_path):
+    """重播种 + 补传附件同时发生：告知块位于 [当前消息] 之后。"""
+    from types import SimpleNamespace
+
+    history = [
+        {"role": "user", "content": "旧问题"},
+        {"role": "assistant", "content": "旧回答"},
+    ]
+    manager, _ = make_manager(tmp_path, history)
+    engine = SimpleNamespace(needs_reseed=True, seeded_file_ids={1}, task_id=1)
+    f2 = _file(2, "new.txt", "/task-files/n2", 5)
+
+    message = await manager._build_outgoing_message(engine, 1, "新消息", [f2])
+    assert message.index("[历史对话回顾]") < message.index("[当前消息]")
+    assert message.index("[当前消息]") < message.index("[附件更新]")
+    assert "new.txt → /task-files/n2" in message
+    assert engine.seeded_file_ids == {1, 2}
 
 
 # ---------------------------------------------------------------------------

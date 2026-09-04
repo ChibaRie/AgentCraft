@@ -61,11 +61,6 @@ class ExpertOfflineError(UserSystemError):
     code = "EXPERT_OFFLINE"
 
 
-class TaskAlreadyStartedError(UserSystemError):
-    status_code = 409
-    code = "TASK_ALREADY_STARTED"
-
-
 class TaskPromptTooLargeError(UserSystemError):
     status_code = 413
     code = "PROMPT_TOO_LARGE"
@@ -272,7 +267,8 @@ async def prepare_send(
     """发送前置校验 + 状态流转 + 用户消息落库；全部通过后引擎才开始产流。
 
     状态流转与用户消息落库在 task data lock 内完成，与上传提交互斥
-    （首条消息原子冻结 TaskFile manifest，§6.6）；seq 也在锁内计算，避免并发重复。
+    （§6.6 上传并发约束；附件可在任务活跃期补传，新文件由引擎下轮告知）；
+    seq 也在锁内计算，避免并发重复。
     """
     task = await _get_owned_task(db, user_id, task_id)
 
@@ -395,47 +391,31 @@ async def list_task_file_payloads(db: AsyncSession, task_id: int) -> list[dict]:
 # 文件上传的 DB 侧（配额核对 + TaskFile 落库）
 # ---------------------------------------------------------------------------
 
+# §6.6：允许补传附件的任务状态（终态 completed/aborted 拒绝）。
+# 文件落盘即经 bind 挂载对沙箱可见；新文件由引擎在下一轮消息中告知 Agent。
+UPLOADABLE_TASK_STATUSES = frozenset({"created", "running", "failed"})
+
 
 async def assert_upload_allowed(db: AsyncSession, user_id: int, task_id: int) -> Task:
-    """上传前置：任务存在、属于本人、仍处于 created 且尚无用户消息（§6.6）。"""
+    """上传前置：任务存在、属于本人、仍处于活跃状态（§6.6，v0.12.2 放宽）。"""
     task = await _get_owned_task(db, user_id, task_id)
-    if task.status != "created":
-        raise TaskAlreadyStartedError("任务已开始，不能再上传文件")
-    conversation_id = await _get_conversation_id(db, task_id)
-    has_user_message = (
-        await db.execute(
-            select(func.count())
-            .select_from(Message)
-            .where(Message.conversation_id == conversation_id, Message.role == "user")
-        )
-    ).scalar_one()
-    if has_user_message:
-        raise TaskAlreadyStartedError("任务已开始，不能再上传文件")
+    if task.status not in UPLOADABLE_TASK_STATUSES:
+        raise TaskStateError("任务已结束，不能上传文件")
     return task
 
 
 async def commit_task_files(
     db: AsyncSession, file_service, task_id: int, staged: list[dict]
 ) -> list[TaskFile]:
-    """落库前在 task data lock 内复核任务仍可上传并核对累计配额。
+    """落库前在 task data lock 内复核任务仍处活跃状态并核对累计配额。
 
-    锁与 prepare_send 共用：上传提交与首条消息流转互斥，关闭并发绕过配额
-    与「任务已开始文件仍入库」两个窗口（§6.6 上传并发约束）。
+    锁与 prepare_send 共用：上传提交与消息落库互斥，关闭并发绕过配额的
+    窗口（§6.6 上传并发约束）。
     """
     async with task_data_lock(task_id):
         task = await db.get(Task, task_id)
-        if task is None or task.status != "created":
-            raise TaskAlreadyStartedError("任务已开始，不能再上传文件")
-        conversation_id = await _get_conversation_id(db, task_id)
-        has_user_message = (
-            await db.execute(
-                select(func.count())
-                .select_from(Message)
-                .where(Message.conversation_id == conversation_id, Message.role == "user")
-            )
-        ).scalar_one()
-        if has_user_message:
-            raise TaskAlreadyStartedError("任务已开始，不能再上传文件")
+        if task is None or task.status not in UPLOADABLE_TASK_STATUSES:
+            raise TaskStateError("任务已结束，不能上传文件")
 
         existing_sum = (
             await db.execute(

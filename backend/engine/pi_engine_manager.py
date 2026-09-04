@@ -51,6 +51,17 @@ ProviderResolver = Callable[[int, int | None], Awaitable[dict]]
 
 _ROLE_LABELS = {"user": "用户", "assistant": "助手", "tool": "工具"}
 
+
+def _human_bytes(num_bytes: int) -> str:
+    """附件尺寸的人类可读格式（仅用于提示词展示）。"""
+    value = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024:
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} PB"
+
+
 # 轮事件队列上限：text_delta 洪泛时的内存防线（超出部分丢弃流式增量）
 _ROUND_QUEUE_MAX = 2000
 
@@ -249,6 +260,9 @@ class PiEngineManager:
 
         engine = PiEngine(task_id, transport, command_timeout=30.0)
         engine.needs_reseed = True  # 新容器内存为空，首条消息必须重播种（§7.6）
+        # system prompt manifest 已含当前全部附件（§6.6）：播种集合 = 全量 id，
+        # 之后轮次出现的新 id 才是运行中补传，需在消息里告知
+        engine.seeded_file_ids = {item["id"] for item in task_files}
         await transport.start()
         await engine.start()
         self._last_activity[task_id] = asyncio.get_running_loop().time()
@@ -538,7 +552,8 @@ class PiEngineManager:
             )
             try:
                 async for event in self._stream_attempt(
-                    engine, queue, handler, task_id=task_id, content=content
+                    engine, queue, handler, task_id=task_id, content=content,
+                    task_files=task_files,
                 ):
                     yield event
                 return
@@ -569,7 +584,7 @@ class PiEngineManager:
 
     async def _stream_attempt(
         self, engine: PiEngine, queue: asyncio.Queue, handler: EventHandler, *, task_id: int,
-        content: str,
+        content: str, task_files: list[dict],
     ) -> AsyncIterator[tuple[str, dict]]:
         """单次尝试：发消息并转发事件至 done/超时收尾；容器死亡抛 EngineCrashed。"""
 
@@ -584,7 +599,9 @@ class PiEngineManager:
         unsubscribe = engine.on_event(on_frame)
         reader = engine._reader_task
         try:
-            message = await self._build_outgoing_message(engine, task_id, content)
+            message = await self._build_outgoing_message(
+                engine, task_id, content, task_files
+            )
             await engine.send_prompt(message)
             engine.needs_reseed = False
             # §7.8 轮超时以整轮为限：deadline 一次计算，逐次扣减剩余时间，
@@ -635,11 +652,20 @@ class PiEngineManager:
         logger.error("Task %s: 轮超时，已发送 abort", task_id)
 
     async def _build_outgoing_message(
-        self, engine: PiEngine, task_id: int, content: str
+        self, engine: PiEngine, task_id: int, content: str, task_files: list[dict]
     ) -> str:
-        """重播种：历史窗口嵌入本条消息开头；正常轮只发当前消息（§7.6）。"""
-        if not engine.needs_reseed:
-            return content
+        """组装本轮发出的消息：重播种历史（§7.6）+ 运行中补传附件告知（§6.6）。"""
+        if engine.needs_reseed:
+            message = await self._reseed_message(engine, task_id, content)
+        else:
+            message = content
+        notice = self._attachment_notice(engine, task_files)
+        if notice:
+            message = f"{message}\n\n{notice}"
+        return message
+
+    async def _reseed_message(self, engine: PiEngine, task_id: int, content: str) -> str:
+        """重播种消息：最近历史嵌入本条消息开头（§7.6）；无历史则原样发送。"""
         history = await self._history_fetcher(
             task_id, self._settings.MAX_HISTORY_MESSAGES
         )
@@ -659,4 +685,25 @@ class PiEngineManager:
         lines.append("[当前消息]")
         lines.append(content)
         logger.info("Task %s: 重播种 %d 条历史", task_id, len(prior))
+        return "\n".join(lines)
+
+    def _attachment_notice(self, engine: PiEngine, task_files: list[dict]) -> str:
+        """运行中补传附件的告知块（§6.6）：不在容器播种集合内的文件，
+        在消息末尾告知 Agent 经只读挂载 /task-files 读取；告知后并入播种集合。"""
+        new_files = [
+            item for item in task_files if item.get("id") not in engine.seeded_file_ids
+        ]
+        if not new_files:
+            return ""
+        lines = [
+            "[附件更新]",
+            "用户在对话中上传了以下新文件（只读挂载 /task-files/，可用 read 工具查看）：",
+        ]
+        for item in new_files:
+            lines.append(
+                f"- {item.get('original_name', '')} → {item.get('agent_path', '')}"
+                f"（{_human_bytes(int(item.get('size_bytes') or 0))}）"
+            )
+        engine.seeded_file_ids.update(item["id"] for item in new_files)
+        logger.info("Task %s: 附件更新 %d 个新文件", engine.task_id, len(new_files))
         return "\n".join(lines)

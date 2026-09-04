@@ -8,8 +8,8 @@
   帧序 meta → text_delta×N → message_saved → done，schema 严格按 §6.6
 - 状态机：created --首条消息--> running（failed 可重试回 running，completed 409，
   专家下架 409）；用户消息先落库，assistant 完整回复经 message_saved 落库
-- 文件上传：仅 task.status=created 且无用户消息；文件名/单文件/数量/任务配额校验；
-  失败补偿（整批回滚，不留孤儿文件）
+- 文件上传：任务活跃期（created/running/failed）可传，终态拒绝；文件名/单文件/数量/
+  任务配额校验；失败补偿（整批回滚，不留孤儿文件）
 """
 
 import asyncio
@@ -709,7 +709,8 @@ def test_filename_rule_unit():
     assert service.validate_original_name("周报素材.txt") == "周报素材.txt"
 
 
-def test_upload_files_409_after_first_message(client, file_root):
+def test_upload_files_allowed_while_running(client, file_root):
+    """§6.6 放宽：任务开始后（running）仍可补传附件，落盘即入库。"""
     token, _, expert_id, _ = make_published_expert(client)
     task_id = create_task(client, token, expert_id).json()["data"]["task_id"]
     assert send_message(client, token, task_id, "开始吧").status_code == 200
@@ -718,8 +719,27 @@ def test_upload_files_409_after_first_message(client, file_root):
         files=[("files", ("late.txt", b"x", "text/plain"))],
         headers=auth_header(token),
     )
+    assert response.status_code == 201
+    listing = client.get(f"/api/tasks/{task_id}/files", headers=auth_header(token))
+    names = {item["original_name"] for item in listing.json()["data"]}
+    assert names == {"late.txt"}
+
+
+def test_upload_files_409_after_completed(client, file_root):
+    """终态任务拒绝补传（错误码随 TaskAlreadyStartedError 清理改为状态类）。"""
+    token, _, expert_id, _ = make_published_expert(client)
+    task_id = create_task(client, token, expert_id).json()["data"]["task_id"]
+    assert send_message(client, token, task_id, "开始吧").status_code == 200
+    assert client.post(
+        f"/api/tasks/{task_id}/complete", headers=auth_header(token)
+    ).status_code == 200
+    response = client.post(
+        f"/api/tasks/{task_id}/files",
+        files=[("files", ("late.txt", b"x", "text/plain"))],
+        headers=auth_header(token),
+    )
     assert response.status_code == 409
-    assert response.json()["error"]["code"] == "TASK_ALREADY_STARTED"
+    assert response.json()["error"]["code"] == "INVALID_STATE_TRANSITION"
 
 
 def test_upload_files_403_not_owner(client, file_root):
