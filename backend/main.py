@@ -55,7 +55,13 @@ app.add_middleware(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    # 5173 可能落入 Windows WinNAT 保留段（5159-5258），5260 为备用前端端口
+    allow_origins=[
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:5260",
+        "http://localhost:5260",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
