@@ -15,6 +15,7 @@ Agent 重新读图，同因 3 次耗尽，任务标记 failed。
 import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from backend.engine.docker_transport import MAX_LINE_BYTES, ContainerSpec, DockerCliTransport
 
@@ -145,3 +146,45 @@ async def test_subprocess_readline_drops_oversize_line_and_keeps_transport_alive
         assert second == "OK"
     finally:
         await transport.close()
+
+
+class _FakeMuxStream:
+    """按脚本回放 demux chunk 的假 attach 流。"""
+
+    def __init__(self, chunks: list[bytes]):
+        self._chunks = list(chunks)
+
+    async def read_out(self):
+        if self._chunks:
+            return SimpleNamespace(data=self._chunks.pop(0))
+        return None
+
+
+async def _assembled_lines(chunks: list[bytes], count: int) -> list[str]:
+    from backend.engine.docker_transport import _LineAssembler
+
+    assembler = _LineAssembler(_FakeMuxStream(chunks).read_out)
+    return [await assembler.readline() for _ in range(count)]
+
+
+async def test_line_assembler_joins_chunk_split_line():
+    """一行跨 3 个 chunk 必须拼装还原（Docker demux 按 write 边界分块）。"""
+    lines = await _assembled_lines([b"X" * 40_000, b"X" * 40_000, b"X\n"], 1)
+    assert lines == ["X" * 80_001]
+
+
+async def test_line_assembler_splits_coalesced_chunk():
+    """多个 write 合入同一 chunk 时必须逐行返回。"""
+    lines = await _assembled_lines([b'{"a":1}\n{"b":2}\n{"c":3}\n'], 3)
+    assert lines == ['{"a":1}', '{"b":2}', '{"c":3}']
+
+
+async def test_line_assembler_handles_crlf_and_partial_tail():
+    """\\r\\n 行尾正常剥离；EOF 残留无换行尾巴一次性返回不吞数据。"""
+    lines = await _assembled_lines([b'{"a":1}\r\n{"b":', b"2", b"}"], 2)
+    assert lines == ['{"a":1}', '{"b":2}']
+
+
+async def test_line_assembler_clean_eof_returns_none():
+    lines = await _assembled_lines([], 1)
+    assert lines == [None]

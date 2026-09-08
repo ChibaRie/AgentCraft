@@ -126,6 +126,37 @@ class ContainerSpec:
         }
 
 
+class _LineAssembler:
+    """把 aiodocker demux chunk 流还原为 JSONL 行（§7.6）。
+
+    Docker stdout 帧按容器进程 write 边界分块（大行必拆、小 write 可合），
+    按 '\n' 缓存切分逐行返回；EOF 残留尾巴一次性交出，不静默吞数据。
+    """
+
+    def __init__(self, read_out) -> None:  # read_out: 返回 .data(bytes)|None 的协程
+        self._read_out = read_out
+        self._buf = bytearray()
+        self._eof = False
+
+    async def readline(self) -> str | None:
+        while b"\n" not in self._buf:
+            if self._eof:
+                if not self._buf:
+                    return None
+                tail = self._buf.decode("utf-8", "replace")
+                self._buf.clear()
+                return tail
+            message = await self._read_out()
+            if message is None:
+                self._eof = True
+                continue
+            self._buf += message.data
+        idx = self._buf.index(b"\n")
+        line = bytes(self._buf[:idx])
+        del self._buf[: idx + 1]
+        return line.decode("utf-8").rstrip("\r")
+
+
 class DockerApiTransport:
     """aiodocker attach 流传输（write_line/readline/close）。"""
 
@@ -134,6 +165,7 @@ class DockerApiTransport:
         self._spec = spec
         self._container = None
         self._stream = None
+        self._assembler: _LineAssembler | None = None
 
     async def start(self) -> str:
         self._container = await self._docker.containers.create(**self._spec.to_api_kwargs())
@@ -141,6 +173,7 @@ class DockerApiTransport:
             stdin=True, stdout=True, stderr=False, stream=True
         )
         await self._container.start()
+        self._assembler = _LineAssembler(self._stream.read_out)
         logger.info("Pi 容器已启动 name=%s", self._spec.container_name)
         return self._container._id
 
@@ -149,11 +182,9 @@ class DockerApiTransport:
         await self._stream.write_in((line + "\n").encode("utf-8"))
 
     async def readline(self) -> str | None:
-        assert self._stream is not None
-        message = await self._stream.read_out()
-        if message is None:
+        if self._assembler is None:
             return None
-        return message.data.decode("utf-8").rstrip("\r\n")
+        return await self._assembler.readline()
 
     async def close(self) -> None:
         if self._stream is not None:
