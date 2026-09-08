@@ -154,6 +154,11 @@ class _LineAssembler:
                 continue
             self._buf += message.data
         idx = self._buf.index(b"\n")
+        if idx > MAX_LINE_BYTES:
+            # 已含分隔符的整块超限行（真实 demux 分块下不出现）：
+            # 防御性对齐 CLI 语义，丢弃返回空行哨兵
+            del self._buf[: idx + 1]
+            return ""
         line = bytes(self._buf[:idx])
         del self._buf[: idx + 1]
         return line.decode("utf-8").rstrip("\r")

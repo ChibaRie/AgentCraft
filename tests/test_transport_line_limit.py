@@ -203,3 +203,11 @@ async def test_line_assembler_hard_ceiling_without_separator():
     chunks = [b"X" * (8 * 1024 * 1024) for _ in range(9)]  # 72MiB 无换行
     lines = await _assembled_lines(chunks, 1)
     assert lines == [""]
+
+
+async def test_line_assembler_drops_single_chunk_oversize_line():
+    """已含分隔符的整块超限行同样丢弃为空行哨兵（防御性，对齐 CLI 语义）。"""
+    lines = await _assembled_lines(
+        [b"X" * (MAX_LINE_BYTES + 100) + b"\n", b"OK\n"], 2
+    )
+    assert lines == ["", "OK"]
