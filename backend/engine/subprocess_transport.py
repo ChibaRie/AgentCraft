@@ -14,6 +14,8 @@ import os
 import shutil
 from pathlib import Path
 
+from backend.engine.docker_transport import MAX_LINE_BYTES
+
 logger = logging.getLogger("agentcraft")
 
 # Windows npm 全局包默认布局；可用 PI_CLI_JS 覆盖
@@ -56,6 +58,7 @@ class SubprocessPiTransport:
             stderr=asyncio.subprocess.DEVNULL,
             cwd=self._cwd,
             env=self._env,
+            limit=MAX_LINE_BYTES,
         )
         logger.info("Pi 子进程已启动 pid=%s cwd=%s", self._proc.pid, self._cwd)
 
@@ -67,16 +70,36 @@ class SubprocessPiTransport:
     async def readline(self) -> str | None:
         if self._proc is None or self._proc.stdout is None:
             return None
-        raw = await self._proc.stdout.readline()
+        try:
+            raw = await self._proc.stdout.readline()
+        except ValueError:
+            # 行超过 limit（asyncio LimitOverrunError 包装）：超限帧整体丢弃（§7.6
+            # 末道防线），排空残留字节直至分隔符，返回空行交引擎静默跳过
+            # （pi_engine.handle_line 对空行直接 return），轮次继续至 agent_settled
+            await self._drain_oversize_line()
+            return ""
         if not raw:
             return None
         return raw.decode("utf-8").rstrip("\r\n")
 
+    async def _drain_oversize_line(self) -> None:
+        """排空超限行残留：LimitOverrunError 后数据仍在缓冲，读到分隔符或 EOF。"""
+        assert self._proc is not None and self._proc.stdout is not None
+        while True:
+            chunk = await self._proc.stdout.read(MAX_LINE_BYTES)
+            if not chunk or chunk.endswith(b"\n"):
+                return
+
     async def close(self) -> None:
         if self._proc is None:
             return
+        proc = self._proc
+        self._proc = None
         try:
-            self._proc.kill()
+            proc.kill()
         except ProcessLookupError:
             pass
-        self._proc = None
+        try:
+            await proc.wait()
+        except Exception:  # noqa: BLE001 - 收割失败不阻塞清理
+            pass

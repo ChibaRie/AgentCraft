@@ -97,3 +97,51 @@ async def test_readline_drops_oversize_line_and_keeps_transport_alive(tmp_path):
         assert second == "OK"
     finally:
         await transport.close()
+
+
+async def test_subprocess_transport_delivers_line_over_default_limit(tmp_path):
+    """无 Docker 回退通道同样必须还原超默认上限的大行。"""
+    from backend.engine.subprocess_transport import SubprocessPiTransport
+
+    emit = tmp_path / "emit_sub.py"
+    emit.write_text(
+        "import sys, time\n"
+        "sys.stdout.write('X' * 70_000 + chr(10))\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    transport = SubprocessPiTransport([sys.executable, str(emit)], cwd=tmp_path)
+    try:
+        await transport.start()
+        line = await asyncio.wait_for(transport.readline(), timeout=15)
+        assert line is not None, "stdout 提前 EOF：子进程未输出即退出"
+        assert len(line) == 70_000
+    finally:
+        await transport.close()
+
+
+async def test_subprocess_readline_drops_oversize_line_and_keeps_transport_alive(tmp_path):
+    """无 Docker 回退通道同样丢弃超限帧为空行哨兵，传输保持存活，后续行正常送达。"""
+    from backend.engine.subprocess_transport import SubprocessPiTransport
+
+    emit = tmp_path / "emit_sub_oversize.py"
+    emit.write_text(
+        "import sys, time\n"
+        f"sys.stdout.write('X' * ({MAX_LINE_BYTES} + 1_000_000) + chr(10))\n"
+        "sys.stdout.write('OK' + chr(10))\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    transport = SubprocessPiTransport([sys.executable, str(emit)], cwd=tmp_path)
+    try:
+        await transport.start()
+        first = await asyncio.wait_for(transport.readline(), timeout=30)
+        assert first == "", (
+            f"超限行应返回空行哨兵，实际 {type(first)} len={len(first) if first else 0}"
+        )
+        second = await asyncio.wait_for(transport.readline(), timeout=15)
+        assert second == "OK"
+    finally:
+        await transport.close()
