@@ -140,6 +140,8 @@ class _LineAssembler:
 
     async def readline(self) -> str | None:
         while b"\n" not in self._buf:
+            if len(self._buf) > MAX_LINE_BYTES:
+                return await self._drop_oversize_line()
             if self._eof:
                 if not self._buf:
                     return None
@@ -155,6 +157,30 @@ class _LineAssembler:
         line = bytes(self._buf[:idx])
         del self._buf[: idx + 1]
         return line.decode("utf-8").rstrip("\r")
+
+    async def _drop_oversize_line(self) -> str:
+        """超限帧丢弃（§7.6，与 CLI/subprocess 传输的空行哨兵语义对齐）。
+
+        排空至分隔符或 EOF；分隔符迟迟不来且缓冲越过 2×MAX_LINE_BYTES
+        硬顶（异常流）时整体清空返回空行哨兵，防控制面内存无界增长。
+        """
+        drained = len(self._buf)
+        while True:
+            if b"\n" in self._buf:
+                del self._buf[: self._buf.index(b"\n") + 1]
+                return ""
+            if self._eof:
+                self._buf.clear()
+                return ""
+            if drained > MAX_LINE_BYTES * 2:
+                self._buf.clear()
+                return ""
+            message = await self._read_out()
+            if message is None:
+                self._eof = True
+                continue
+            self._buf += message.data
+            drained += len(message.data)
 
 
 class DockerApiTransport:

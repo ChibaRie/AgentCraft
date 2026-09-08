@@ -188,3 +188,18 @@ async def test_line_assembler_handles_crlf_and_partial_tail():
 async def test_line_assembler_clean_eof_returns_none():
     lines = await _assembled_lines([], 1)
     assert lines == [None]
+
+
+async def test_line_assembler_drops_oversize_line_and_keeps_following():
+    """超 MAX_LINE_BYTES 的行在组装层被丢弃为空行哨兵，后续行正常送达。"""
+    lines = await _assembled_lines(
+        [b"X" * (MAX_LINE_BYTES + 100), b"\n", b"OK\n", b"END\n"], 3
+    )
+    assert lines == ["", "OK", "END"]
+
+
+async def test_line_assembler_hard_ceiling_without_separator():
+    """分隔符迟迟不来的异常流越过 2×MAX_LINE_BYTES 硬顶后清空返回哨兵。"""
+    chunks = [b"X" * (8 * 1024 * 1024) for _ in range(9)]  # 72MiB 无换行
+    lines = await _assembled_lines(chunks, 1)
+    assert lines == [""]
