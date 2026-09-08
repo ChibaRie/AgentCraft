@@ -16,8 +16,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-from backend.engine.docker_transport import DockerCliTransport, ContainerSpec
-from backend.engine.pi_engine import MAX_LINE_BYTES
+from backend.engine.docker_transport import MAX_LINE_BYTES, ContainerSpec, DockerCliTransport
 
 
 def _make_spec(tmp_path: Path) -> ContainerSpec:
@@ -50,7 +49,9 @@ def _make_stub(tmp_path: Path, line_chars: int) -> str:
 
 
 async def _read_big_line(tmp_path: Path, line_chars: int) -> str:
-    transport = DockerCliTransport(_make_spec(tmp_path), docker_bin=_make_stub(tmp_path, line_chars))
+    transport = DockerCliTransport(
+        _make_spec(tmp_path), docker_bin=_make_stub(tmp_path, line_chars)
+    )
     try:
         await transport.start()
         line = await asyncio.wait_for(transport.readline(), timeout=15)
@@ -70,3 +71,29 @@ async def test_readline_delivers_line_up_to_engine_max_line_bytes(tmp_path):
     """引擎 MAX_LINE_BYTES 以内的大行（真实图像帧量级）必须在传输层完整还原。"""
     line = await _read_big_line(tmp_path, MAX_LINE_BYTES - 100_000)
     assert len(line) == MAX_LINE_BYTES - 100_000
+
+
+async def test_readline_drops_oversize_line_and_keeps_transport_alive(tmp_path):
+    """超过 MAX_LINE_BYTES 的行被丢弃为空行哨兵，传输保持存活，后续行正常送达。"""
+    emit = tmp_path / "emit_oversize.py"
+    emit.write_text(
+        "import sys, time\n"
+        f"sys.stdout.write('X' * ({MAX_LINE_BYTES} + 1_000_000) + chr(10))\n"
+        "sys.stdout.write('OK' + chr(10))\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    stub = tmp_path / "fake-docker-oversize.cmd"
+    stub.write_text(f'@echo off\r\n"{sys.executable}" "{emit}"\r\n', encoding="ascii")
+    transport = DockerCliTransport(_make_spec(tmp_path), docker_bin=str(stub))
+    try:
+        await transport.start()
+        first = await asyncio.wait_for(transport.readline(), timeout=30)
+        assert first == "", (
+            f"超限行应返回空行哨兵，实际 {type(first)} len={len(first) if first else 0}"
+        )
+        second = await asyncio.wait_for(transport.readline(), timeout=15)
+        assert second == "OK"
+    finally:
+        await transport.close()
