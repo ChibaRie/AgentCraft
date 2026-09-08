@@ -21,14 +21,12 @@ import logging
 from collections.abc import Callable
 from typing import Protocol
 
+from backend.engine.docker_transport import MAX_LINE_BYTES
+
 logger = logging.getLogger("agentcraft")
 
 # extension_ui_request 应答时限（§3.2：必须在 2s 内应答，否则扩展调用挂起）
 UI_RESPONSE_DEADLINE_SECONDS = 2.0
-
-# 单行长度上限：JSONL 帧正常远小于此；超限视为异常输出直接丢弃（内存防线）。
-# 64KiB 系统提示词 + 32KiB 消息经 echo 类引擎回放仍远低于 1MiB。
-MAX_LINE_BYTES = 1024 * 1024
 
 
 class PiEngineError(Exception):

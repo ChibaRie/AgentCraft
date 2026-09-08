@@ -23,6 +23,13 @@ from pathlib import Path
 
 logger = logging.getLogger("agentcraft")
 
+# JSONL 帧行上限（字节）。推导：任务文件单文件上限 20MiB（config.UPLOAD_MAX_FILE_BYTES）
+# × base64 膨胀 4/3（≈27.3MiB）+ JSON 信封余量，取整 32MiB（§7.6）。
+# 传输层 limit 与引擎层超长行防护（pi_engine）共用此常量，两层必须对齐——
+# 2026-09-08 任务4事故：asyncio 默认 64KB 在传输层先抛 ValueError，
+# 引擎防护从未生效，图像 tool_result 大帧致崩溃恢复 3 次耗尽。
+MAX_LINE_BYTES = 32 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class ContainerSpec:
@@ -175,6 +182,7 @@ class DockerCliTransport:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=MAX_LINE_BYTES,
         )
         self._stderr_task = asyncio.create_task(self._drain_stderr())
         return self._spec.container_name
