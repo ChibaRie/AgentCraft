@@ -5,6 +5,7 @@ users / user_entitlements / invitations / account_action_tokens / email_outbox /
 部分唯一索引 one_active_entitlement / invitations_one_open_email 与 Task 6 迁移 SQL
 （Database Design §3）一字不差，模型侧与迁移侧双保险。
 """
+
 import uuid as _uuid
 from datetime import datetime
 
@@ -37,6 +38,10 @@ class User(TimestampMixin, Base):
         check_enum("users", "role", USER_ROLES),
         check_enum("users", "status", USER_STATUSES),
         CheckConstraint("deleted_at IS NULL OR status = 'deleted'", name="deleted_consistency"),
+        CheckConstraint(
+            "deletion_deadline_at IS NULL OR status = 'deleting'",
+            name="deletion_deadline_consistency",
+        ),
     )
     id: Mapped[_uuid.UUID] = pk_uuid()
     email: Mapped[str] = mapped_column(String(254), unique=True, nullable=False)
@@ -45,6 +50,7 @@ class User(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     mfa_secret_enc: Mapped[str | None] = mapped_column(Text)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deletion_deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class UserEntitlement(Base):
@@ -134,3 +140,4 @@ class Session(TimestampMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     mfa_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    device_label: Mapped[str | None] = mapped_column(String(200))

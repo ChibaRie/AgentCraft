@@ -20,8 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _run_alembic(dsn: str, *args: str) -> None:
     env = {**os.environ, "AGENTCRAFT_V2_DATABASE_URL": dsn}
-    subprocess.run([sys.executable, "-m", "alembic", "-c", "alembic_v2.ini", *args],
-                   cwd=ROOT, env=env, check=True)
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", "alembic_v2.ini", *args],
+        cwd=ROOT,
+        env=env,
+        check=True,
+    )
 
 
 async def _create_db(base: str, name: str) -> None:
@@ -61,26 +65,30 @@ def test_seeds_and_roles_present(pg_url_base):
         async def _check():
             eng = create_async_engine(dsn)
             async with eng.connect() as conn:
-                ver = (await conn.execute(
-                    text("SELECT version_num FROM alembic_version")
-                )).scalar_one()
-                assert ver == "0002"
-                slots = (await conn.execute(
-                    text("SELECT count(*) FROM platform_slots")
-                )).scalar_one()
-                storage = (await conn.execute(
-                    text("SELECT max_retained_storage_bytes FROM platform_storage")
-                )).scalar_one()
-                tools = (await conn.execute(
-                    text("SELECT count(*) FROM tool_catalog")
-                )).scalar_one()
-                catalogs = (await conn.execute(
-                    text("SELECT count(*) FROM provider_catalog")
-                )).scalar_one()
-                roles = (await conn.execute(text(
-                    "SELECT count(*) FROM pg_roles "
-                    "WHERE rolname IN ('agentcraft_app','agentcraft_admin')"
-                ))).scalar_one()
+                ver = (
+                    await conn.execute(text("SELECT version_num FROM alembic_version"))
+                ).scalar_one()
+                assert ver == "0003"
+                slots = (
+                    await conn.execute(text("SELECT count(*) FROM platform_slots"))
+                ).scalar_one()
+                storage = (
+                    await conn.execute(
+                        text("SELECT max_retained_storage_bytes FROM platform_storage")
+                    )
+                ).scalar_one()
+                tools = (await conn.execute(text("SELECT count(*) FROM tool_catalog"))).scalar_one()
+                catalogs = (
+                    await conn.execute(text("SELECT count(*) FROM provider_catalog"))
+                ).scalar_one()
+                roles = (
+                    await conn.execute(
+                        text(
+                            "SELECT count(*) FROM pg_roles "
+                            "WHERE rolname IN ('agentcraft_app','agentcraft_admin')"
+                        )
+                    )
+                ).scalar_one()
             await eng.dispose()
             assert (slots, storage, tools, catalogs, roles) == (2, 64424509440, 5, 3, 2)
 

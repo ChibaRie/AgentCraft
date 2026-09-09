@@ -15,10 +15,10 @@
   静默 0 行受影响（PostgreSQL 不抛错——brief 的 pytest.raises 版本据此修正为
   rowcount 断言）
 - 未知角色无法连接（PUBLIC 表权限已全撤、角色白名单封闭）
-- 目录契约（Task 6 评审补充）：policy 总数 ≥54（纳入 experts/skills 后实际 64）；
-  admin 角色专属 policy ≥12（实际 15）且 app 角色不持有任何 *_admin_* policy；
-  app 授权表白名单 26 张表；11 张 owner 表 relrowsecurity/relforcerowsecurity
-  双真（FORCE：表 owner 亦受 RLS 约束）
+- 目录契约（Task 6 评审补充）：policy 总数 ≥54（0003 后实际 71）；
+  admin 角色专属 policy ≥12（实际 18）且 app 角色不持有任何 *_admin_* policy；
+  app 授权表白名单 28 张表（0003 起纳入 users/user_entitlements）；11 张 owner 表
+  relrowsecurity/relforcerowsecurity 双真（FORCE：表 owner 亦受 RLS 约束）
 - experts/skills（终审 F2）：owner RLS + 发布可见性——SELECT 放行
   status='published'（陌生 owner / 无上下文 guest 可读公开目录）或 owner 本人；
   UPDATE/DELETE 仅 owner 本人 → 跨 owner 发布指针劫持（published_revision_id
@@ -497,8 +497,9 @@ async def test_policy_catalog_matches_rls_contract(pg: PgDb) -> None:
 
 
 async def test_app_grant_whitelist_table_count(pg: PgDb) -> None:
-    """app role 表授权白名单：23 张 DML + 3 张只读 = 26 张
-    （users/user_entitlements/content_reviews/audit_logs/alembic_version 均无授权）。"""
+    """app role 表授权白名单：25 张 DML + 3 张只读 = 28 张（0003：users 新增
+    SELECT/INSERT/UPDATE，user_entitlements 新增 SELECT，invitations 补 UPDATE 转 DML；
+    content_reviews/audit_logs/alembic_version 仍无授权）。"""
     async with pg.engine.begin() as conn:
         n = (
             await conn.execute(
@@ -509,7 +510,7 @@ async def test_app_grant_whitelist_table_count(pg: PgDb) -> None:
                 )
             )
         ).scalar_one()
-    assert n == 26
+    assert n == 28
 
 
 async def test_owner_tables_have_rls_enabled_and_forced(pg: PgDb) -> None:
@@ -529,6 +530,103 @@ async def test_owner_tables_have_rls_enabled_and_forced(pg: PgDb) -> None:
     assert {r[0] for r in rows} == set(OWNER_TABLES)
     for relname, rls, force in rows:
         assert (rls, force) == (True, True), relname
+
+
+async def test_users_rls_own_row_visible_and_update_allowed(pg):
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        uid = _uuid.uuid4()
+        async with app.begin() as conn:
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": str(uid)})
+            await conn.execute(
+                text(
+                    "INSERT INTO users (id, email, password_hash, role, status) "
+                    "VALUES (:i, 'a@x.test', 'h', 'user', 'pending')"
+                ),
+                {"i": str(uid)},
+            )
+            email = (
+                await conn.execute(text("SELECT email FROM users WHERE id = :i"), {"i": str(uid)})
+            ).scalar_one()
+            assert email == "a@x.test"
+            await conn.execute(
+                text("UPDATE users SET status='active' WHERE id = :i"), {"i": str(uid)}
+            )
+    finally:
+        await app.dispose()
+
+
+async def test_users_rls_cross_owner_invisible(pg):
+    """陌生 owner：SELECT 0 行、UPDATE 0 行（RLS 默认拒绝语义）。"""
+    super_engine = pg.engine
+    other = _uuid.uuid4()
+    async with super_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO users (id, email, password_hash, role, status) "
+                "VALUES (:i, 'b@x.test', 'h', 'user', 'pending')"
+            ),
+            {"i": str(other)},
+        )
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        mine = _uuid.uuid4()
+        async with app.begin() as conn:
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": str(mine)})
+            rows = (await conn.execute(text("SELECT count(*) FROM users"))).scalar_one()
+            assert rows == 0  # 看不到任何他人行
+            result = await conn.execute(
+                text("UPDATE users SET status='active' WHERE id = :i"), {"i": str(other)}
+            )
+            assert result.rowcount == 0
+    finally:
+        await app.dispose()
+
+
+async def test_app_can_update_invitations_and_admin_update_outbox(pg):
+    # 种子经 superuser：app 对 invitations 无 INSERT、admin 对 owner-RLS 表无 INSERT policy
+    app = _role_engine(pg, APP_ROLE)
+    admin = _role_engine(pg, ADMIN_ROLE)
+    try:
+        async with pg.engine.begin() as seed:
+            uid = _uuid.uuid4()
+            await seed.execute(
+                text(
+                    "INSERT INTO users (id, email, password_hash, role, status) "
+                    "VALUES (:i, 'd@x.test', 'h', 'user', 'active')"
+                ),
+                {"i": str(uid)},
+            )
+            await seed.execute(
+                text(
+                    "INSERT INTO invitations (id, token_hash, email, expires_at) "
+                    "VALUES (:i, :t, 'c@x.test', now() + interval '1 day')"
+                ),
+                {"i": str(_uuid.uuid4()), "t": "f" * 64},
+            )
+            # attempts NOT NULL 无 server default
+            await seed.execute(
+                text(
+                    "INSERT INTO email_outbox (id, user_id, purpose, payload_ciphertext, "
+                    "state, attempts) "
+                    "VALUES (:i, :u, 'email_verify', '{}', 'pending', 0)"
+                ),
+                {"i": str(_uuid.uuid4()), "u": str(uid)},
+            )
+        async with app.begin() as conn:
+            result = await conn.execute(
+                text("UPDATE invitations SET consumed_at = now() WHERE token_hash = :t"),
+                {"t": "f" * 64},
+            )
+            assert result.rowcount == 1  # 0003 之前 42501
+        async with admin.begin() as conn:
+            result = await conn.execute(
+                text("UPDATE email_outbox SET state='sent' WHERE state='pending'")
+            )
+            assert result.rowcount == 1  # 0003 之前静默 0 行
+    finally:
+        await app.dispose()
+        await admin.dispose()
 
 
 # ---------- 信任边界固化（方案 1 重定界，终审 F1）----------
