@@ -376,11 +376,16 @@ async def pg(pg_template) -> PgDb:
 
 @pytest.fixture
 async def pg_fresh(pg) -> PgDb:
-    """Task 2-5 模型测试用：测试库尚未有迁移表（模板库为空），直接按当前模型建表。
-    Task 6 之后模板库已有真实 schema，本夹具的 create_all 为 checkfirst 空操作，无冲突。"""
+    """Task 2-5 模型测试用：按当前模型建表并保证空库起点。
+
+    Task 6 之后模板库已含迁移 schema 与 0002 种子（provider/tool/槽位/存储）：
+    create_all 为 checkfirst 空操作，但种子行会随克隆库进入测试库——
+    按元数据依赖逆序清空全部表行，维持模型测试假设的空库
+    （Task 7 的 pg 夹具不走此处，种子原样保留）。"""
     from backend.v2.models import Base
 
     async with pg.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        for table in reversed(Base.metadata.sorted_tables):
+            await conn.execute(table.delete())
     return pg
-    app.dependency_overrides.pop(get_db, None)
