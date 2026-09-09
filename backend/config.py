@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import model_validator
+from pydantic import ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -61,4 +61,13 @@ class Settings(BaseSettings):
 
 
 def get_settings() -> Settings:
-    return Settings()
+    """构造 Settings；校验失败时只透出干净校验消息（不携带任何输入值 repr）。
+
+    pydantic 的 ValidationError 被 str()/traceback 打印时会嵌入截断的
+    input_value 片段（可能泄露 TASK_TOKEN_SECRET 尾巴），生产启动崩溃
+    信息必须只含校验消息，故改抛 RuntimeError（from None 隐藏异常链）。
+    """
+    try:
+        return Settings()
+    except ValidationError as exc:
+        raise RuntimeError("; ".join(err["msg"] for err in exc.errors())) from None
