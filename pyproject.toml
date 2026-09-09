@@ -18,6 +18,8 @@ dependencies = [
     "bcrypt==4.0.1",
     "aiodocker>=0.27.0",
     "cryptography>=50.0.1",
+    "asyncpg>=0.31.0",
+    "testcontainers>=4.15.0",
 ]
 
 [dependency-groups]
@@ -39,3 +41,7 @@ mccabe = { max-complexity = 10 }
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI 依赖注入的标准写法即函数默认值中调用 Depends()
 extend-immutable-calls = ["fastapi.Depends", "fastapi.File"]
+
+[tool.ruff.lint.per-file-ignores]
+# conftest.py 末尾追加的 V2 PostgreSQL 夹具块刻意自带 import（不依赖文件头部引入顺序）
+"tests/conftest.py" = ["E402", "F811"]

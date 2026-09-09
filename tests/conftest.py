@@ -257,4 +257,130 @@ def client(test_db):
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app) as test_client:
         yield test_client
+
+
+# ---------- V2 PostgreSQL 夹具（仅 v2 测试请求；需要本机 Docker）----------
+import asyncio
+import os
+import subprocess
+import sys
+import uuid as _uuid
+from pathlib import Path
+from typing import NamedTuple
+from urllib.parse import urlsplit, urlunsplit
+
+import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+
+_AGENTCRAFT_ROOT = Path(__file__).resolve().parents[1]
+
+_APP_ROLE = ("agentcraft_app", "change-me-app-local")
+_ADMIN_ROLE = ("agentcraft_admin", "change-me-admin-local")
+APP_ROLE = _APP_ROLE
+ADMIN_ROLE = _ADMIN_ROLE
+
+
+def _strip_dbname(dsn: str) -> str:
+    """postgresql+asyncpg://u:p@h:port/db -> postgresql+asyncpg://u:p@h:port（不含库名）"""
+    parts = urlsplit(dsn)
+    return urlunsplit((parts.scheme, parts.netloc, "", "", ""))
+
+
+def _role_dsn(base_dsn: str, user: str, password: str) -> str:
+    head, _, tail = base_dsn.partition("://")
+    _, _, hostpart = tail.rpartition("@")
+    return f"{head}://{user}:{password}@{hostpart}"
+
+
+def _admin_engine(base_dsn: str):
+    # 建/删库用 AUTOCOMMIT，绕开 PG「不能在事务块内 CREATE/DROP DATABASE」限制
+    return create_async_engine(base_dsn, isolation_level="AUTOCOMMIT")
+
+
+@pytest.fixture(scope="session")
+def pg_url_base():
+    custom = os.environ.get("AGENTCRAFT_TEST_PG_URL")
+    if custom:
+        yield _strip_dbname(custom.rstrip("/"))
+        return
+    from testcontainers.postgres import PostgresContainer
+
+    with PostgresContainer("postgres:16-alpine") as pg:
+        raw = pg.get_connection_url()  # postgresql+psycopg2://test:test@host:port/test（自带库名）
+        async_url = raw.replace("postgresql+psycopg2://", "postgresql+asyncpg://")
+        yield _strip_dbname(async_url)
+
+
+def _run_migrations(dsn: str) -> None:
+    env = {**os.environ, "AGENTCRAFT_V2_DATABASE_URL": dsn}
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", "alembic_v2.ini", "upgrade", "head"],
+        cwd=_AGENTCRAFT_ROOT, env=env, check=True,
+    )
+
+
+@pytest.fixture(scope="session")
+def pg_template(pg_url_base):
+    """建模板库并跑 v2 迁移；注意：Task 6 之前 versions/ 为空，upgrade 是无害空操作。"""
+    tpl = "ac_template_v2"
+    admin = _admin_engine(pg_url_base)
+
+    async def _recreate():
+        async with admin.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{tpl}" WITH (FORCE)'))
+            await conn.execute(text(f'CREATE DATABASE "{tpl}"'))
+
+    asyncio.run(_recreate())
+    asyncio.run(admin.dispose())
+    _run_migrations(f"{pg_url_base}/{tpl}")
+    yield pg_url_base
+
+
+class PgDb(NamedTuple):
+    engine: AsyncEngine   # superuser 引擎（造数据用，绕过 RLS；普通事务即可）
+    base_url: str         # 维护 DSN（不含库名）
+    name: str             # 本测试库名
+
+    def url(self) -> str:
+        return f"{self.base_url}/{self.name}"
+
+    def role_url(self, user: str, password: str) -> str:
+        return _role_dsn(self.url(), user, password)
+
+
+async def _clone_from_template(base_url: str, name: str) -> None:
+    admin = _admin_engine(base_url)
+    async with admin.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{name}" TEMPLATE "ac_template_v2"'))
+    await admin.dispose()
+
+
+async def _drop_db(base_url: str, name: str) -> None:
+    admin = _admin_engine(base_url)
+    async with admin.connect() as conn:
+        await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+    await admin.dispose()
+
+
+@pytest.fixture
+async def pg(pg_template) -> PgDb:
+    base = pg_template
+    name = f"ac_test_{_uuid.uuid4().hex[:10]}"
+    await _clone_from_template(base, name)
+    db = PgDb(create_async_engine(f"{base}/{name}"), base, name)
+    yield db
+    await db.engine.dispose()
+    await _drop_db(base, name)
+
+
+@pytest.fixture
+async def pg_fresh(pg) -> PgDb:
+    """Task 2-5 模型测试用：测试库尚未有迁移表（模板库为空），直接按当前模型建表。
+    Task 6 之后模板库已有真实 schema，本夹具的 create_all 为 checkfirst 空操作，无冲突。"""
+    from backend.v2.models import Base
+
+    async with pg.engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    return pg
     app.dependency_overrides.pop(get_db, None)
