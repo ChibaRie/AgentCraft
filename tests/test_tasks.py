@@ -261,11 +261,19 @@ def test_create_task_rejects_windows_alias_workdir(client, workspace_root):
 
 
 def test_create_task_rejects_overlong_workdir(client, workspace_root):
-    """派生存储值超过 tasks.workdir VARCHAR(500) 时拒绝（§3.5）。"""
+    """派生存储值超过 tasks.workdir VARCHAR(500) 时拒绝（§3.5）。
+
+    校验顺序（task_service.create_task）：parse_relative_workdir 的相对段长度
+    上限（500 - 根前缀 - 1 = 477 字符）先于存在性/符号链接检查，故超长段只需
+    出现在发送给 API 的相对路径字符串里，不得在磁盘创建——Linux 对超过
+    NAME_MAX（255 字节/段）的路径做 lstat 会抛 ENAMETOOLONG（Errno 36），
+    长度校验在两个平台走同一条纯字符串拒绝路径。
+    """
     token, _, expert_id, _ = make_published_expert(client)
     (workspace_root / "longdir").mkdir()
-    response = create_task(client, token, expert_id, workdir="longdir/" + "段" * 250)
+    response = create_task(client, token, expert_id, workdir="longdir/" + "段" * 480)
     assert response.status_code == 400
+    assert response.json()["error"]["code"] == "WORKDIR_INVALID"
 
 
 def test_create_task_404_when_expert_not_published(client):
