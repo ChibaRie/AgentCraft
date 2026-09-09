@@ -193,7 +193,8 @@ async def test_task_status_enum_eight_states(pg_fresh):
 async def test_one_active_round_per_task_partial_index(pg_fresh):
     """部分唯一索引 one_active_round_per_task（谓词 state IN
     pending/running/cancelling）：同 task 两行 active 态 → 违反；
-    cancelled 不占活跃名额（谓词范围正对照）；首轮转 settled 后新 pending 可建。"""
+    cancelled 不占活跃名额（谓词范围正对照）；首轮转 settled 后新 pending 可建；
+    另覆盖 ROUND_STATES 的 cancelling/failed 正面插入与未知 state 拒绝（F2a）。"""
     maker = async_sessionmaker(pg_fresh.engine, expire_on_commit=False)
     assert ROUND_STATES == ("pending", "running", "cancelling", "settled", "failed", "cancelled")
     task_id, parents, msg1 = await _seed_task_with_message(maker, "round@example.com")
@@ -230,8 +231,36 @@ async def test_one_active_round_per_task_partial_index(pg_fresh):
         await s.commit()
     msg3 = await _seed_message(maker, task_id, owner_id, event_sequence=2)
     async with maker() as s:
-        s.add(TaskRound(task_id=task_id, owner_id=owner_id, source_message_id=msg3))
+        r3 = TaskRound(task_id=task_id, owner_id=owner_id, source_message_id=msg3)
+        s.add(r3)
         await s.commit()
+        round3_id = r3.id
+    # F2(a)：cancelling 正面插入（msg3 轮让位 active 名额后）
+    async with maker() as s:
+        row = await s.get(TaskRound, round3_id)
+        row.state = "settled"
+        await s.commit()
+    msg4 = await _seed_message(maker, task_id, owner_id, event_sequence=3)
+    async with maker() as s:
+        s.add(TaskRound(
+            task_id=task_id, owner_id=owner_id, source_message_id=msg4, state="cancelling",
+        ))
+        await s.commit()
+    # F2(a)：failed 正面插入（failed 不在谓词内，与存活 cancelling 轮并存合法）
+    msg5 = await _seed_message(maker, task_id, owner_id, event_sequence=4)
+    async with maker() as s:
+        s.add(TaskRound(
+            task_id=task_id, owner_id=owner_id, source_message_id=msg5, state="failed",
+        ))
+        await s.commit()
+    # F2(a)：未知 state 被拒（ck_task_rounds_state_enum）
+    msg6 = await _seed_message(maker, task_id, owner_id, event_sequence=5)
+    async with maker() as s:
+        s.add(TaskRound(
+            task_id=task_id, owner_id=owner_id, source_message_id=msg6, state="settling",
+        ))
+        with pytest.raises(IntegrityError):
+            await s.commit()
     # 反射：partial 索引名 + 列 + 唯一 + 谓词
     async with pg_fresh.engine.connect() as conn:
         indexes = await conn.run_sync(lambda c: inspect(c).get_indexes("task_rounds"))
@@ -276,7 +305,8 @@ async def test_round_source_message_unique(pg_fresh):
 async def test_reservation_unique_active_per_task(pg_fresh):
     """one_live_active_reservation：同 task 两行 kind=active 活动态（held/consumed）
     → 违反；released 退出谓词 → 可再建；kind 之间互不影响（task_root 与 active 并存）；
-    kind/state 封闭枚举；user/kind/state 组合索引反射。"""
+    kind/state 封闭枚举；kind=running 与 active 同构证明（F2b）；
+    user/kind/state 组合索引反射。"""
     maker = async_sessionmaker(pg_fresh.engine, expire_on_commit=False)
     assert RESERVATION_KINDS == ("active", "running", "task_root", "artifact_copy")
     assert RESERVATION_STATES == ("held", "consumed", "released")
@@ -311,6 +341,23 @@ async def test_reservation_unique_active_per_task(pg_fresh):
         await s.commit()
     async with maker() as s:
         s.add(TaskReservation(task_id=task_id, user_id=owner_id, kind="active"))
+        await s.commit()
+    # F2(b)：kind="running" 与 active 同构——one_live_running_reservation
+    async with maker() as s:
+        rr = TaskReservation(task_id=task_id, user_id=owner_id, kind="running", bytes=64)
+        s.add(rr)
+        await s.commit()
+        running1_id = rr.id
+    async with maker() as s:
+        s.add(TaskReservation(task_id=task_id, user_id=owner_id, kind="running"))
+        with pytest.raises(IntegrityError):
+            await s.commit()
+    async with maker() as s:
+        row = await s.get(TaskReservation, running1_id)
+        row.state = "released"
+        await s.commit()
+    async with maker() as s:
+        s.add(TaskReservation(task_id=task_id, user_id=owner_id, kind="running"))
         await s.commit()
     # kind / state 封闭枚举
     async with maker() as s:
@@ -407,8 +454,9 @@ async def test_artifact_copy_reservation_per_file(pg_fresh):
 
 
 async def test_task_file_name_single_segment_and_states(pg_fresh):
-    """file_name 禁路径分隔（CHECK file_name_single_segment：'/' 与 '\\' 字面量
-    均被拒）；direction 封闭于 input/output；state 封闭于 FILE_STATES（默认 staged）；
+    """file_name 禁路径分隔（CHECK file_name_single_segment：'/' 与任意反斜杠
+    均被拒——渲染 SQL 的 needle 为单字符 '\\'，Windows 分隔符 a\\b.pdf 无法绕过）；
+    direction 封闭于 input/output；state 封闭于 FILE_STATES（默认 staged）；
     冗余 owner_id 缺失 → NOT NULL 违例。"""
     maker = async_sessionmaker(pg_fresh.engine, expire_on_commit=False)
     assert FILE_STATES == ("staged", "committed", "registered", "deleted")
@@ -426,7 +474,12 @@ async def test_task_file_name_single_segment_and_states(pg_fresh):
         s.add(TaskFile(**_file_kwargs(task_id, owner_id, file_name="a/b.pdf")))
         with pytest.raises(IntegrityError):
             await s.commit()
-    # '\\' 字面量被拒（CHECK 文本 position('\\' ...) 按标准字符串匹配连续反斜杠）
+    # 单个反斜杠被拒（Windows 分隔符 a\b.pdf —— F1：needle 必须是单字符 '\'）
+    async with maker() as s:
+        s.add(TaskFile(**_file_kwargs(task_id, owner_id, file_name="a\\b.pdf")))
+        with pytest.raises(IntegrityError):
+            await s.commit()
+    # 连续双反斜杠同样被拒（含单反斜段子串）
     async with maker() as s:
         s.add(TaskFile(**_file_kwargs(task_id, owner_id, file_name="a\\\\b.pdf")))
         with pytest.raises(IntegrityError):

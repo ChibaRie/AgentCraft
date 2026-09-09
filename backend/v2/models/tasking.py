@@ -102,7 +102,7 @@ class TaskFile(Base):
         check_enum("task_files", "direction", ("input", "output")),
         check_enum("task_files", "state", FILE_STATES),
         CheckConstraint(
-            "position('/' in file_name) = 0 AND position('\\\\' in file_name) = 0",
+            "position('/' in file_name) = 0 AND position('\\' in file_name) = 0",
             name="file_name_single_segment",
         ),
     )
