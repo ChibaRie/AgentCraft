@@ -1,6 +1,6 @@
 """聚合出口：alembic_v2 env.py 的 target_metadata 指向 Base.metadata。
 新模型必须在此 import 才会进入 autogenerate 视野。"""
-from backend.v2.models import catalog, identity
+from backend.v2.models import catalog, content, identity
 from backend.v2.models.base import Base, TimestampMixin, check_enum, pk_uuid
 from backend.v2.models.catalog import (
     PROVIDER_STATUSES,
@@ -13,6 +13,20 @@ from backend.v2.models.catalog import (
     UserProvider,
     UserQuota,
     UserQuotaUsage,
+)
+from backend.v2.models.content import (
+    ENTITY_STATUSES,
+    REPORT_STATUSES,
+    REVISION_STATUSES,
+    AuditLog,
+    ContentReview,
+    Expert,
+    ExpertRevision,
+    Report,
+    RevisionTool,
+    Skill,
+    SkillRevision,
+    ToolCatalog,
 )
 from backend.v2.models.identity import (
     ACTION_TOKEN_PURPOSES,
@@ -32,22 +46,34 @@ from backend.v2.models.identity import (
 __all__ = [
     "ACTION_TOKEN_PURPOSES",
     "ENTITLEMENTS",
+    "ENTITY_STATUSES",
     "OUTBOX_PURPOSES",
     "OUTBOX_STATES",
     "PROVIDER_STATUSES",
+    "REPORT_STATUSES",
+    "REVISION_STATUSES",
     "SLOT_STATES",
     "USER_ROLES",
     "USER_STATUSES",
     "AccountActionToken",
+    "AuditLog",
     "Base",
+    "ContentReview",
     "EmailOutbox",
+    "Expert",
+    "ExpertRevision",
     "Invitation",
     "PlatformSlot",
     "PlatformStorage",
     "ProviderCatalog",
     "RateLimitEvent",
+    "Report",
+    "RevisionTool",
     "Session",
+    "Skill",
+    "SkillRevision",
     "TimestampMixin",
+    "ToolCatalog",
     "UsageDaily",
     "User",
     "UserEntitlement",
@@ -56,6 +82,7 @@ __all__ = [
     "UserQuotaUsage",
     "catalog",
     "check_enum",
+    "content",
     "identity",
     "pk_uuid",
 ]
