@@ -6,8 +6,10 @@ Create Date: 2026-09-09
 
 Task 6（V2 Phase 1）：30 张表由 autogenerate 自 backend/v2/models 元数据生成；
 手工追加：4 条循环外键补建、DB 角色、owner 上下文函数、表级授权白名单
-（Database Design §3.1）、owner/revision/report RLS 策略。
-downgrade 末尾 DROP SCHEMA app CASCADE（函数随 schema 删除；角色保留，幂等创建）。
+（Database Design §3.1）、owner/revision/report RLS 策略；experts/skills 为
+owner+发布可见性特例（终审 F2）。
+downgrade 末尾 DROP SCHEMA app CASCADE（函数随 schema 删除；角色保留，幂等创建；
+policy 均表级作用域，随 DROP TABLE 一并清除，无显式 policy DROP）。
 """
 
 from typing import Sequence, Union
@@ -1056,6 +1058,41 @@ def upgrade() -> None:
             )
         op.execute(
             f"CREATE POLICY {table}_admin_read ON {table} FOR SELECT "
+            f"TO agentcraft_admin USING (true);"
+        )
+
+    # ---- 特例：experts / skills（终审 F2：owner RLS + 发布可见性）----
+    # 不进上面的 owner_tables 循环，逐表手工建模，与循环模板的两点差异：
+    # 1. SELECT 对 status='published' 放行（陌生 owner / 无上下文 guest 可读
+    #    公开目录）——纯 owner 匹配会把已发布内容对陌生人隐藏；
+    # 2. UPDATE/DELETE 的 USING 仅匹配 owner 本人 → 跨 owner 发布指针劫持
+    #    （published_revision_id 改写）与级联删除他人 revision 被静默 0 行拒绝。
+    # admin 侧与 owner 表一致：仅 admin_read 全量 SELECT（UPDATE/DELETE 无适用
+    # policy → 静默 0 行；处置类写操作经应用层以 superuser/专用角色执行）。
+    for pub_table in ("experts", "skills"):
+        op.execute(f"ALTER TABLE {pub_table} ENABLE ROW LEVEL SECURITY;")
+        op.execute(f"ALTER TABLE {pub_table} FORCE ROW LEVEL SECURITY;")
+        op.execute(
+            f"CREATE POLICY {pub_table}_app_select ON {pub_table} FOR SELECT "
+            f"TO agentcraft_app "
+            f"USING (status = 'published' OR {pub_table}.owner_id = app.current_owner_id());"
+        )
+        op.execute(
+            f"CREATE POLICY {pub_table}_app_insert ON {pub_table} FOR INSERT "
+            f"TO agentcraft_app WITH CHECK (owner_id = app.current_owner_id());"
+        )
+        op.execute(
+            f"CREATE POLICY {pub_table}_app_update ON {pub_table} FOR UPDATE "
+            f"TO agentcraft_app "
+            f"USING (owner_id = app.current_owner_id()) "
+            f"WITH CHECK (owner_id = app.current_owner_id());"
+        )
+        op.execute(
+            f"CREATE POLICY {pub_table}_app_delete ON {pub_table} FOR DELETE "
+            f"TO agentcraft_app USING (owner_id = app.current_owner_id());"
+        )
+        op.execute(
+            f"CREATE POLICY {pub_table}_admin_read ON {pub_table} FOR SELECT "
             f"TO agentcraft_admin USING (true);"
         )
 

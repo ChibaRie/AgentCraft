@@ -27,18 +27,25 @@ jobs:
       SECRET_KEY: ci-secret-key-not-for-production-000000
       TASK_TOKEN_SECRET: ci-task-token-secret-not-for-prod-00000
       ALLOW_INSECURE_SECRETS: "true"
-      AGENTCRAFT_TEST_PG_URL: postgresql+asyncpg://test:test@localhost:5432
+      # 唯一 DSN 源（job 级 env 导出到每个 step 的进程环境）：run 脚本内经
+      # os.environ 读取；step 级 env: 块内经 ${{ env.CI_PG_HOST_DSN }} 读取
+      # （env 上下文仅在 step 级 env 可用，job 级 env 值内不可用）。
+      CI_PG_HOST_DSN: postgresql+asyncpg://test:test@localhost:5432
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
+          # 默认 "auto" 在 GitHub 托管 runner 已启用；显式 true 固化缓存行为
+          # （缓存键基于 uv.lock，speed-only）
+          enable-cache: true
       - name: Lint
         run: uv run ruff check backend tests
       - name: Create CI database
         run: |
           uv run python - <<'PY'
           import asyncio
+          import os
 
           from sqlalchemy import text
           from sqlalchemy.ext.asyncio import create_async_engine
@@ -46,7 +53,7 @@ jobs:
 
           async def create_ci_database() -> None:
               engine = create_async_engine(
-                  "postgresql+asyncpg://test:test@localhost:5432/postgres",
+                  os.environ["CI_PG_HOST_DSN"] + "/postgres",
                   isolation_level="AUTOCOMMIT",
               )
               async with engine.connect() as conn:
@@ -63,13 +70,15 @@ jobs:
       - name: Apply v2 migrations
         run: uv run alembic -c alembic_v2.ini upgrade head
         env:
-          AGENTCRAFT_V2_DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/agentcraft_ci
+          AGENTCRAFT_V2_DATABASE_URL: ${{ env.CI_PG_HOST_DSN }}/agentcraft_ci
       - name: Test
         run: uv run pytest -q --tb=short
+        env:
+          AGENTCRAFT_TEST_PG_URL: ${{ env.CI_PG_HOST_DSN }}
       - name: Alembic drift check
         run: uv run alembic -c alembic_v2.ini check
         env:
-          AGENTCRAFT_V2_DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/agentcraft_ci
+          AGENTCRAFT_V2_DATABASE_URL: ${{ env.CI_PG_HOST_DSN }}/agentcraft_ci
 
   frontend-build:
     runs-on: ubuntu-latest

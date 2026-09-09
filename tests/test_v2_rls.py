@@ -15,9 +15,19 @@
   静默 0 行受影响（PostgreSQL 不抛错——brief 的 pytest.raises 版本据此修正为
   rowcount 断言）
 - 未知角色无法连接（PUBLIC 表权限已全撤、角色白名单封闭）
-- 目录契约（Task 6 评审补充）：policy 总数 ≥54；admin 角色专属 policy ≥12 且
-  app 角色不持有任何 *_admin_* policy；app 授权表白名单 26 张表；9 张 owner
-  表 relrowsecurity/relforcerowsecurity 双真（FORCE：表 owner 亦受 RLS 约束）
+- 目录契约（Task 6 评审补充）：policy 总数 ≥54（纳入 experts/skills 后实际 64）；
+  admin 角色专属 policy ≥12（实际 15）且 app 角色不持有任何 *_admin_* policy；
+  app 授权表白名单 26 张表；11 张 owner 表 relrowsecurity/relforcerowsecurity
+  双真（FORCE：表 owner 亦受 RLS 约束）
+- experts/skills（终审 F2）：owner RLS + 发布可见性——SELECT 放行
+  status='published'（陌生 owner / 无上下文 guest 可读公开目录）或 owner 本人；
+  UPDATE/DELETE 仅 owner 本人 → 跨 owner 发布指针劫持（published_revision_id
+  改写）与级联删除他人 revision 被静默 0 行拒绝
+
+信任边界固化（方案 1 重定界）：app 凭据为受信后端秘密，RLS 不防凭据泄露/
+注入；Phase 2 禁止拼接 SQL；nonce 表硬化为 V2.5+ 备选。文件末两条
+test_boundary_* 用例断言的正是这一被接受的现实——自定义 GUC 可被 app role
+直接伪造、app.set_current_owner 无授权校验——而非修复目标。
 
 范围说明：idempotency_records / rate_limit_events / account_action_tokens /
 email_outbox 仅纳入目录断言（flag/policy 计数），不做行为矩阵——其 owner 流程
@@ -51,6 +61,8 @@ OWNER_TABLES = (
     "sessions",
     "account_action_tokens",
     "email_outbox",
+    "experts",
+    "skills",
 )
 
 
@@ -243,6 +255,185 @@ async def test_app_role_stranger_does_not_see_draft_revision(pg: PgDb) -> None:
         await app.dispose()
 
 
+async def _published_ids_for(
+    pg: PgDb, table: str, owner: _uuid.UUID
+) -> tuple[_uuid.UUID, _uuid.UUID]:
+    """superuser 查指定 owner 在 experts/skills 表的 (行 id, published_revision_id)。"""
+    assert table in ("experts", "skills")
+    async with pg.engine.begin() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    f"SELECT id, published_revision_id FROM {table} WHERE owner_id = :u ORDER BY id"
+                ),
+                {"u": owner},
+            )
+        ).one()
+    return row[0], row[1]
+
+
+async def _seed_skill_with_revision(pg: PgDb, email: str) -> _uuid.UUID:
+    """superuser 造最小合法 skills 链：user → skill → revision（published 指针）。"""
+    async with pg.engine.begin() as conn:
+        user_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO users (id, email, password_hash, role, status) "
+                    "VALUES (gen_random_uuid(), :e, 'h', 'user', 'active') RETURNING id"
+                ),
+                {"e": email},
+            )
+        ).scalar_one()
+        skill_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO skills (id, owner_id, status) "
+                    "VALUES (gen_random_uuid(), :u, 'published') RETURNING id"
+                ),
+                {"u": user_id},
+            )
+        ).scalar_one()
+        revision_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO skill_revisions (id, skill_id, owner_id, revision_no, "
+                    "content_json, content_sha256, status) VALUES (gen_random_uuid(), :s, "
+                    ":u, 1, '{}', :h, 'published') RETURNING id"
+                ),
+                {"s": skill_id, "u": user_id, "h": "c" * 64},
+            )
+        ).scalar_one()
+        await conn.execute(
+            text("UPDATE skills SET published_revision_id = :r WHERE id = :s"),
+            {"r": revision_id, "s": skill_id},
+        )
+    return user_id
+
+
+async def test_app_role_cannot_hijack_other_experts_published_pointer(pg: PgDb) -> None:
+    """终审 F2（发布劫持）：own 上下文攻击者改写他人 experts.published_revision_id
+    → UPDATE 的 USING 仅匹配 owner 本人，受害行 owner 不同 → 静默 0 行；
+    superuser 复核发布指针原样（此前无 RLS 时该 UPDATE 会成功）。"""
+    victim = await _seed_user_with_task(pg, "hijack-victim@x.com")
+    attacker = await _seed_user_with_task(pg, "hijack-attacker@x.com")
+    victim_expert, victim_published_rev = await _published_ids_for(pg, "experts", victim)
+    _, attacker_rev = await _published_ids_for(pg, "experts", attacker)
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with app.connect() as conn:
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": attacker})
+            updated = await conn.execute(
+                text("UPDATE experts SET published_revision_id = :r WHERE id = :x"),
+                {"r": attacker_rev, "x": victim_expert},
+            )
+            assert updated.rowcount == 0
+    finally:
+        await app.dispose()
+    async with pg.engine.begin() as conn:  # superuser 复核：受害行发布指针未被改写
+        current = (
+            await conn.execute(
+                text("SELECT published_revision_id FROM experts WHERE id = :x"),
+                {"x": victim_expert},
+            )
+        ).scalar_one()
+    assert current == victim_published_rev
+
+
+async def test_app_role_cannot_delete_other_experts_row(pg: PgDb) -> None:
+    """终审 F2（级联删除）：own 上下文攻击者 DELETE 他人 experts 行 → 0 行；
+    否则 ON CASCADE 会连带删掉受害者的 expert_revisions。superuser 复核
+    experts 行与 revision 均原样。"""
+    victim = await _seed_user_with_task(pg, "del-victim@x.com")
+    attacker = await _seed_user_with_task(pg, "del-attacker@x.com")
+    victim_expert, _ = await _published_ids_for(pg, "experts", victim)
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with app.connect() as conn:
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": attacker})
+            deleted = await conn.execute(
+                text("DELETE FROM experts WHERE id = :x"), {"x": victim_expert}
+            )
+            assert deleted.rowcount == 0
+    finally:
+        await app.dispose()
+    async with pg.engine.begin() as conn:  # superuser 复核：experts 行未被级联删除
+        experts = (
+            await conn.execute(
+                text("SELECT count(*) FROM experts WHERE owner_id = :u"), {"u": victim}
+            )
+        ).scalar_one()
+        assert experts == 1
+        revisions = (
+            await conn.execute(
+                text("SELECT count(*) FROM expert_revisions WHERE owner_id = :u"),
+                {"u": victim},
+            )
+        ).scalar_one()
+        assert revisions == 1
+
+
+async def test_app_role_stranger_and_guest_see_only_published_experts(pg: PgDb) -> None:
+    """experts_app_select 发布可见性：陌生 owner 与无上下文 guest 都恰好看见
+    已发布 expert；同作者的 draft expert 不泄漏（superuser 可见 2 条）。
+    此前无 RLS 时陌生 owner 会看到全部 2 条。"""
+    author = await _seed_user_with_task(pg, "pub-author@x.com")  # published expert
+    async with pg.engine.begin() as conn:  # 同作者再加一条 draft expert
+        await conn.execute(
+            text(
+                "INSERT INTO experts (id, owner_id, status) VALUES (gen_random_uuid(), :u, 'draft')"
+            ),
+            {"u": author},
+        )
+        total = (await conn.execute(text("SELECT count(*) FROM experts"))).scalar_one()
+    assert total == 2  # draft 确实存在，只是被 RLS 过滤
+    stranger = await _seed_bare_user(pg, "stranger2@x.com")
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with app.connect() as conn:  # 陌生 owner 上下文
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": stranger})
+            n = (await conn.execute(text("SELECT count(*) FROM experts"))).scalar_one()
+            assert n == 1
+            status = (await conn.execute(text("SELECT status FROM experts"))).scalar_one()
+            assert status == "published"
+        async with app.connect() as conn:  # 全新连接：无 owner 上下文的 guest
+            n = (await conn.execute(text("SELECT count(*) FROM experts"))).scalar_one()
+            assert n == 1
+    finally:
+        await app.dispose()
+
+
+async def test_app_role_cannot_tamper_other_skills_rows(pg: PgDb) -> None:
+    """终审 F2 skills 镜像：own 上下文攻击者对他人 skills 行的 UPDATE（发布指针
+    劫持）与 DELETE 均静默 0 行；superuser 复核原样。"""
+    victim = await _seed_skill_with_revision(pg, "skill-victim@x.com")
+    attacker = await _seed_skill_with_revision(pg, "skill-attacker@x.com")
+    victim_skill, victim_published_rev = await _published_ids_for(pg, "skills", victim)
+    _, attacker_rev = await _published_ids_for(pg, "skills", attacker)
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with app.connect() as conn:
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": attacker})
+            updated = await conn.execute(
+                text("UPDATE skills SET published_revision_id = :r WHERE id = :s"),
+                {"r": attacker_rev, "s": victim_skill},
+            )
+            assert updated.rowcount == 0
+            deleted = await conn.execute(
+                text("DELETE FROM skills WHERE id = :s"), {"s": victim_skill}
+            )
+            assert deleted.rowcount == 0
+    finally:
+        await app.dispose()
+    async with pg.engine.begin() as conn:  # superuser 复核：受害行原样
+        current = (
+            await conn.execute(
+                text("SELECT published_revision_id FROM skills WHERE id = :s"),
+                {"s": victim_skill},
+            )
+        ).scalar_one()
+    assert current == victim_published_rev
+
+
 async def test_admin_role_reads_all_via_explicit_policy(pg: PgDb) -> None:
     """admin 经 tasks_admin_read USING(true) 读全量；无 UPDATE/DELETE policy →
     RLS 默认拒绝是静默 0 行受影响（不抛错），数据原样保留。"""
@@ -279,8 +470,9 @@ async def test_unknown_role_cannot_connect(pg: PgDb) -> None:
 
 
 async def test_policy_catalog_matches_rls_contract(pg: PgDb) -> None:
-    """policy 总数 ≥54（9 owner 表 ×5 + revision 表 ×3×2 + reports ×3 = 54）；
-    admin 角色专属 policy ≥12（实际 13）；app 角色不持有任何 *_admin_* policy。"""
+    """policy 总数 ≥54（9 owner 表 ×5 + experts/skills ×5×2 + revision 表 ×3×2
+    + reports ×3 = 64）；admin 角色专属 policy ≥12（实际 15）；
+    app 角色不持有任何 *_admin_* policy。"""
     async with pg.engine.begin() as conn:
         total = (await conn.execute(text("SELECT count(*) FROM pg_policies"))).scalar_one()
         admin_owned = (
@@ -321,7 +513,7 @@ async def test_app_grant_whitelist_table_count(pg: PgDb) -> None:
 
 
 async def test_owner_tables_have_rls_enabled_and_forced(pg: PgDb) -> None:
-    """9 张 owner 表 relrowsecurity 与 relforcerowsecurity 双真：FORCE 使表 owner
+    """11 张 owner 表 relrowsecurity 与 relforcerowsecurity 双真：FORCE 使表 owner
     也受 RLS 约束，杜绝超级属主旁路。表名来自模块常量，无注入面。"""
     names = ",".join(f"'{t}'" for t in OWNER_TABLES)
     async with pg.engine.begin() as conn:
@@ -337,3 +529,51 @@ async def test_owner_tables_have_rls_enabled_and_forced(pg: PgDb) -> None:
     assert {r[0] for r in rows} == set(OWNER_TABLES)
     for relname, rls, force in rows:
         assert (rls, force) == (True, True), relname
+
+
+# ---------- 信任边界固化（方案 1 重定界，终审 F1）----------
+# 以下两条断言的是被接受的现实，而非修复目标：自定义 GUC 无 ACL，app role
+# 可绕过 app.set_current_owner 直接伪造 owner 上下文；set_current_owner 本身
+# 亦无授权校验。方案 1 裁决：app 数据库凭据是受信后端秘密，RLS 防的是
+# 应用层 owner 上下文遗漏 bug，不防凭据泄露/注入。Phase 2 禁止拼接 SQL；
+# nonce 表硬化为 V2.5+ 备选。若未来这两条用例转红，说明角色/GUC ACL 语义
+# 发生变化，需重新评估信任边界而非简单改断言。
+
+
+async def test_boundary_guc_can_be_forged_without_set_current_owner(pg: PgDb) -> None:
+    """边界（a）：app role 直接 SELECT set_config('app.current_owner_id', <victim>,
+    true)（不经 app.set_current_owner）→ current_owner_id() 返回受害者 id →
+    受害者任务可见。固化信任边界：自定义 GUC 可伪造是 PostgreSQL 既有语义。"""
+    victim = await _seed_user_with_task(pg, "forge-victim@x.com")
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with app.connect() as conn:
+            # 显式事务内执行：set_config 的 is_local=true 随事务结束回滚，
+            # SQLAlchemy autobegin 保证三条语句同处一个事务（与真实攻击形态一致）
+            await conn.execute(
+                text("SELECT set_config('app.current_owner_id', :v, true)"),
+                {"v": str(victim)},
+            )
+            forged = (await conn.execute(text("SELECT app.current_owner_id()"))).scalar_one()
+            assert forged == victim
+            n = (await conn.execute(text("SELECT count(*) FROM tasks"))).scalar_one()
+            assert n == 1  # 伪造上下文下受害者任务可见
+    finally:
+        await app.dispose()
+
+
+async def test_boundary_set_current_owner_performs_no_authorization(pg: PgDb) -> None:
+    """边界（b）：app.set_current_owner 对任意 uuid 不做授权校验——传受害者 id
+    即获得其数据视野。固化信任边界：该函数仅是 GUC 写入器，授权在应用层
+    （owner 上下文只能由服务端会话派生）。"""
+    victim = await _seed_user_with_task(pg, "fn-victim@x.com")
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with app.connect() as conn:
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": victim})
+            forged = (await conn.execute(text("SELECT app.current_owner_id()"))).scalar_one()
+            assert forged == victim
+            n = (await conn.execute(text("SELECT count(*) FROM tasks"))).scalar_one()
+            assert n == 1
+    finally:
+        await app.dispose()

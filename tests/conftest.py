@@ -176,8 +176,12 @@ def make_scripted_manager(
         return []
 
     async def resolve_provider(user_id: int, provider_config_id: int | None) -> dict:
-        return {"source": "system", "protocol": "openai",
-                "base_url": "http://provider-proxy:8080/v1", "model_id": "gpt-4o-mini"}
+        return {
+            "source": "system",
+            "protocol": "openai",
+            "base_url": "http://provider-proxy:8080/v1",
+            "model_id": "gpt-4o-mini",
+        }
 
     manager = PiEngineManager(
         settings,
@@ -316,7 +320,9 @@ def _run_migrations(dsn: str) -> None:
     env = {**os.environ, "AGENTCRAFT_V2_DATABASE_URL": dsn}
     subprocess.run(
         [sys.executable, "-m", "alembic", "-c", "alembic_v2.ini", "upgrade", "head"],
-        cwd=_AGENTCRAFT_ROOT, env=env, check=True,
+        cwd=_AGENTCRAFT_ROOT,
+        env=env,
+        check=True,
     )
 
 
@@ -338,9 +344,9 @@ def pg_template(pg_url_base):
 
 
 class PgDb(NamedTuple):
-    engine: AsyncEngine   # superuser 引擎（造数据用，绕过 RLS；普通事务即可）
-    base_url: str         # 维护 DSN（不含库名）
-    name: str             # 本测试库名
+    engine: AsyncEngine  # superuser 引擎（造数据用，绕过 RLS；普通事务即可）
+    base_url: str  # 维护 DSN（不含库名）
+    name: str  # 本测试库名
 
     def url(self) -> str:
         return f"{self.base_url}/{self.name}"
