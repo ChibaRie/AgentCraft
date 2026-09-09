@@ -462,7 +462,7 @@ pi-worker 镜像 `agentcraft-pi-worker:0.84.3`（node:22-slim，非 root piworke
 
 用户实测 BYOK 对话报 `Connection error.`（容器指向的 provider-proxy 不存在）——按既定架构决策把 proxy 核心提前实现并验收：
 
-- **JWT 任务令牌**（`services/task_token.py`）：SECRET_KEY 签名，claims={task_id, instance, model, exp=24h}；instance 随容器启动轮换；proxy 无状态校验（撤销列表留阶段 7，本地单操作者可接受）
+- **JWT 任务令牌**（`services/task_token.py`）：TASK_TOKEN_SECRET 签名（V2 Phase 0 Task 1 起与 SECRET_KEY 分离），claims={task_id, instance, model, exp=24h}；instance 随容器启动轮换；proxy 无状态校验（撤销列表留阶段 7，本地单操作者可接受）
 - **provider-proxy**（`backend/provider_proxy.py`，容器 `agentcraft-provider-proxy`）：`/v1/chat/completions` 认证→model scope→查任务快照→解密 Key→路由上游，SSE 流式中继/JSON 缓冲透传，上游错误原样透传、不可达 502；`/v1/models` 返回快照模型；免钥上游（Ollama）不发认证头；系统默认模式走 `PROVIDER_PROXY_UPSTREAM`+`OPENAI_API_KEY`
 - **协议兼容（实测确认）**：Pi 内置 openai provider 使用 **Responses API**（`openai.ts` 引 `openAIResponsesApi`），DeepSeek/Ollama 等普遍未实现——任务扩展对非 faux 注册 `api: "openai-completions"` 的 openai provider 覆盖，Pi 改说 chat/completions，**无需转换层**
 - **容器化**：proxy 容器双网络（bridge 出公网 + agentcraft-internal 被 Pi 以 `provider-proxy:8080` 访问；实测 internal 网络对 host-gateway 为 ENETUNREACH，故 proxy 必须容器化）；代码与 .env 只读挂载；`manager.ensure_proxy()` 自动保障存活

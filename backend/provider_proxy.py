@@ -1,7 +1,7 @@
 """Provider Proxy：薄代理，按任务令牌路由（手册 §7.7，阶段 6 核心提前落地）。
 
 链路：Pi 容器 --Bearer JWT 任务令牌--> 本服务 --解密 Key--> 对应上游
-- 认证：JWT（SECRET_KEY 签名）解出 task_id/model scope，无状态
+- 认证：JWT（TASK_TOKEN_SECRET 签名）解出 task_id/model scope，无状态
 - 路由：task.provider_snapshot → source=user 解密信封 Key 转发 snapshot.base_url；
   source=system 转发 PROVIDER_PROXY_UPSTREAM + OPENAI_API_KEY
 - 协议：/v1/chat/completions 流式透传（Pi 经扩展注册 openai-completions，
