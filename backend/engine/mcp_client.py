@@ -21,6 +21,7 @@ import shutil
 import httpx
 
 from backend.config import Settings
+from backend.engine.docker_transport import MAX_LINE_BYTES
 
 logger = logging.getLogger("agentcraft")
 
@@ -68,12 +69,15 @@ class StdioTransport:
         self._process = None
 
     async def _spawn(self):
+        # limit 与 Pi 传输层同源（32MiB 共享常量）：MCP 大结果以单行 JSON 回传，
+        # asyncio 默认 64KB 行上限会在传输层先崩（v0.12.3 同源缺陷）
         return await asyncio.create_subprocess_exec(
             *self._argv,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
             env={**_host_env(), **self._env} if self._env else None,
+            limit=MAX_LINE_BYTES,
         )
 
     async def request(self, payload: dict) -> dict | None:
@@ -90,7 +94,12 @@ class StdioTransport:
             raise MCPClientError("MCP Server 进程已退出") from exc
         if "id" not in payload:
             return None  # 通知不等待应答
-        line = await self._process.stdout.readline()
+        try:
+            line = await self._process.stdout.readline()
+        except ValueError as exc:
+            # MCP 是 1:1 请求应答：超限帧不能像 Pi 传输那样丢弃（跳过即挂死等待方），
+            # 必须显式报错由上层转 502
+            raise MCPClientError("MCP Server 应答超过单行上限") from exc
         if not line:
             raise MCPClientError("MCP Server 连接已关闭")
         try:

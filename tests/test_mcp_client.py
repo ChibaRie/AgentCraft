@@ -11,6 +11,7 @@
 
 import asyncio
 import json
+import sys
 
 import httpx
 import pytest
@@ -313,3 +314,53 @@ async def test_http_connection_error_raises():
     with pytest.raises(MCPClientError):
         await client.discover()
     await http_client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# 大行帧防护（v0.12.3 同源缺陷；MCP stdio 是 1:1 请求应答语义——报错，不丢帧）
+# ---------------------------------------------------------------------------
+
+
+class OverrunProcess(FakeProcess):
+    """readline 抛 ValueError，模拟 asyncio StreamReader 行上限越限。"""
+
+    async def readline(self) -> bytes:
+        raise ValueError("Separator is not found, and chunk exceed the limit")
+
+
+async def test_stdio_oversized_frame_raises_mcp_client_error():
+    """应答行超过传输行上限 → MCPClientError，不得让裸 ValueError 上穿。"""
+    transport = FakeStdioTransport(OverrunProcess([INIT_RESPONSE]))
+    try:
+        with pytest.raises(MCPClientError) as excinfo:
+            await transport.request({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+        # 纪律：错误信息不携带底层异常细节或应答内容
+        assert "Separator" not in str(excinfo.value)
+        assert INIT_RESPONSE not in str(excinfo.value)
+    finally:
+        await transport.close()
+
+
+async def test_stdio_reads_line_over_asyncio_default_limit(tmp_path):
+    """生产同源：>64KB（asyncio 默认上限）的单行 JSON-RPC 应答必须完整读取解析。
+
+    背景：MCP 大结果（大目录树/长文本）以单行 JSON 回传；MCP_RESULT_MAX_BYTES
+    的截断发生在传输层之后——传输层必须先能完整读到行（create_subprocess_exec
+    需显式传 limit，否则 asyncio 默认 64KB 上限先崩）。
+    """
+    emit = tmp_path / "emit_big_mcp_line.py"
+    emit.write_text(
+        "import sys, json\n"
+        "payload = {'jsonrpc': '2.0', 'id': 1, 'result': {'big': 'x' * 70_000}}\n"
+        "sys.stdout.write(json.dumps(payload) + chr(10))\n"
+        "sys.stdout.flush()\n",
+        encoding="utf-8",
+    )
+    transport = StdioTransport([sys.executable, str(emit)], {})
+    try:
+        response = await asyncio.wait_for(
+            transport.request({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}), timeout=15
+        )
+        assert response["result"]["big"] == "x" * 70_000
+    finally:
+        await transport.close()
