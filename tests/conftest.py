@@ -8,6 +8,14 @@ touch the development database.
 ExpertSkill 绑定行）使用。
 """
 
+import os
+
+os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production-000")
+os.environ.setdefault("TASK_TOKEN_SECRET", "test-task-token-secret-not-for-prod-00")
+os.environ.setdefault("ALLOW_INSECURE_SECRETS", "true")
+
+# —— 以上三行必须位于本文件所有 backend.* import 之前；下方保持原有内容不动 ——
+
 import asyncio
 import json
 import threading

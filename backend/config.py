@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,6 +42,22 @@ class Settings(BaseSettings):
     MCP_ENCRYPTION_KEYRING: str = ""  # kid:<base64url 32B>[:,...];Provider Key/MCP env 信封加密
     JWT_EXPIRE_MINUTES: int = 120
     DATABASE_URL: str = "sqlite+aiosqlite:///./agentcraft.db"
+    TASK_TOKEN_SECRET: str = ""  # 任务凭据签名密钥，必须与 SECRET_KEY 不同
+    ALLOW_INSECURE_SECRETS: bool = False  # 仅 dev/test 逃生舱；生产禁止
+    LOG_LEVEL: str = "INFO"
+
+    @model_validator(mode="after")
+    def validate_secrets(self) -> "Settings":
+        if self.ALLOW_INSECURE_SECRETS:
+            return self
+        weak = {"", "replace-me", "your-secret-key-here"}
+        if self.SECRET_KEY in weak:
+            raise ValueError("SECRET_KEY 必须设置为强随机值（生产禁止默认值）")
+        if not self.TASK_TOKEN_SECRET or self.TASK_TOKEN_SECRET in weak:
+            raise ValueError("TASK_TOKEN_SECRET 必须设置为独立的强随机值")
+        if self.TASK_TOKEN_SECRET == self.SECRET_KEY:
+            raise ValueError("TASK_TOKEN_SECRET 不得与 SECRET_KEY 共用")
+        return self
 
 
 def get_settings() -> Settings:

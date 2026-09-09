@@ -1,6 +1,7 @@
 """任务级令牌（手册 §7.2 认证行，§7.7 proxy 按令牌路由）。
 
-JWT（HS256，SECRET_KEY 签名）：claims = {task_id, instance, model, exp}。
+JWT（HS256，TASK_TOKEN_SECRET 签名，未配置时回退 SECRET_KEY）：
+claims = {task_id, instance, model, exp}。
 - provider-proxy 无状态校验：解出 task_id → 查 provider_snapshot → 解密 Key →
   路由上游；model scope 校验（请求体 model 必须与令牌一致）
 - instance 每次容器启动随机生成（secrets），容器重建即轮换；旧令牌因无
@@ -24,6 +25,10 @@ class TaskTokenInvalid(Exception):
     """令牌缺失/签名不符/过期/claims 非法。"""
 
 
+def _token_key(settings) -> str:
+    return settings.TASK_TOKEN_SECRET or settings.SECRET_KEY
+
+
 def create_task_token(
     task_id: int, instance: str, model_id: str, *, ttl_hours: int = _DEFAULT_TTL_HOURS
 ) -> str:
@@ -38,7 +43,7 @@ def create_task_token(
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=ttl_hours)).timestamp()),
     }
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    return jwt.encode(payload, _token_key(settings), algorithm=settings.JWT_ALGORITHM)
 
 
 def decode_task_token(token: str) -> dict:
@@ -47,7 +52,7 @@ def decode_task_token(token: str) -> dict:
     try:
         payload = jwt.decode(
             token,
-            settings.SECRET_KEY,
+            _token_key(settings),
             algorithms=[settings.JWT_ALGORITHM],
             audience=_TASK_TOKEN_AUDIENCE,
         )
