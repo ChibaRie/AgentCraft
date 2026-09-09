@@ -1,5 +1,6 @@
 # backend/errors.py
 """统一错误码注册表（API Supplement §7）。新增错误码只能在此登记。"""
+
 from enum import Enum
 
 
@@ -16,6 +17,8 @@ class ErrorCode(str, Enum):
     MFA_INVALID = "MFA_INVALID"
     CSRF_INVALID = "CSRF_INVALID"
     SESSION_EXPIRED = "SESSION_EXPIRED"
+    # 401 语义：登录/再认证凭据校验失败（T12/T13 使用；T15 补遗修订记录登记）
+    INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
     # —— 幂等 ——
     IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
     # —— 配额（满槽/满配额走 429/queued，不用错误码）——
@@ -43,8 +46,16 @@ class ErrorCode(str, Enum):
 
 
 class AgentCraftError(Exception):
-    def __init__(self, code: ErrorCode, message: str, *, http_status: int = 400):
+    def __init__(
+        self,
+        code: ErrorCode,
+        message: str,
+        *,
+        http_status: int = 400,
+        headers: dict[str, str] | None = None,
+    ):
         super().__init__(message)
         self.code = code
         self.message = message
         self.http_status = http_status
+        self.headers = headers  # 透传附加响应头（如 401 Retry-After）；None = 无附加头

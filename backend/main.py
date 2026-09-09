@@ -9,9 +9,11 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.api import api_router, internal_router
+from backend.api.v2 import v2_api_router
 from backend.config import get_settings
 from backend.database import async_session_factory
 from backend.dependencies import get_pi_engine_manager
+from backend.errors import AgentCraftError
 from backend.logging_config import configure_logging
 from backend.middleware.upload_guard import UploadSizeGuardMiddleware
 from backend.services.file_service import sweep_stale_storage
@@ -73,6 +75,7 @@ app.add_middleware(
 )
 app.include_router(api_router, prefix="/api")
 app.include_router(internal_router, prefix="/internal")
+app.include_router(v2_api_router, prefix="/api/v2")
 
 
 def _error_payload(code: str, message: str) -> dict[str, object]:
@@ -103,6 +106,16 @@ async def user_system_error_handler(_request: Request, exc: UserSystemError) -> 
     return JSONResponse(
         status_code=exc.status_code,
         content=_error_payload(exc.code, str(exc)),
+    )
+
+
+@app.exception_handler(AgentCraftError)
+async def agentcraft_error_handler(_request: Request, exc: AgentCraftError) -> JSONResponse:
+    # V2 统一错误（Supplement §7）；headers 透传（如 401 Retry-After），None = 无附加头
+    return JSONResponse(
+        status_code=exc.http_status,
+        content=_error_payload(exc.code.value, exc.message),
+        headers=exc.headers,
     )
 
 
