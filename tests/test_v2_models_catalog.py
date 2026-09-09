@@ -37,6 +37,19 @@ async def _seed_user(maker, email: str):
         return user.id
 
 
+def _catalog_row(**overrides):
+    """ProviderCatalog 构造基线；信任边界 CHECK 的负例经 overrides 覆写单一字段。"""
+    base = dict(
+        display_name="OpenAI",
+        allowed_host="api.openai.com",
+        models=["gpt-4o"],
+        path_prefix="/v1",
+        healthcheck_path="/v1/models",
+    )
+    base.update(overrides)
+    return ProviderCatalog(**base)
+
+
 async def test_provider_catalog_models_field(pg_fresh):
     """models 为 JSONB list[str]；path_prefix/method/enabled/capabilities 走默认。"""
     maker = async_sessionmaker(pg_fresh.engine, expire_on_commit=False)
@@ -107,6 +120,19 @@ async def test_user_provider_key_fields_and_status_enum(pg_fresh):
         assert row.key_version == 1
         assert row.status == "active"
         assert row.is_default is False
+    # 枚举另一合法值 revoked 可插入（与槽位 state 正例对称）
+    async with maker() as s:
+        s.add(UserProvider(
+            user_id=user_id, catalog_id=catalog_id, model_id="gpt-4o",
+            key_ciphertext="ct-r", dek_wrapped="dek-r", key_last4="Zz9$",
+            status="revoked",
+        ))
+        await s.commit()
+    async with maker() as s:
+        revoked = (await s.execute(
+            select(UserProvider).where(UserProvider.status == "revoked")
+        )).scalar_one()
+        assert revoked.key_last4 == "Zz9$"
     # status 封闭枚举（PROVIDER_STATUSES = ("active", "revoked")）
     assert PROVIDER_STATUSES == ("active", "revoked")
     async with maker() as s:
@@ -203,6 +229,7 @@ async def test_platform_slot_state_enum_and_slot_no_pk(pg_fresh):
         indexes = await conn.run_sync(lambda c: inspect(c).get_indexes("platform_slots"))
     idx = {i["name"]: i["column_names"] for i in indexes}
     assert idx["ix_platform_slots_state_leased_until"] == ["state", "leased_until"]
+    assert idx["ix_platform_slots_task_id"] == ["task_id"]
 
 
 async def test_platform_storage_singleton_row_shape(pg_fresh):
@@ -218,6 +245,11 @@ async def test_platform_storage_singleton_row_shape(pg_fresh):
         assert row.max_retained_storage_bytes == 64_424_509_440
     async with maker() as s:
         s.add(PlatformStorage())
+        with pytest.raises(IntegrityError):
+            await s.commit()
+    # singleton 只能为 True：False 行与「全局仅一行」语义冲突（CHECK singleton_true）
+    async with maker() as s:
+        s.add(PlatformStorage(singleton=False))
         with pytest.raises(IntegrityError):
             await s.commit()
 
@@ -255,3 +287,73 @@ async def test_rate_limit_event_index_exists(pg_fresh):
         indexes = await conn.run_sync(lambda c: inspect(c).get_indexes("rate_limit_events"))
     idx = {i["name"]: i["column_names"] for i in indexes}
     assert idx["ix_rate_limit_scope_subject_time"] == ["scope", "subject_hash", "occurred_at"]
+
+
+async def test_user_provider_one_default_per_user(pg_fresh):
+    """部分唯一索引 uq_user_providers_one_default：同 user 至多一行 is_default=true；
+    原默认行置 False 后新默认行可再建（用户内互斥不变的 DB 事实源）。"""
+    maker = async_sessionmaker(pg_fresh.engine, expire_on_commit=False)
+    user_id = await _seed_user(maker, "default@example.com")
+    async with maker() as s:
+        catalog = ProviderCatalog(
+            display_name="OpenAI",
+            allowed_host="api.openai.com",
+            models=["gpt-4o"],
+            healthcheck_path="/v1/models",
+        )
+        s.add(catalog)
+        await s.commit()
+        catalog_id = catalog.id
+
+    def _provider(last4: str, is_default: bool) -> UserProvider:
+        return UserProvider(
+            user_id=user_id, catalog_id=catalog_id, model_id="gpt-4o",
+            key_ciphertext=f"ct-{last4}", dek_wrapped=f"dek-{last4}",
+            key_last4=last4, is_default=is_default,
+        )
+
+    async with maker() as s:
+        s.add(_provider("Ab1!", True))
+        await s.commit()
+    async with maker() as s:
+        s.add(_provider("Xy2@", True))
+        with pytest.raises(IntegrityError):  # 第二个默认行被拒
+            await s.commit()
+    async with maker() as s:
+        row = (await s.execute(
+            select(UserProvider).where(UserProvider.is_default.is_(True))
+        )).scalar_one()
+        row.is_default = False
+        await s.commit()
+    async with maker() as s:
+        s.add(_provider("Qw3#", True))
+        await s.commit()  # 原默认行已退位 → 新默认行可建
+        defaults = (await s.execute(
+            select(UserProvider).where(UserProvider.is_default.is_(True))
+        )).scalars().all()
+        assert len(defaults) == 1 and defaults[0].key_last4 == "Qw3#"
+
+
+async def test_provider_catalog_trust_boundary_checks(pg_fresh):
+    """目录是 egress 白名单的事实源，形状由 CHECK 兜底：method 封闭于 GET/HEAD；
+    path 必须以 / 开头且无 .. 段；host 禁 ://、@、/。每条规则一个负例 → IntegrityError。"""
+    maker = async_sessionmaker(pg_fresh.engine, expire_on_commit=False)
+    async with maker() as s:
+        s.add(_catalog_row())
+        await s.commit()
+    async with maker() as s:
+        row = (await s.execute(select(ProviderCatalog))).scalar_one()
+        assert row.allowed_host == "api.openai.com"
+        assert row.path_prefix == "/v1"
+        assert row.healthcheck_path == "/v1/models"
+    negatives = [
+        {"healthcheck_method": "POST"},  # method 封闭于 GET/HEAD
+        {"path_prefix": "v1"},  # 必须以 / 开头
+        {"healthcheck_path": "/models/../admin"},  # 禁 .. 段
+        {"allowed_host": "http://api.example.com"},  # 禁 :// @ /
+    ]
+    for overrides in negatives:
+        async with maker() as s:
+            s.add(_catalog_row(**overrides))
+            with pytest.raises(IntegrityError):
+                await s.commit()

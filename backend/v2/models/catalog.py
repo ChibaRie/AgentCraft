@@ -3,8 +3,7 @@
 provider_catalog / user_providers / user_quotas / user_quota_usage /
 platform_slots / platform_storage / usage_daily / rate_limit_events。
 枚举值常量（PROVIDER_STATUSES / SLOT_STATES）供任务域直接消费；
-reservation 的 kind 常量唯一来源是 Task 5 的 tasking.py（RESERVATION_KINDS），
-本文件不定义任何 kind 常量。
+预留种类常量的唯一来源是 Task 5 的 tasking.py，本文件不定义任何预留种类常量。
 
 model_capabilities 为 v0.12.4 接缝：按模型能力如实声明，形如
 {"gpt-4o": {"input": ["text", "image"]}}；缺失条目视为纯文本（input=["text"]）——
@@ -30,6 +29,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -42,6 +42,22 @@ SLOT_STATES = ("free", "leased")
 
 class ProviderCatalog(Base):
     __tablename__ = "provider_catalog"
+    __table_args__ = (
+        check_enum("provider_catalog", "healthcheck_method", ("GET", "HEAD")),
+        CheckConstraint(
+            "path_prefix LIKE '/%' AND path_prefix NOT LIKE '%..%'",
+            name="path_prefix_shape",
+        ),
+        CheckConstraint(
+            "healthcheck_path LIKE '/%' AND healthcheck_path NOT LIKE '%..%'",
+            name="healthcheck_path_shape",
+        ),
+        CheckConstraint(
+            "allowed_host NOT LIKE '%://%' AND allowed_host NOT LIKE '%@%'"
+            " AND allowed_host NOT LIKE '%/%'",
+            name="allowed_host_shape",
+        ),
+    )
     id: Mapped[_uuid.UUID] = pk_uuid()
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     allowed_host: Mapped[str] = mapped_column(String(253), nullable=False)
@@ -61,6 +77,12 @@ class UserProvider(TimestampMixin, Base):
     __table_args__ = (
         check_enum("user_providers", "status", PROVIDER_STATUSES),
         CheckConstraint("length(key_last4) = 4", name="key_last4_len"),
+        Index(
+            "uq_user_providers_one_default",
+            "user_id",
+            unique=True,
+            postgresql_where=text("is_default = true"),
+        ),
     )
     id: Mapped[_uuid.UUID] = pk_uuid()
     user_id: Mapped[_uuid.UUID] = mapped_column(
@@ -106,8 +128,9 @@ class PlatformSlot(Base):
     __table_args__ = (
         check_enum("platform_slots", "state", SLOT_STATES),
         Index("ix_platform_slots_state_leased_until", "state", "leased_until"),
+        Index("ix_platform_slots_task_id", "task_id"),
     )
-    slot_no: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slot_no: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
     # Task 在 tasking.py 定义；FK 在 Task 5 用 use_alter 补
     task_id: Mapped[_uuid.UUID | None] = mapped_column(Uuid)
     state: Mapped[str] = mapped_column(String(10), nullable=False, default="free")
@@ -116,6 +139,7 @@ class PlatformSlot(Base):
 
 class PlatformStorage(Base):
     __tablename__ = "platform_storage"
+    __table_args__ = (CheckConstraint("singleton", name="singleton_true"),)
     singleton: Mapped[bool] = mapped_column(Boolean, primary_key=True, default=True)
     retained_storage_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     max_retained_storage_bytes: Mapped[int] = mapped_column(
