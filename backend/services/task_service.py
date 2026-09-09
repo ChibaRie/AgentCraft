@@ -8,6 +8,7 @@
 """
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +35,8 @@ from backend.services.workspace import (
     parse_relative_workdir,
     resolve_workspace_dir,
 )
+
+logger = logging.getLogger("agentcraft")
 
 
 class TaskNotFoundError(UserSystemError):
@@ -440,9 +443,22 @@ async def commit_task_files(
             ]
             db.add_all(rows)
             await db.commit()
+            # 观测（红线 §4.7）：只记 task_id/文件数/字节数，文件内容不落日志
+            logger.info(
+                "Task %s: 已提交 %d 个文件入库（%d 字节）",
+                task_id,
+                len(rows),
+                sum(item["size_bytes"] for item in staged),
+            )
             return rows
-        except Exception:
+        except Exception as exc:
             await db.rollback()
+            logger.warning(
+                "Task %s: 文件入库失败已回滚（%d 个文件，错误 %s）",
+                task_id,
+                len(staged),
+                type(exc).__name__,
+            )
             raise
 
 

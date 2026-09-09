@@ -6,6 +6,7 @@ no-follow 落盘与失败补偿（暂存 → 校验 → 移动 → 由调用方�
 """
 
 import hashlib
+import logging
 import re
 import shutil
 import time
@@ -16,6 +17,8 @@ from fastapi import UploadFile
 from sqlalchemy import select
 
 from backend.services.user_service import UserSystemError
+
+logger = logging.getLogger("agentcraft")
 
 _CHUNK_SIZE = 256 * 1024
 _STAGING_DIR_NAME = ".staging"
@@ -133,9 +136,22 @@ class FileService:
                         "final_path": None,
                     }
                 )
+            # 观测（红线 §4.7）：只记 task_id/文件数/字节数，文件正文不落日志
+            logger.info(
+                "Task %s: 已暂存 %d 个文件（%d 字节）",
+                task_id,
+                len(staged),
+                sum(item["size_bytes"] for item in staged),
+            )
             return staged
-        except Exception:
+        except Exception as exc:
             self._remove_tree(batch_dir)
+            logger.warning(
+                "Task %s: 暂存失败已清空本批（已收 %d 个文件，错误 %s）",
+                task_id,
+                len(staged),
+                type(exc).__name__,
+            )
             raise
 
     def place_batch(self, task_id: int, staged: list[dict]) -> None:
@@ -154,11 +170,23 @@ class FileService:
                 source.replace(target)
                 item["final_path"] = str(target)
                 moved.append(target)
-        except Exception:
+            logger.info(
+                "Task %s: 已落盘 %d 个文件（%d 字节）",
+                task_id,
+                len(moved),
+                sum(item["size_bytes"] for item in staged),
+            )
+        except Exception as exc:
             for target in moved:
                 target.unlink(missing_ok=True)
             for item in staged:
                 Path(item["staging_path"]).unlink(missing_ok=True)
+            logger.warning(
+                "Task %s: 落盘失败已回滚（%d 个文件，错误 %s）",
+                task_id,
+                len(staged),
+                type(exc).__name__,
+            )
             raise
 
     def discard(self, staged: list[dict]) -> None:
@@ -280,4 +308,11 @@ async def sweep_stale_storage(session_factory, root: Path) -> dict[str, int]:
     async with session_factory() as session:
         rows = await session.execute(select(TaskFile.relative_path))
     _sweep_orphans(root, set(rows.scalars()), removed)
+    # 观测（红线 §4.7）：只记清理计数，不记任何文件路径/内容；
+    # 失败补偿路径由 main.py lifespan 的 logger.exception 统一记录
+    logger.info(
+        "存储巡检完成：清理超时暂存批次 %d 个、孤儿文件 %d 个",
+        removed["staging_batches"],
+        removed["orphan_files"],
+    )
     return removed

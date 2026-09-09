@@ -250,15 +250,36 @@ class DockerCliTransport:
         return self._spec.container_name
 
     async def _drain_stderr(self) -> None:
-        """容器 stderr 接入日志（§7.8：记录容器 stderr 诊断）。"""
+        """容器 stderr 观测（§7.8）：只记元数据，不落正文（红线 §4.7）。
+
+        stderr 可能携带 prompt/Provider 响应片段（node 崩溃栈、扩展 console
+        输出等），因此只累计行数/字节数：首行到达即告警（实时诊断信号），
+        排空或收割取消时汇总一条（容器 id、退出码尽力而为，可能为 None）。
+        """
         assert self._proc is not None and self._proc.stderr is not None
-        while True:
-            raw = await self._proc.stderr.readline()
-            if not raw:
-                return
-            text = raw.decode("utf-8", "replace").rstrip()
-            if text:
-                logger.warning("容器 %s stderr: %s", self._spec.container_name, text)
+        lines = 0
+        total_bytes = 0
+        try:
+            while True:
+                raw = await self._proc.stderr.readline()
+                if not raw:
+                    break
+                lines += 1
+                total_bytes += len(raw)
+                if lines == 1:
+                    logger.warning(
+                        "容器 %s 开始输出 stderr（诊断信号，正文不落日志）",
+                        self._spec.container_name,
+                    )
+        finally:
+            if lines:
+                logger.warning(
+                    "容器 %s stderr 已排空：%d 行，%d 字节，exit=%s",
+                    self._spec.container_name,
+                    lines,
+                    total_bytes,
+                    self._proc.returncode,
+                )
 
     async def write_line(self, line: str) -> None:
         assert self._proc is not None and self._proc.stdin is not None
@@ -333,7 +354,10 @@ async def docker_ensure_network(
     )
     _, stderr = await create.communicate()
     if create.returncode != 0:
-        logger.warning("创建网络 %s 失败: %s", name, stderr.decode(errors="replace").strip())
+        # 红线（§4.7）：stderr 正文不落日志，只记退出码与长度
+        logger.warning(
+            "创建网络 %s 失败（exit=%d，stderr %d 字节）", name, create.returncode, len(stderr)
+        )
 
 
 async def docker_ensure_proxy_container(
@@ -364,8 +388,10 @@ async def docker_ensure_proxy_container(
         )
         _, stderr = await start.communicate()
         if start.returncode != 0:
-            detail = stderr.decode(errors="replace").strip()
-            logger.warning("启动 %s 失败: %s", container_name, detail)
+            logger.warning(
+                "启动 proxy 容器 %s 失败（exit=%d，stderr %d 字节）",
+                container_name, start.returncode, len(stderr),
+            )
         return
 
     env_file = app_dir / ".env"
@@ -381,7 +407,11 @@ async def docker_ensure_proxy_container(
     )
     stdout, stderr = await run.communicate()
     if run.returncode != 0:
-        logger.warning("创建 %s 失败: %s", container_name, stderr.decode(errors="replace").strip())
+        # 红线（§4.7）：stderr 正文不落日志，只记退出码与长度
+        logger.warning(
+            "创建 proxy 容器 %s 失败（exit=%d，stderr %d 字节）",
+            container_name, run.returncode, len(stderr),
+        )
         return
     # 连接默认 bridge 获得出站公网能力（internal 网络无路由）
     connect = await asyncio.create_subprocess_exec(
@@ -392,8 +422,9 @@ async def docker_ensure_proxy_container(
     _, stderr = await connect.communicate()
     if connect.returncode != 0:
         logger.warning(
-            "proxy 出站网络连接失败（用户上游可能不可达）: %s",
-            stderr.decode(errors="replace").strip(),
+            "proxy 出站网络连接失败（用户上游可能不可达；exit=%d，stderr %d 字节）",
+            connect.returncode,
+            len(stderr),
         )
     logger.info("Provider Proxy 容器已就绪: %s", container_name)
 
@@ -471,8 +502,10 @@ async def docker_ensure_backend_forwarder(
     _, stderr = await run.communicate()
     if run.returncode != 0:
         logger.warning(
-            "启动后端转发容器失败（容器回调 /internal/mcp/call 将不可达）: %s",
-            stderr.decode(errors="replace").strip(),
+            "启动后端转发容器失败（容器回调 /internal/mcp/call 将不可达；"
+            "exit=%d，stderr %d 字节）",
+            run.returncode,
+            len(stderr),
         )
         return
     # bridge 供转发容器访问宿主机（internal 网络本身无 host 路由）
@@ -483,7 +516,10 @@ async def docker_ensure_backend_forwarder(
     )
     _, stderr = await connect.communicate()
     if connect.returncode != 0:
-        logger.warning("转发容器 bridge 连接失败: %s", stderr.decode(errors="replace").strip())
+        logger.warning(
+            "转发容器 bridge 连接失败（exit=%d，stderr %d 字节）",
+            connect.returncode, len(stderr),
+        )
     logger.info("后端转发容器已就绪（internal 别名 agentcraft-control → host:%s）", target_port)
 
 

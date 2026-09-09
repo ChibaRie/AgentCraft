@@ -40,15 +40,27 @@ class MCPCallRequest(BaseModel):
 def _require_task_token(
     request: Request, payload: MCPCallRequest, manager: PiEngineManager
 ) -> dict:
-    """X-Task-Token 三重校验：签名有效、任务一致、实例一致（旧容器令牌失效）。"""
+    """X-Task-Token 三重校验：签名有效、任务一致、实例一致（旧容器令牌失效）。
+
+    观测（红线 §4.7）：失败路径记 task_id 与校验层，绝不记录令牌值。
+    """
     token = request.headers.get("X-Task-Token", "")
     try:
         claims = decode_task_token(token)
     except TaskTokenInvalid as exc:
+        logger.warning(
+            "内部回调任务令牌校验失败 layer=signature task_id=%s", payload.task_id
+        )
         raise TaskTokenUnauthorized() from exc
     if claims["task_id"] != payload.task_id:
+        logger.warning(
+            "内部回调任务令牌校验失败 layer=task-mismatch task_id=%s", payload.task_id
+        )
         raise TaskTokenUnauthorized()
     if manager.get_task_token(payload.task_id) != token:
+        logger.warning(
+            "内部回调任务令牌校验失败 layer=instance-mismatch task_id=%s", payload.task_id
+        )
         raise TaskTokenUnauthorized()
     return claims
 

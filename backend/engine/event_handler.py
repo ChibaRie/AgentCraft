@@ -161,11 +161,13 @@ class EventHandler:
             # error 帧，等待 tool_execution_* 与后续推理；最终回复以 stop 收尾
             return []
 
-        # error 等：不落库；发 error 帧告知可重试，流以 done 收尾
+        # error 等：不落库；发 error 帧告知可重试，流以 done 收尾。
+        # 红线（§4.7）：errorMessage 属 Provider 响应正文——日志只记事件类型与长度
+        error_message = message.get("errorMessage")
         logger.warning(
-            "assistant message_end stopReason=%s（不落库）: %s",
+            "assistant message_end stopReason=%s（不落库），errorMessage 长度 %d 字符",
             stop_reason,
-            message.get("errorMessage", ""),
+            len(error_message) if isinstance(error_message, str) else 0,
         )
         return [
             (

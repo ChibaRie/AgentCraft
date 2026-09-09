@@ -67,6 +67,8 @@ class PiEngine:
         self._writer_lock = asyncio.Lock()
         self._event_callbacks: list = []
         self._reader_task: asyncio.Task | None = None
+        # 本连接累计丢弃的不可解析 stdout 行数（红线 §4.7：只记长度与计数，不记正文）
+        self._unparsable_dropped = 0
         self.needs_rebuild = False
         # 容器启动时的 Provider 指纹（ensure_container 写入，§7.7 指纹判定）
         self.provider_fingerprint = ""
@@ -155,7 +157,14 @@ class PiEngine:
         try:
             frame = json.loads(stripped)
         except json.JSONDecodeError:
-            logger.warning("Task %s: 无法解析的 stdout 行已跳过: %.120s", self.task_id, line)
+            # 红线（§4.7）：坏行可能是 prompt/Provider 响应片段，只记长度与丢弃计数
+            self._unparsable_dropped += 1
+            logger.warning(
+                "Task %s: 无法解析的 stdout 行已跳过（%d 字符，累计丢弃 %d 行）",
+                self.task_id,
+                len(line),
+                self._unparsable_dropped,
+            )
             return
 
         frame_type = frame.get("type")

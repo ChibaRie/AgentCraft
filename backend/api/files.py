@@ -13,7 +13,12 @@ from backend.database import get_db
 from backend.dependencies import get_file_service
 from backend.middleware.auth import get_current_user_id
 from backend.services import task_service
-from backend.services.file_service import FileService
+from backend.services.file_service import (
+    FileCountExceededError,
+    FileQuotaExceededError,
+    FileService,
+    FileTooLargeError,
+)
 
 router = APIRouter(prefix="/tasks", tags=["task-files"])
 
@@ -35,7 +40,17 @@ async def upload_files(
         service.place_batch(task_id, staged)
         rows = await task_service.commit_task_files(db, service, task_id, staged)
         return {"data": {"files": [task_service.task_file_payload(row) for row in rows]}}
-    except Exception:
+    except Exception as exc:
+        if isinstance(
+            exc, (FileTooLargeError, FileCountExceededError, FileQuotaExceededError)
+        ):
+            # 观测（红线 §4.7）：超限拒绝记 task_id/错误码/文件数，正文与文件名不落日志
+            logger.warning(
+                "Task %s: 上传超限被拒绝 code=%s 请求数=%d",
+                task_id,
+                exc.code,
+                len(files),
+            )
         if staged:
             service.discard(staged)
         raise
