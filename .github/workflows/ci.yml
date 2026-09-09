@@ -1,0 +1,36 @@
+# .github/workflows/ci.yml (repo root is agentcraft/, jobs use default working-directory)
+name: ci
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    env:
+      SECRET_KEY: ci-secret-key-not-for-production-000000
+      TASK_TOKEN_SECRET: ci-task-token-secret-not-for-prod-00000
+      ALLOW_INSECURE_SECRETS: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Lint
+        run: uv run ruff check backend tests
+      - name: Test
+        run: uv run pytest -q --tb=short
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
