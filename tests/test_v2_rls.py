@@ -3,10 +3,14 @@
 针对 Task 6 迁移后的真实 schema（0001 roles+policies+RLS、0002 seeds，随模板库
 克隆进入每个测试库）验证：
 
-- app role 未设 owner 上下文 / 陌生 owner → SELECT 0 行（RLS USING 过滤）
+- app role 未设 owner 上下文 / 陌生 owner → SELECT 0 行，且 UPDATE/DELETE 同样
+  走默认拒绝（静默 0 行受影响、数据原样保留——防 USING 被放宽为 true 的回归）
+- expert_revisions 发布可见性（app_published_read）：陌生 owner 恰好看见已发布
+  revision（EXISTS 经 experts.published_revision_id），draft 不泄漏
 - app role 设 own owner → 可见；不改 owner_id 的 UPDATE 正常，改写 owner_id 被
-  WITH CHECK 拒绝（抛错，而非 SELECT 不可见的静默 0 行）
-- app role 无 DDL：CREATE TABLE 被权限拒绝（REVOKE CREATE ON SCHEMA public）
+  WITH CHECK 拒绝（抛错 + SQLSTATE 42501，而非 SELECT 不可见的静默 0 行）
+- app role 无 DDL：CREATE TABLE 被权限拒绝（REVOKE CREATE ON SCHEMA public，
+  SQLSTATE 42501）
 - admin role 经显式 policy 读全量；无 UPDATE/DELETE policy → RLS 默认拒绝 =
   静默 0 行受影响（PostgreSQL 不抛错——brief 的 pytest.raises 版本据此修正为
   rowcount 断言）
@@ -122,7 +126,9 @@ async def _seed_user_with_task(pg: PgDb, email: str) -> _uuid.UUID:
 
 
 async def test_app_role_cannot_see_other_owners_tasks(pg: PgDb) -> None:
-    """陌生 owner 作用域下 SELECT 0 行：RLS USING 不可见。"""
+    """陌生 owner 作用域下读写全被 RLS 过滤：SELECT 0 行；UPDATE/DELETE 走默认
+    拒绝（无适用 policy → 静默 0 行受影响，不抛错）；superuser 复核数据仍在。
+    若 tasks_app_update/delete 的 USING 被放宽为 true，此用例即红。"""
     await _seed_user_with_task(pg, "a@x.com")
     app = _role_engine(pg, APP_ROLE)
     try:
@@ -130,8 +136,15 @@ async def test_app_role_cannot_see_other_owners_tasks(pg: PgDb) -> None:
             await conn.execute(text("SELECT app.set_current_owner(gen_random_uuid())"))
             n = (await conn.execute(text("SELECT count(*) FROM tasks"))).scalar_one()
             assert n == 0
+            updated = await conn.execute(text("UPDATE tasks SET status = 'completed'"))
+            assert updated.rowcount == 0
+            deleted = await conn.execute(text("DELETE FROM tasks"))
+            assert deleted.rowcount == 0
     finally:
         await app.dispose()
+    async with pg.engine.begin() as conn:  # superuser 复核：数据未被静默改/删
+        n = (await conn.execute(text("SELECT count(*) FROM tasks"))).scalar_one()
+        assert n == 1
 
 
 async def test_app_role_sees_own_rows_after_set_current_owner(pg: PgDb) -> None:
@@ -147,8 +160,9 @@ async def test_app_role_sees_own_rows_after_set_current_owner(pg: PgDb) -> None:
             # 下一条的报错只能来自 WITH CHECK 对新行的拒绝
             updated = await conn.execute(text("UPDATE tasks SET status = 'queued'"))
             assert updated.rowcount == 1
-            with pytest.raises(Exception, match="row-level security policy"):
+            with pytest.raises(Exception, match="row-level security policy") as excinfo:
                 await conn.execute(text("UPDATE tasks SET owner_id = gen_random_uuid()"))
+            assert excinfo.value.orig.sqlstate == "42501"  # WITH CHECK 拒绝（RLS 违约）
     finally:
         await app.dispose()
 
@@ -160,8 +174,71 @@ async def test_app_role_has_no_ddl_and_cannot_read_without_context(pg: PgDb) -> 
         async with app.connect() as conn:
             n = (await conn.execute(text("SELECT count(*) FROM tasks"))).scalar_one()
             assert n == 0
-            with pytest.raises(Exception, match="permission denied"):
+            with pytest.raises(Exception, match="permission denied") as excinfo:
                 await conn.execute(text("CREATE TABLE sneaky (id int)"))
+            assert excinfo.value.orig.sqlstate == "42501"  # insufficient_privilege
+    finally:
+        await app.dispose()
+
+
+async def _seed_bare_user(pg: PgDb, email: str) -> _uuid.UUID:
+    """superuser 造一个无任何数据行的用户（充当陌生 owner 的真实 user id）。"""
+    async with pg.engine.begin() as conn:
+        return (
+            await conn.execute(
+                text(
+                    "INSERT INTO users (id, email, password_hash, role, status) "
+                    "VALUES (gen_random_uuid(), :e, 'h', 'user', 'active') RETURNING id"
+                ),
+                {"e": email},
+            )
+        ).scalar_one()
+
+
+async def test_app_role_stranger_sees_published_revision(pg: PgDb) -> None:
+    """expert_revisions_app_published_read 正方向：陌生 owner 恰好看见已发布
+    revision（EXISTS 经 experts.published_revision_id），发布内容不因 RLS 失明。"""
+    await _seed_user_with_task(pg, "a@x.com")  # 1 条 published revision
+    stranger = await _seed_bare_user(pg, "stranger@x.com")
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with app.connect() as conn:
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": stranger})
+            seen = (await conn.execute(text("SELECT id FROM expert_revisions"))).scalar_one()
+    finally:
+        await app.dispose()
+    async with pg.engine.begin() as conn:  # 可见的正是发布链指向的那条
+        published = (
+            await conn.execute(text("SELECT published_revision_id FROM experts"))
+        ).scalar_one()
+    assert seen == published
+
+
+async def test_app_role_stranger_does_not_see_draft_revision(pg: PgDb) -> None:
+    """expert_revisions_app_published_read 反方向：同一 expert 的 draft revision
+    不泄漏给陌生 owner——superuser 可见 2 条而陌生 owner 仍只见 1 条（已发布）。"""
+    await _seed_user_with_task(pg, "a@x.com")  # revision_no=1, published
+    stranger = await _seed_bare_user(pg, "stranger@x.com")
+    async with pg.engine.begin() as conn:
+        expert_id = (await conn.execute(text("SELECT id FROM experts LIMIT 1"))).scalar_one()
+        await conn.execute(
+            text(
+                "INSERT INTO expert_revisions (id, expert_id, owner_id, revision_no, "
+                "content_json, content_sha256, status) VALUES (gen_random_uuid(), :x, "
+                "(SELECT owner_id FROM experts WHERE id = :x), 2, '{}', :h, 'draft')"
+            ),
+            {"x": expert_id, "h": "b" * 64},
+        )
+        total = (await conn.execute(text("SELECT count(*) FROM expert_revisions"))).scalar_one()
+    assert total == 2  # draft 确实存在，只是被 RLS 过滤
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with app.connect() as conn:
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": stranger})
+            n = (await conn.execute(text("SELECT count(*) FROM expert_revisions"))).scalar_one()
+            assert n == 1
+            status = (await conn.execute(text("SELECT status FROM expert_revisions"))).scalar_one()
+            assert status == "published"
     finally:
         await app.dispose()
 
