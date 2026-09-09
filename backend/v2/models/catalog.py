@@ -9,8 +9,8 @@ model_capabilities 为 v0.12.4 接缝：按模型能力如实声明，形如
 {"gpt-4o": {"input": ["text", "image"]}}；缺失条目视为纯文本（input=["text"]）——
 阶段 3/5 生成扩展注册时消费。
 
-PlatformSlot.task_id 在本任务保持裸 Uuid 列（tasks 表在 tasking.py 定义）；
-FK 由 Task 5 经 use_alter 补齐。
+PlatformSlot.task_id 由 Task 5 经 use_alter 接线为 FK → tasks.id（ondelete
+SET NULL；tasks 表在 tasking.py 定义，建表后以 ALTER TABLE 补齐）。
 """
 import uuid as _uuid
 from datetime import date, datetime
@@ -27,7 +27,6 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    Uuid,
     func,
     text,
 )
@@ -131,8 +130,10 @@ class PlatformSlot(Base):
         Index("ix_platform_slots_task_id", "task_id"),
     )
     slot_no: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
-    # Task 在 tasking.py 定义；FK 在 Task 5 用 use_alter 补
-    task_id: Mapped[_uuid.UUID | None] = mapped_column(Uuid)
+    # tasks 表在 tasking.py 定义；FK 于 Task 5 经 use_alter 接线（Task 5 之前为裸 Uuid 列）
+    task_id: Mapped[_uuid.UUID | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="SET NULL", use_alter=True)
+    )
     state: Mapped[str] = mapped_column(String(10), nullable=False, default="free")
     leased_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
