@@ -184,6 +184,18 @@ def test_extension_mcp_tools_and_harness_coexist(tmp_path):
     assert json.loads(parsed) == {"has_mcp": True, "has_harness": True}
 
 
+def test_extension_declares_image_input_for_real_provider(tmp_path):
+    """BYOK 模型必须声明图像输入（2026-09-09 事故：input:["text"] 硬编码使
+    Pi read 工具剥离图像块——read.js getNonVisionImageNote 依据模型元数据
+    input 是否含 "image" 决定丢弃，多模态模型被注册元数据冤枉）。"""
+    generator = ExtensionGenerator(tmp_path / "extensions")
+    source = generator.generate(11, [], provider="openai").read_text(encoding="utf-8")
+    assert 'input: ["text", "image"]' in source
+    # faux 回显引擎仍为纯文本（不涉及图像）
+    faux = generator.generate(12, [], provider="faux").read_text(encoding="utf-8")
+    assert 'input: ["text"]' in faux
+
+
 # ---------------------------------------------------------------------------
 # 内部接口（/internal/harness/check-code-style）
 # ---------------------------------------------------------------------------

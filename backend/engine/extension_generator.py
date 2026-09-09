@@ -201,7 +201,11 @@ _NO_FAUX_BLOCK = """  // OpenAI 兼容上游走 chat/completions 协议：经扩
         id: PROVIDER_MODEL,
         name: PROVIDER_MODEL,
         reasoning: false,
-        input: ["text"],
+        // 声明图像输入：Pi read 工具按 model.input 决定是否剥离图像块
+        // （getNonVisionImageNote）；V1 无能力目录，统一声明支持，
+        // 纯文本模型读图将收到 provider 侧报错（可观察错误，不崩溃）。
+        // V2 BYOK 目录化（阶段3）改为按模型能力声明。
+        input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 128000,
         maxTokens: 16384,
