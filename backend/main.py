@@ -12,6 +12,7 @@ from backend.api import api_router, internal_router
 from backend.config import get_settings
 from backend.database import async_session_factory
 from backend.dependencies import get_pi_engine_manager
+from backend.logging_config import configure_logging
 from backend.middleware.upload_guard import UploadSizeGuardMiddleware
 from backend.services.file_service import sweep_stale_storage
 from backend.services.user_service import UserSystemError
@@ -24,6 +25,7 @@ logger = logging.getLogger("agentcraft")
 async def lifespan(_app: FastAPI):
     """启动巡检（§6.6/§10.2）：校验配置一致性、确保存储根存在、清理崩溃遗留。"""
     settings = get_settings()
+    configure_logging(settings.LOG_LEVEL)
     if settings.AGENTCRAFT_WORKSPACE_ROOT != CANONICAL_AGENT_ROOT:
         # tasks.workdir 的 CHECK 约束硬编码此前缀；可配置化需同步迁移约束
         raise RuntimeError(
