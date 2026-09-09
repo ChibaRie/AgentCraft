@@ -9,10 +9,25 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          # 必须是 test：tests/conftest.py 的管理连接去掉库名后，asyncpg 以用户名
+          # 作为默认库（与 testcontainers 默认 POSTGRES_DB=test 行为一致）
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test" --health-interval 5s
+          --health-timeout 5s --health-retries 10
     env:
       SECRET_KEY: ci-secret-key-not-for-production-000000
       TASK_TOKEN_SECRET: ci-task-token-secret-not-for-prod-00000
       ALLOW_INSECURE_SECRETS: "true"
+      AGENTCRAFT_TEST_PG_URL: postgresql+asyncpg://test:test@localhost:5432
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -20,8 +35,41 @@ jobs:
           python-version: "3.12"
       - name: Lint
         run: uv run ruff check backend tests
+      - name: Create CI database
+        run: |
+          uv run python - <<'PY'
+          import asyncio
+
+          from sqlalchemy import text
+          from sqlalchemy.ext.asyncio import create_async_engine
+
+
+          async def create_ci_database() -> None:
+              engine = create_async_engine(
+                  "postgresql+asyncpg://test:test@localhost:5432/postgres",
+                  isolation_level="AUTOCOMMIT",
+              )
+              async with engine.connect() as conn:
+                  exists = await conn.execute(
+                      text("SELECT 1 FROM pg_database WHERE datname = 'agentcraft_ci'")
+                  )
+                  if exists.scalar() is None:
+                      await conn.execute(text("CREATE DATABASE agentcraft_ci"))
+              await engine.dispose()
+
+
+          asyncio.run(create_ci_database())
+          PY
+      - name: Apply v2 migrations
+        run: uv run alembic -c alembic_v2.ini upgrade head
+        env:
+          AGENTCRAFT_V2_DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/agentcraft_ci
       - name: Test
         run: uv run pytest -q --tb=short
+      - name: Alembic drift check
+        run: uv run alembic -c alembic_v2.ini check
+        env:
+          AGENTCRAFT_V2_DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/agentcraft_ci
 
   frontend-build:
     runs-on: ubuntu-latest
