@@ -80,3 +80,8 @@ async def owner_session(runtime: V2Runtime, user_id: str) -> AsyncIterator[Async
         async with session.begin():
             await session.execute(text("SELECT app.set_current_owner(:uid)"), {"uid": str(user_id)})
             yield session
+
+
+def client_ip(request: Request) -> str:
+    """客户端 IP（Phase 2 应用层取 socket peer；部署阶段集中替换为 nginx 可信转发头解析）。"""
+    return request.client.host if request.client else "unknown"

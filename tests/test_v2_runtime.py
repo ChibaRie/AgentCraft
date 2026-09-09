@@ -4,7 +4,7 @@ from sqlalchemy import text
 from backend.main import app
 
 # FastAPI 依赖统一定义于 runtime.py，api/v2 仅 re-export
-from backend.v2.runtime import V2Runtime, get_v2_runtime
+from backend.v2.runtime import V2Runtime, client_ip, get_v2_runtime
 from tests.conftest import ADMIN_ROLE, APP_ROLE, PgDb
 
 
@@ -53,3 +53,20 @@ def test_unconfigured_runtime_returns_503(client):
     resp = client.get("/api/v2/health")
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
+
+
+def test_client_ip_prefers_socket_peer_with_unknown_fallback():
+    from starlette.requests import Request as StarletteRequest
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [],
+        "query_string": b"",
+    }
+    assert client_ip(StarletteRequest({**scope, "client": ("203.0.113.7", 51000)})) == (
+        "203.0.113.7"
+    )
+    # 直连 ASGI / 测试客户端可能缺 client（None）→ 兜底 "unknown"
+    assert client_ip(StarletteRequest({**scope, "client": None})) == "unknown"
