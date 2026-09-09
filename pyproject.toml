@@ -20,6 +20,8 @@ dependencies = [
     "cryptography>=50.0.1",
     "asyncpg>=0.31.0",
     "testcontainers>=4.15.0",
+    "argon2-cffi>=25.1.0",
+    "pyotp>=2.10.0",
 ]
 
 [dependency-groups]

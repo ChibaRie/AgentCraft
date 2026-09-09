@@ -1,3 +1,5 @@
+import base64
+import binascii
 from pathlib import Path
 
 from pydantic import ValidationError, model_validator
@@ -44,6 +46,12 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./agentcraft.db"
     TASK_TOKEN_SECRET: str = ""  # 任务凭据签名密钥，必须与 SECRET_KEY 不同
     ALLOW_INSECURE_SECRETS: bool = False  # 仅 dev/test 逃生舱；生产禁止
+    V2_DATABASE_URL: str = ""  # agentcraft_app role DSN（V2 业务面；空 = V1-only 模式）
+    V2_ADMIN_DATABASE_URL: str = ""  # agentcraft_admin role DSN（认证面/系统作业）
+    MFA_ENCRYPTION_KEY: str = ""  # b64url 32B；TOTP secret 信封加密（Ops §4.2 独立密钥材料）
+    EMAIL_OUTBOX_ENCRYPTION_KEY: str = ""  # b64url 32B；outbox payload 信封加密
+    RATE_LIMIT_HMAC_KEY: str = ""  # b64url 32B；限流 HMAC（独立于加密密钥）
+    SESSION_COOKIE_SECURE: bool = True  # dev 经 http://localhost 浏览器豁免；LAN 调试可关
     LOG_LEVEL: str = "INFO"
 
     @model_validator(mode="after")
@@ -67,7 +75,39 @@ class Settings(BaseSettings):
                 raise ValueError(f"{name} 不得使用 change-me- 占位符（须为强随机值）")
             if len(value) < 32:
                 raise ValueError(f"{name} 长度不足32字符（须为强随机值）")
+        self._validate_v2_secrets()
         return self
+
+    def _validate_v2_secrets(self) -> None:
+        v2_mode = bool(self.V2_DATABASE_URL) and bool(self.V2_ADMIN_DATABASE_URL)
+        if not v2_mode:
+            if self.V2_DATABASE_URL or self.V2_ADMIN_DATABASE_URL:
+                raise ValueError("V2_DATABASE_URL 与 V2_ADMIN_DATABASE_URL 必须同时配置")
+            return
+        key_specs = (
+            ("MFA_ENCRYPTION_KEY", self.MFA_ENCRYPTION_KEY),
+            ("EMAIL_OUTBOX_ENCRYPTION_KEY", self.EMAIL_OUTBOX_ENCRYPTION_KEY),
+            ("RATE_LIMIT_HMAC_KEY", self.RATE_LIMIT_HMAC_KEY),
+        )
+        decoded: dict[str, bytes] = {}
+        for name, raw in key_specs:
+            if not raw:
+                raise ValueError(f"{name} 在 V2 模式下必须设置（b64url 32 字节）")
+            try:
+                material = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError(f"{name} 不是合法 base64url") from exc
+            if len(material) != 32:
+                raise ValueError(f"{name} 解码后必须为 32 字节")
+            if raw in {self.SECRET_KEY, self.TASK_TOKEN_SECRET}:
+                raise ValueError(f"{name} 不得与既有密钥共用")
+            decoded[name] = material
+        if len(set(decoded.values())) != len(decoded):
+            raise ValueError("三把 V2 密钥材料必须互不相同")
+        if not self.SESSION_COOKIE_SECURE and not self.ALLOW_INSECURE_SECRETS:
+            raise ValueError(
+                "SESSION_COOKIE_SECURE=false 仅限 ALLOW_INSECURE_SECRETS=true 的开发环境"
+            )
 
 
 def get_settings() -> Settings:

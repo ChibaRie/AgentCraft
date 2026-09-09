@@ -1,4 +1,5 @@
 # tests/test_config_security.py
+import base64
 from pathlib import Path
 
 import pytest
@@ -113,3 +114,39 @@ def test_get_settings_strong_secrets_returns_settings(monkeypatch):
     assert settings.SECRET_KEY == "x" * 32
     assert settings.TASK_TOKEN_SECRET == "t" * 32
     assert settings.ALLOW_INSECURE_SECRETS is False
+
+
+# ---- V2 认证/会话设置：三把新密钥 + V2 DSN（Phase 2, Task 1）----
+
+
+def _base_kwargs(**over):
+    kwargs = dict(
+        SECRET_KEY="x" * 40,
+        TASK_TOKEN_SECRET="y" * 40,
+        ALLOW_INSECURE_SECRETS=False,
+        V2_DATABASE_URL="postgresql+asyncpg://agentcraft_app:p@h:5432/db",
+        V2_ADMIN_DATABASE_URL="postgresql+asyncpg://agentcraft_admin:p@h:5432/db",
+        MFA_ENCRYPTION_KEY=base64.urlsafe_b64encode(b"m" * 32).decode().rstrip("="),
+        EMAIL_OUTBOX_ENCRYPTION_KEY=base64.urlsafe_b64encode(b"o" * 32).decode().rstrip("="),
+        RATE_LIMIT_HMAC_KEY=base64.urlsafe_b64encode(b"r" * 32).decode().rstrip("="),
+    )
+    kwargs.update(over)
+    return Settings(**kwargs)
+
+
+def test_v2_mode_requires_three_new_keys():
+    with pytest.raises(ValidationError):
+        _base_kwargs(MFA_ENCRYPTION_KEY="")
+
+
+def test_v2_mode_rejects_short_or_shared_keys():
+    with pytest.raises(ValidationError):
+        _base_kwargs(MFA_ENCRYPTION_KEY=base64.urlsafe_b64encode(b"m" * 16).decode().rstrip("="))
+    same = base64.urlsafe_b64encode(b"z" * 32).decode().rstrip("=")
+    with pytest.raises(ValidationError):
+        _base_kwargs(MFA_ENCRYPTION_KEY=same, EMAIL_OUTBOX_ENCRYPTION_KEY=same)
+
+
+def test_v1_only_mode_allows_empty_v2_keys():
+    s = _base_kwargs(V2_DATABASE_URL="", V2_ADMIN_DATABASE_URL="")
+    assert s.SESSION_COOKIE_SECURE is True
