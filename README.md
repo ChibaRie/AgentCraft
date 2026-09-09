@@ -48,7 +48,7 @@
 ```bash
 # 1) 后端
 cp .env.example .env            # 填 SECRET_KEY / OPENAI_API_KEY（系统默认 Provider）
-pip install -r requirements.txt # 或 uv sync
+uv sync
 
 # 初始化数据库
 alembic upgrade head
@@ -101,7 +101,7 @@ docs/             # 开发计划 / 进度 / 开发记录 / 阶段手册
 - `docs/DEVELOPMENT_PLAN.md` — 阶段推进主索引（阶段 0-7 全部完成）
 - `docs/Scaffold_Progress_v0.2.0.md` — 各阶段交付与验收证据
 - `docs/Development_Record_v0.1.0.md` — 开发日志与决策
-- 上游基线（仓库上层 `docs/`）：PRD v0.4.1 / Engineering Spec v0.4.0 / Database Design v0.4.0
+- 上游基线（仓库上层 `docs/AgentCraft-V1/`）：PRD v0.4.1 / Engineering Spec v0.4.0 / Database Design v0.4.0
 
 ## 已知边界（v1）
 

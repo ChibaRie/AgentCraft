@@ -3,7 +3,7 @@
 前置：docker 可用，且已构建沙箱镜像
     docker compose -f docker/docker-compose.yml --profile mcp-sandbox build mcp-sandbox
 
-执行：python probe_mcp_stdio.py
+执行：python tools/probe_mcp_stdio.py
 流程：McpClient.stdio → `docker run --rm -i --network agentcraft-internal
 agentcraft-mcp-sandbox sh -c "mcp-server-filesystem /workspace"` →
 initialize → tools/list → tools/call(list_directory) 全真实执行。
@@ -13,8 +13,10 @@ import asyncio
 import json
 import subprocess
 import sys
+from pathlib import Path
 
-sys.path.insert(0, ".")
+ROOT = Path(__file__).resolve().parents[1]  # agentcraft/
+sys.path.insert(0, str(ROOT))
 
 from backend.config import get_settings  # noqa: E402
 from backend.engine.mcp_client import McpClient  # noqa: E402

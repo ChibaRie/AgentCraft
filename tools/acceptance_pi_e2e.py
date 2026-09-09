@@ -1,7 +1,7 @@
 """阶段 5 端到端验收（PRD §4.5.5 + phase5_piagent.md §八）。
 
 前置：后端已以 PI_PROVIDER=faux 启动（uvicorn backend.main:app）。
-用法：PYTHONUTF8=1 python acceptance_pi_e2e.py [base-url]
+用法：PYTHONUTF8=1 python tools/acceptance_pi_e2e.py [base-url]
 
 验收项：
 1. faux 下创建任务 → 发消息 → SSE 逐字流式（非首条 2s 内出字）

@@ -1,7 +1,7 @@
 """步骤 1 手工实验驱动：裸跑 pi --mode rpc（faux），录制真实帧序列。
 
 产出：tests/fixtures/pi_frames/<name>.jsonl（协议测试的真实语料）。
-用法：python probe_pi_rpc.py <output-name> [timeout-seconds]
+用法：python tools/probe_pi_rpc.py <output-name> [timeout-seconds]
 """
 
 import asyncio
@@ -10,9 +10,12 @@ import os
 import sys
 from pathlib import Path
 
-from backend.engine.extension_generator import ExtensionGenerator
+ROOT = Path(__file__).resolve().parents[1]  # agentcraft/
+sys.path.insert(0, str(ROOT))
 
-FRAMES_DIR = Path(__file__).parent / "tests" / "fixtures" / "pi_frames"
+from backend.engine.extension_generator import ExtensionGenerator  # noqa: E402
+
+FRAMES_DIR = ROOT / "tests" / "fixtures" / "pi_frames"
 
 # Windows npm shim 是 .cmd，create_subprocess_exec 无法直接执行；直取包内 CLI 入口，
 # 与容器内 argv（node + js 入口）形态一致。可用 PI_CLI_JS 覆盖。
