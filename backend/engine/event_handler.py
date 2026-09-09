@@ -162,7 +162,8 @@ class EventHandler:
             return []
 
         # error 等：不落库；发 error 帧告知可重试，流以 done 收尾。
-        # 红线（§4.7）：errorMessage 属 Provider 响应正文——日志只记事件类型与长度
+        # 红线（§4.7）：errorMessage 属 Provider 响应正文，不得回传浏览器——
+        # SSE 只透出通用话术；日志仅记事件类型/长度（不落正文）
         error_message = message.get("errorMessage")
         logger.warning(
             "assistant message_end stopReason=%s（不落库），errorMessage 长度 %d 字符",
@@ -174,7 +175,7 @@ class EventHandler:
                 "error",
                 {
                     "code": "ENGINE_ERROR",
-                    "message": message.get("errorMessage") or "生成回复失败，请重试",
+                    "message": "生成回复失败，请重试",
                     "recoverable": True,
                 },
             )

@@ -1,4 +1,6 @@
 # tests/test_config_security.py
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -33,6 +35,44 @@ def test_rejects_empty_task_token_secret():
 def test_rejects_shared_secret_between_web_and_task_token():
     with pytest.raises(ValidationError):
         Settings(**_base_env(SECRET_KEY="s" * 32, TASK_TOKEN_SECRET="s" * 32))
+
+
+def test_rejects_change_me_prefix_secret_key():
+    """`.env.example` 类 change-me- 占位符必须被拒绝（防模板直启）。"""
+    with pytest.raises(ValidationError):
+        Settings(**_base_env(SECRET_KEY="change-me-" + "x" * 32))
+
+
+def test_rejects_change_me_prefix_task_token_secret():
+    with pytest.raises(ValidationError):
+        Settings(**_base_env(TASK_TOKEN_SECRET="change-me-" + "t" * 32))
+
+
+def test_rejects_31_char_secret_key():
+    with pytest.raises(ValidationError):
+        Settings(**_base_env(SECRET_KEY="x" * 31))
+
+
+def test_rejects_31_char_task_token_secret():
+    with pytest.raises(ValidationError):
+        Settings(**_base_env(TASK_TOKEN_SECRET="t" * 31))
+
+
+def test_env_example_placeholders_are_rejected():
+    """模板钉死：`.env.example` 的 SECRET_KEY/TASK_TOKEN_SECRET 占位值
+    构造 Settings（逃生舱关闭）必须校验失败——模板未经编辑不可启动。"""
+    env_example = Path(__file__).resolve().parents[1] / ".env.example"
+    placeholders: dict[str, str] = {}
+    for line in env_example.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("SECRET_KEY="):
+            placeholders["SECRET_KEY"] = line.split("=", 1)[1]
+        elif line.startswith("TASK_TOKEN_SECRET="):
+            placeholders["TASK_TOKEN_SECRET"] = line.split("=", 1)[1]
+    assert placeholders.get("SECRET_KEY"), ".env.example 缺少 SECRET_KEY"
+    assert placeholders.get("TASK_TOKEN_SECRET"), ".env.example 缺少 TASK_TOKEN_SECRET"
+    with pytest.raises(ValidationError):
+        Settings(**placeholders, ALLOW_INSECURE_SECRETS="false")
 
 
 def test_accepts_distinct_secrets():

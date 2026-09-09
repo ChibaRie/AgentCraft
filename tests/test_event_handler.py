@@ -208,6 +208,10 @@ async def test_error_message_not_persisted_and_reports_error():
     assert spy.assistant_calls == []
     errors = [payload for name, payload in sse if name == "error"]
     assert errors and errors[0]["recoverable"] is True
+    # 红线（§4.7）：Provider errorMessage 属响应正文，不得回传浏览器——
+    # SSE error 帧只透出通用话术（canary 仅存于服务端日志）
+    assert errors[0]["message"] == "生成回复失败，请重试"
+    assert "provider down" not in json.dumps(sse, ensure_ascii=False)
     # 流仍以 done 收尾（前端据此关闭连接）
     assert sse[-1][0] == "done"
 

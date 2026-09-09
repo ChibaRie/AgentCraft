@@ -47,7 +47,7 @@
 
 ```bash
 # 1) 后端
-cp .env.example .env            # 填 SECRET_KEY / OPENAI_API_KEY（系统默认 Provider）
+cp .env.example .env            # 填 SECRET_KEY / TASK_TOKEN_SECRET / OPENAI_API_KEY（系统默认 Provider）
 uv sync
 
 # 初始化数据库

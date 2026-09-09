@@ -26,6 +26,9 @@ async def lifespan(_app: FastAPI):
     """启动巡检（§6.6/§10.2）：校验配置一致性、确保存储根存在、清理崩溃遗留。"""
     settings = get_settings()
     configure_logging(settings.LOG_LEVEL)
+    if settings.ALLOW_INSECURE_SECRETS:
+        # 逃生舱不可静默：置 true 时必须留下可见告警（生产禁止）
+        logger.warning("ALLOW_INSECURE_SECRETS=true：密钥校验已跳过，仅限开发/测试环境")
     if settings.AGENTCRAFT_WORKSPACE_ROOT != CANONICAL_AGENT_ROOT:
         # tasks.workdir 的 CHECK 约束硬编码此前缀；可配置化需同步迁移约束
         raise RuntimeError(

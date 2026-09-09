@@ -8,6 +8,7 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       SECRET_KEY: ci-secret-key-not-for-production-000000
       TASK_TOKEN_SECRET: ci-task-token-secret-not-for-prod-00000
@@ -24,6 +25,7 @@ jobs:
 
   frontend-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend

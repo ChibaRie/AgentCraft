@@ -57,6 +57,16 @@ class Settings(BaseSettings):
             raise ValueError("TASK_TOKEN_SECRET 必须设置为独立的强随机值")
         if self.TASK_TOKEN_SECRET == self.SECRET_KEY:
             raise ValueError("TASK_TOKEN_SECRET 不得与 SECRET_KEY 共用")
+        # `.env.example` 类 change-me- 占位符与过短密钥同样拒绝：
+        # 模板未经编辑不可启动，密钥长度下限防暴力可猜值（32 字符含端点）
+        for name, value in (
+            ("SECRET_KEY", self.SECRET_KEY),
+            ("TASK_TOKEN_SECRET", self.TASK_TOKEN_SECRET),
+        ):
+            if value.startswith("change-me-"):
+                raise ValueError(f"{name} 不得使用 change-me- 占位符（须为强随机值）")
+            if len(value) < 32:
+                raise ValueError(f"{name} 长度不足32字符（须为强随机值）")
         return self
 
 
