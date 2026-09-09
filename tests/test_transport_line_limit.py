@@ -13,6 +13,7 @@ Agent 重新读图，同因 3 次耗尽，任务标记 failed。
 """
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,6 +33,27 @@ def _make_spec(tmp_path: Path) -> ContainerSpec:
     )
 
 
+def _write_docker_stub(tmp_path: Path, name: str, emit: Path) -> str:
+    """写平台适配的假 docker CLI：忽略 docker 参数，仅执行 emit 脚本。
+
+    Windows 用 .cmd 批处理；POSIX 用带 shebang 的 shell 脚本并以 exec 让
+    python 替换 shell 进程（close() 可直接终止），再赋予可执行位。
+    """
+    if sys.platform == "win32":
+        stub = tmp_path / f"{name}.cmd"
+        stub.write_text(
+            f'@echo off\r\n"{sys.executable}" "{emit}"\r\n', encoding="ascii"
+        )
+    else:
+        stub = tmp_path / f"{name}.sh"
+        stub.write_text(
+            f'#!/usr/bin/env bash\nexec "{sys.executable}" "{emit}"\n',
+            encoding="utf-8",
+        )
+        os.chmod(stub, 0o755)
+    return str(stub)
+
+
 def _make_stub(tmp_path: Path, line_chars: int) -> str:
     """生成忽略 docker 参数的桩 CLI：输出单行 line_chars 字符后驻留。"""
     emit = tmp_path / f"emit_{line_chars}.py"
@@ -42,11 +64,7 @@ def _make_stub(tmp_path: Path, line_chars: int) -> str:
         "time.sleep(30)\n",
         encoding="utf-8",
     )
-    stub = tmp_path / f"fake-docker-{line_chars}.cmd"
-    stub.write_text(
-        f'@echo off\r\n"{sys.executable}" "{emit}"\r\n', encoding="ascii"
-    )
-    return str(stub)
+    return _write_docker_stub(tmp_path, f"fake-docker-{line_chars}", emit)
 
 
 async def _read_big_line(tmp_path: Path, line_chars: int) -> str:
@@ -85,9 +103,8 @@ async def test_readline_drops_oversize_line_and_keeps_transport_alive(tmp_path):
         "time.sleep(30)\n",
         encoding="utf-8",
     )
-    stub = tmp_path / "fake-docker-oversize.cmd"
-    stub.write_text(f'@echo off\r\n"{sys.executable}" "{emit}"\r\n', encoding="ascii")
-    transport = DockerCliTransport(_make_spec(tmp_path), docker_bin=str(stub))
+    stub = _write_docker_stub(tmp_path, "fake-docker-oversize", emit)
+    transport = DockerCliTransport(_make_spec(tmp_path), docker_bin=stub)
     try:
         await transport.start()
         first = await asyncio.wait_for(transport.readline(), timeout=30)
