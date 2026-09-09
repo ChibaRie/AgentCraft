@@ -1,6 +1,7 @@
 # tests/test_logging_config.py
 import logging
 
+from backend.engine.pi_engine import PiEngine
 from backend.logging_config import SensitiveDataFilter, configure_logging
 
 
@@ -44,3 +45,33 @@ def test_no_prompt_content_in_engine_logs():
     )
     SensitiveDataFilter().filter(rec)
     assert "<body omitted>" not in rec.getMessage() or "128 bytes" in rec.getMessage()
+
+
+class _NullTransport:
+    """PiTransport 最小桩：金丝雀用例只驱动 handle_line 的坏行解析分支。"""
+
+    async def write_line(self, line: str) -> None: ...
+    async def readline(self) -> str | None:
+        return None
+
+    async def close(self) -> None: ...
+
+
+async def test_unparsable_stdout_line_never_logs_body(caplog):
+    """站点级金丝雀（§4.7 红线）：真实驱动 pi_engine 的坏行分支。
+
+    含金丝雀标记的非 JSON 行经 handle_line 后：金丝雀正文绝不出现在任何
+    捕获的日志记录里，长度元数据必须出现。对修复前的 %.120s 正文格式
+    该用例必失败（金丝雀会随前 120 字符进入日志），防站点退化为记正文。
+    """
+    canary = "LEAK-CANARY-prompt-fragment"
+    bad_line = f'{canary}: {{"prompt": "秘密内容"}} 不是合法 JSON'
+    assert canary in bad_line  # 金丝雀确在输入中（防用例自身退化为永真）
+
+    engine = PiEngine(task_id=7, transport=_NullTransport())
+    await engine.handle_line(bad_line)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert all(canary not in message for message in messages), messages
+    assert any(str(len(bad_line)) in message for message in messages), messages
+    assert engine._unparsable_dropped == 1

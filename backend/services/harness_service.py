@@ -117,15 +117,25 @@ async def run_ruff_checks(
         logger.warning("ruff 超时（%s）", directory)
         raise RuffExecutionError("ruff 执行超时") from exc
     except Exception as exc:
-        # 环境类失败（ruff 缺失/子进程不可用）统一 502；细节入日志
-        logger.warning("ruff 执行环境失败（%s）: %s", type(exc).__name__, exc)
+        # 环境类失败（ruff 缺失/子进程不可用）统一 502；
+        # 红线（§4.7）：只记异常类名，异常文本可能携带路径/命令行细节
+        logger.warning("ruff 执行环境失败（%s）", type(exc).__name__)
         raise RuffExecutionError("ruff 不可执行") from exc
 
     if fmt_rc >= 2:
-        logger.warning("ruff format --check 执行失败 rc=%s: %s", fmt_rc, fmt_err[:200])
+        # 红线（§4.7）：ruff stderr 可能含源码片段，只记退出码与字节数
+        logger.warning(
+            "ruff format --check 执行失败 rc=%s，stderr %d 字节",
+            fmt_rc,
+            len(fmt_err.encode("utf-8")),
+        )
         raise RuffExecutionError("ruff format 执行失败")
     if lint_rc >= 2:
-        logger.warning("ruff check 执行失败 rc=%s: %s", lint_rc, lint_err[:200])
+        logger.warning(
+            "ruff check 执行失败 rc=%s，stderr %d 字节",
+            lint_rc,
+            len(lint_err.encode("utf-8")),
+        )
         raise RuffExecutionError("ruff check 执行失败")
 
     results = _collect_issues(fmt_out, lint_out)
