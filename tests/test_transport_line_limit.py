@@ -41,9 +41,7 @@ def _write_docker_stub(tmp_path: Path, name: str, emit: Path) -> str:
     """
     if sys.platform == "win32":
         stub = tmp_path / f"{name}.cmd"
-        stub.write_text(
-            f'@echo off\r\n"{sys.executable}" "{emit}"\r\n', encoding="ascii"
-        )
+        stub.write_text(f'@echo off\r\n"{sys.executable}" "{emit}"\r\n', encoding="ascii")
     else:
         stub = tmp_path / f"{name}.sh"
         stub.write_text(
@@ -209,9 +207,7 @@ async def test_line_assembler_clean_eof_returns_none():
 
 async def test_line_assembler_drops_oversize_line_and_keeps_following():
     """超 MAX_LINE_BYTES 的行在组装层被丢弃为空行哨兵，后续行正常送达。"""
-    lines = await _assembled_lines(
-        [b"X" * (MAX_LINE_BYTES + 100), b"\n", b"OK\n", b"END\n"], 3
-    )
+    lines = await _assembled_lines([b"X" * (MAX_LINE_BYTES + 100), b"\n", b"OK\n", b"END\n"], 3)
     assert lines == ["", "OK", "END"]
 
 
@@ -224,7 +220,5 @@ async def test_line_assembler_hard_ceiling_without_separator():
 
 async def test_line_assembler_drops_single_chunk_oversize_line():
     """已含分隔符的整块超限行同样丢弃为空行哨兵（防御性，对齐 CLI 语义）。"""
-    lines = await _assembled_lines(
-        [b"X" * (MAX_LINE_BYTES + 100) + b"\n", b"OK\n"], 2
-    )
+    lines = await _assembled_lines([b"X" * (MAX_LINE_BYTES + 100) + b"\n", b"OK\n"], 2)
     assert lines == ["", "OK"]

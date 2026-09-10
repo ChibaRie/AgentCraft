@@ -58,19 +58,29 @@ async def _seed_task_parents(maker, email: str):
         s.add(expert)
         await s.flush()
         rev = ExpertRevision(
-            expert_id=expert.id, owner_id=user.id, revision_no=1,
-            content_json=CONTENT, content_sha256=SHA_A, status="published",
+            expert_id=expert.id,
+            owner_id=user.id,
+            revision_no=1,
+            content_json=CONTENT,
+            content_sha256=SHA_A,
+            status="published",
         )
         s.add(rev)
         catalog = ProviderCatalog(
-            display_name="OpenAI", allowed_host="api.openai.com",
-            models=["gpt-4o"], healthcheck_path="/v1/models",
+            display_name="OpenAI",
+            allowed_host="api.openai.com",
+            models=["gpt-4o"],
+            healthcheck_path="/v1/models",
         )
         s.add(catalog)
         await s.flush()
         provider = UserProvider(
-            user_id=user.id, catalog_id=catalog.id, model_id="gpt-4o",
-            key_ciphertext="ct", dek_wrapped="dek", key_last4="Ab1!",
+            user_id=user.id,
+            catalog_id=catalog.id,
+            model_id="gpt-4o",
+            key_ciphertext="ct",
+            dek_wrapped="dek",
+            key_last4="Ab1!",
         )
         s.add(provider)
         await s.commit()
@@ -109,8 +119,11 @@ async def _seed_message(maker, task_id, owner_id, event_sequence=0):
     """建一条 user 消息，返回 message id（event_sequence 由调用方保证 per-task 唯一）。"""
     async with maker() as s:
         msg = TaskMessage(
-            task_id=task_id, owner_id=owner_id, event_sequence=event_sequence,
-            author="user", content="初始输入",
+            task_id=task_id,
+            owner_id=owner_id,
+            event_sequence=event_sequence,
+            author="user",
+            content="初始输入",
         )
         s.add(msg)
         await s.commit()
@@ -126,7 +139,9 @@ async def _seed_task_with_message(maker, email: str):
 def _file_kwargs(task_id, owner_id, file_name="report.pdf", **overrides):
     """TaskFile 构造基线；负例经 overrides 覆写单一字段。"""
     base = dict(
-        task_id=task_id, owner_id=owner_id, direction="input",
+        task_id=task_id,
+        owner_id=owner_id,
+        direction="input",
         file_name=file_name,
         storage_key=f"tasks/{task_id}/{_uuid.uuid4()}",
         sha256=_uuid.uuid4().hex * 2,  # 64 hex
@@ -142,7 +157,14 @@ async def test_task_status_enum_eight_states(pg_fresh):
     deferred RESTRICT FK 真实生效（被 task 引用的 expert_revision 不可删）。"""
     maker = async_sessionmaker(pg_fresh.engine, expire_on_commit=False)
     assert TASK_STATUSES == (
-        "uploading", "queued", "running", "ready", "completed", "failed", "aborted", "deleted",
+        "uploading",
+        "queued",
+        "running",
+        "ready",
+        "completed",
+        "failed",
+        "aborted",
+        "deleted",
     )
     parents = await _seed_task_parents(maker, "taskstat@example.com")
     async with maker() as s:
@@ -176,9 +198,7 @@ async def test_task_status_enum_eight_states(pg_fresh):
     async with maker() as s:
         with pytest.raises(IntegrityError):
             await s.execute(
-                delete(ExpertRevision).where(
-                    ExpertRevision.id == parents["expert_revision_id"]
-                )
+                delete(ExpertRevision).where(ExpertRevision.id == parents["expert_revision_id"])
             )
     # 反射：tasks 三索引名与列序与 DB §5 一字不差（ix_tasks_queued 为 partial）
     async with pg_fresh.engine.connect() as conn:
@@ -213,16 +233,26 @@ async def test_one_active_round_per_task_partial_index(pg_fresh):
             await s.commit()
     # 谓词覆盖 running：pending + running 同样违反
     async with maker() as s:
-        s.add(TaskRound(
-            task_id=task_id, owner_id=owner_id, source_message_id=msg2, state="running",
-        ))
+        s.add(
+            TaskRound(
+                task_id=task_id,
+                owner_id=owner_id,
+                source_message_id=msg2,
+                state="running",
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # cancelled 不在谓词内：active 轮存活期间可存在 cancelled 轮（正对照）
     async with maker() as s:
-        s.add(TaskRound(
-            task_id=task_id, owner_id=owner_id, source_message_id=msg2, state="cancelled",
-        ))
+        s.add(
+            TaskRound(
+                task_id=task_id,
+                owner_id=owner_id,
+                source_message_id=msg2,
+                state="cancelled",
+            )
+        )
         await s.commit()
     # 首轮转 settled → 退出谓词 → 新 pending 可建（msg3：msg2 已被 cancelled 轮占用）
     async with maker() as s:
@@ -242,23 +272,38 @@ async def test_one_active_round_per_task_partial_index(pg_fresh):
         await s.commit()
     msg4 = await _seed_message(maker, task_id, owner_id, event_sequence=3)
     async with maker() as s:
-        s.add(TaskRound(
-            task_id=task_id, owner_id=owner_id, source_message_id=msg4, state="cancelling",
-        ))
+        s.add(
+            TaskRound(
+                task_id=task_id,
+                owner_id=owner_id,
+                source_message_id=msg4,
+                state="cancelling",
+            )
+        )
         await s.commit()
     # F2(a)：failed 正面插入（failed 不在谓词内，与存活 cancelling 轮并存合法）
     msg5 = await _seed_message(maker, task_id, owner_id, event_sequence=4)
     async with maker() as s:
-        s.add(TaskRound(
-            task_id=task_id, owner_id=owner_id, source_message_id=msg5, state="failed",
-        ))
+        s.add(
+            TaskRound(
+                task_id=task_id,
+                owner_id=owner_id,
+                source_message_id=msg5,
+                state="failed",
+            )
+        )
         await s.commit()
     # F2(a)：未知 state 被拒（ck_task_rounds_state_enum）
     msg6 = await _seed_message(maker, task_id, owner_id, event_sequence=5)
     async with maker() as s:
-        s.add(TaskRound(
-            task_id=task_id, owner_id=owner_id, source_message_id=msg6, state="settling",
-        ))
+        s.add(
+            TaskRound(
+                task_id=task_id,
+                owner_id=owner_id,
+                source_message_id=msg6,
+                state="settling",
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # 反射：partial 索引名 + 列 + 唯一 + 谓词
@@ -279,9 +324,14 @@ async def test_round_source_message_unique(pg_fresh):
     task_id, parents, msg1 = await _seed_task_with_message(maker, "srcmsg@example.com")
     owner_id = parents["owner_id"]
     async with maker() as s:
-        s.add(TaskRound(
-            task_id=task_id, owner_id=owner_id, source_message_id=msg1, state="settled",
-        ))
+        s.add(
+            TaskRound(
+                task_id=task_id,
+                owner_id=owner_id,
+                source_message_id=msg1,
+                state="settled",
+            )
+        )
         await s.commit()
     # 首轮已 settled（非活跃）但唯一约束不分状态 → 仍违反
     async with maker() as s:
@@ -325,9 +375,14 @@ async def test_reservation_unique_active_per_task(pg_fresh):
             await s.commit()
     # consumed 也在谓词内：active(consumed) 与 active(held) 并存被拒
     async with maker() as s:
-        s.add(TaskReservation(
-            task_id=task_id, user_id=owner_id, kind="active", state="consumed",
-        ))
+        s.add(
+            TaskReservation(
+                task_id=task_id,
+                user_id=owner_id,
+                kind="active",
+                state="consumed",
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # kind 互不影响：task_root 与 active 并存合法（不同 partial 索引）
@@ -365,9 +420,14 @@ async def test_reservation_unique_active_per_task(pg_fresh):
         with pytest.raises(IntegrityError):
             await s.commit()
     async with maker() as s:
-        s.add(TaskReservation(
-            task_id=task_id, user_id=owner_id, kind="active", state="expired",
-        ))
+        s.add(
+            TaskReservation(
+                task_id=task_id,
+                user_id=owner_id,
+                kind="active",
+                state="expired",
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # 反射：三个 per-task partial 唯一索引 + artifact_copy 复合列 + 组合索引
@@ -388,7 +448,9 @@ async def test_reservation_unique_active_per_task(pg_fresh):
     assert artifact["column_names"] == ["task_id", "file_id"] and artifact["unique"] is True
     assert "'artifact_copy'" in str(artifact["dialect_options"]["postgresql_where"])
     assert idx["ix_task_reservations_user_kind_state"]["column_names"] == [
-        "user_id", "kind", "state",
+        "user_id",
+        "kind",
+        "state",
     ]
 
 
@@ -407,39 +469,69 @@ async def test_artifact_copy_reservation_per_file(pg_fresh):
         f1_id, f2_id = f1.id, f2.id
     # 两个不同 file 的 artifact_copy(held) 同时允许
     async with maker() as s:
-        s.add(TaskReservation(
-            task_id=task_id, user_id=owner_id, kind="artifact_copy", file_id=f1_id, bytes=10,
-        ))
-        s.add(TaskReservation(
-            task_id=task_id, user_id=owner_id, kind="artifact_copy", file_id=f2_id, bytes=10,
-        ))
+        s.add(
+            TaskReservation(
+                task_id=task_id,
+                user_id=owner_id,
+                kind="artifact_copy",
+                file_id=f1_id,
+                bytes=10,
+            )
+        )
+        s.add(
+            TaskReservation(
+                task_id=task_id,
+                user_id=owner_id,
+                kind="artifact_copy",
+                file_id=f2_id,
+                bytes=10,
+            )
+        )
         await s.commit()
     # 同 file 第二行 → 违反
     async with maker() as s:
-        s.add(TaskReservation(
-            task_id=task_id, user_id=owner_id, kind="artifact_copy", file_id=f1_id,
-        ))
+        s.add(
+            TaskReservation(
+                task_id=task_id,
+                user_id=owner_id,
+                kind="artifact_copy",
+                file_id=f1_id,
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # f1 预留 released → 同 file 可再建
     async with maker() as s:
-        row = (await s.execute(
-            select(TaskReservation).where(
-                TaskReservation.kind == "artifact_copy", TaskReservation.file_id == f1_id,
+        row = (
+            await s.execute(
+                select(TaskReservation).where(
+                    TaskReservation.kind == "artifact_copy",
+                    TaskReservation.file_id == f1_id,
+                )
             )
-        )).scalar_one()
+        ).scalar_one()
         row.state = "released"
         await s.commit()
     async with maker() as s:
-        s.add(TaskReservation(
-            task_id=task_id, user_id=owner_id, kind="artifact_copy", file_id=f1_id,
-        ))
+        s.add(
+            TaskReservation(
+                task_id=task_id,
+                user_id=owner_id,
+                kind="artifact_copy",
+                file_id=f1_id,
+            )
+        )
         await s.commit()
     # file_id FK 真实：指向不存在 file → IntegrityError
     async with maker() as s:
-        s.add(TaskReservation(
-            task_id=task_id, user_id=owner_id, kind="artifact_copy", file_id=_uuid.uuid4(),
-        ))
+        s.add(
+            TaskReservation(
+                task_id=task_id,
+                user_id=owner_id,
+                kind="artifact_copy",
+                file_id=_uuid.uuid4(),
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # ondelete CASCADE：删除 file2 → 其预留行级联消失
@@ -447,9 +539,11 @@ async def test_artifact_copy_reservation_per_file(pg_fresh):
         await s.execute(delete(TaskFile).where(TaskFile.id == f2_id))
         await s.commit()
     async with maker() as s:
-        remaining = (await s.execute(
-            select(TaskReservation).where(TaskReservation.file_id == f2_id)
-        )).scalars().all()
+        remaining = (
+            (await s.execute(select(TaskReservation).where(TaskReservation.file_id == f2_id)))
+            .scalars()
+            .all()
+        )
         assert remaining == []
 
 
@@ -492,10 +586,13 @@ async def test_task_file_name_single_segment_and_states(pg_fresh):
     # output 方向合法；FILE_STATES 其余成员可插入
     async with maker() as s:
         for i, state in enumerate(FILE_STATES[1:], start=1):
-            s.add(TaskFile(
-                **_file_kwargs(task_id, owner_id, file_name=f"f{i}.pdf",
-                               direction="output", state=state),
-            ))
+            s.add(
+                TaskFile(
+                    **_file_kwargs(
+                        task_id, owner_id, file_name=f"f{i}.pdf", direction="output", state=state
+                    ),
+                )
+            )
         await s.commit()
     # 冗余 owner_id 缺失 → NOT NULL 违例
     kwargs = _file_kwargs(task_id, owner_id, file_name="g.pdf")
@@ -514,39 +611,64 @@ async def test_task_message_unique_event_sequence(pg_fresh):
     task_id, parents = await _seed_task(maker, "msg@example.com")
     owner_id = parents["owner_id"]
     async with maker() as s:
-        s.add(TaskMessage(
-            task_id=task_id, owner_id=owner_id, event_sequence=0,
-            author="user", content="第一问",
-        ))
+        s.add(
+            TaskMessage(
+                task_id=task_id,
+                owner_id=owner_id,
+                event_sequence=0,
+                author="user",
+                content="第一问",
+            )
+        )
         await s.commit()
     async with maker() as s:
         row = (await s.execute(select(TaskMessage))).scalar_one()
         assert row.content == "第一问"
         assert row.created_at is not None
     async with maker() as s:
-        s.add(TaskMessage(
-            task_id=task_id, owner_id=owner_id, event_sequence=1,
-            author="assistant", content="第一答",
-        ))
-        s.add(TaskMessage(
-            task_id=task_id, owner_id=owner_id, event_sequence=2,
-            author="tool", content="工具输出",
-        ))
+        s.add(
+            TaskMessage(
+                task_id=task_id,
+                owner_id=owner_id,
+                event_sequence=1,
+                author="assistant",
+                content="第一答",
+            )
+        )
+        s.add(
+            TaskMessage(
+                task_id=task_id,
+                owner_id=owner_id,
+                event_sequence=2,
+                author="tool",
+                content="工具输出",
+            )
+        )
         await s.commit()
     # 同 (task_id, event_sequence) → 违反
     async with maker() as s:
-        s.add(TaskMessage(
-            task_id=task_id, owner_id=owner_id, event_sequence=1,
-            author="user", content="重复序号",
-        ))
+        s.add(
+            TaskMessage(
+                task_id=task_id,
+                owner_id=owner_id,
+                event_sequence=1,
+                author="user",
+                content="重复序号",
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # author 封闭枚举：system 被拒
     async with maker() as s:
-        s.add(TaskMessage(
-            task_id=task_id, owner_id=owner_id, event_sequence=3,
-            author="system", content="x",
-        ))
+        s.add(
+            TaskMessage(
+                task_id=task_id,
+                owner_id=owner_id,
+                event_sequence=3,
+                author="system",
+                content="x",
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     async with pg_fresh.engine.connect() as conn:
@@ -561,46 +683,68 @@ async def test_task_event_unique_sequence_and_type_enum(pg_fresh):
     roundtrip；message_id/round_id 为裸 Uuid 弱引用（无 FK）。"""
     maker = async_sessionmaker(pg_fresh.engine, expire_on_commit=False)
     assert EVENT_TYPES == (
-        "message_saved", "round_queued", "round_running", "round_settled",
-        "round_failed", "round_cancelled", "status_changed",
+        "message_saved",
+        "round_queued",
+        "round_running",
+        "round_settled",
+        "round_failed",
+        "round_cancelled",
+        "status_changed",
     )
     task_id, parents = await _seed_task(maker, "events@example.com")
     owner_id = parents["owner_id"]
     async with maker() as s:
         for seq, etype in enumerate(EVENT_TYPES):
-            s.add(TaskEvent(
-                task_id=task_id, owner_id=owner_id, sequence=seq, type=etype,
-                payload_json={"seq": seq},
-            ))
+            s.add(
+                TaskEvent(
+                    task_id=task_id,
+                    owner_id=owner_id,
+                    sequence=seq,
+                    type=etype,
+                    payload_json={"seq": seq},
+                )
+            )
         await s.commit()
     async with maker() as s:
-        rows = (await s.execute(
-            select(TaskEvent).order_by(TaskEvent.sequence)
-        )).scalars().all()
+        rows = (await s.execute(select(TaskEvent).order_by(TaskEvent.sequence))).scalars().all()
         assert [r.type for r in rows] == list(EVENT_TYPES)
         assert rows[0].payload_json == {"seq": 0}
         assert rows[0].created_at is not None
     # 同 (task_id, sequence) → 违反
     async with maker() as s:
-        s.add(TaskEvent(
-            task_id=task_id, owner_id=owner_id, sequence=0, type="status_changed",
-        ))
+        s.add(
+            TaskEvent(
+                task_id=task_id,
+                owner_id=owner_id,
+                sequence=0,
+                type="status_changed",
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # type 封闭枚举：round_started 被拒
     async with maker() as s:
-        s.add(TaskEvent(
-            task_id=task_id, owner_id=owner_id, sequence=99, type="round_started",
-        ))
+        s.add(
+            TaskEvent(
+                task_id=task_id,
+                owner_id=owner_id,
+                sequence=99,
+                type="round_started",
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # 另一 task 的 sequence=0 不受影响（复合唯一以 task 为界）
     task2_id, parents2 = await _seed_task(maker, "events2@example.com")
     async with maker() as s:
-        s.add(TaskEvent(
-            task_id=task2_id, owner_id=parents2["owner_id"], sequence=0,
-            type="status_changed",
-        ))
+        s.add(
+            TaskEvent(
+                task_id=task2_id,
+                owner_id=parents2["owner_id"],
+                sequence=0,
+                type="status_changed",
+            )
+        )
         await s.commit()
     async with pg_fresh.engine.connect() as conn:
         uqs = await conn.run_sync(lambda c: inspect(c).get_unique_constraints("task_events"))
@@ -615,11 +759,17 @@ async def test_idempotency_unique_subject_route_key(pg_fresh):
     maker = async_sessionmaker(pg_fresh.engine, expire_on_commit=False)
     subject = "s" * 64
     async with maker() as s:
-        s.add(IdempotencyRecord(
-            subject_hash=subject, route="/v1/tasks", key="idem-1",
-            request_hash="r" * 64, expires_at=EXPIRES_SOON,
-            response_json={"ok": True}, status_code=201,
-        ))
+        s.add(
+            IdempotencyRecord(
+                subject_hash=subject,
+                route="/v1/tasks",
+                key="idem-1",
+                request_hash="r" * 64,
+                expires_at=EXPIRES_SOON,
+                response_json={"ok": True},
+                status_code=201,
+            )
+        )
         await s.commit()
     async with maker() as s:
         row = (await s.execute(select(IdempotencyRecord))).scalar_one()
@@ -628,31 +778,51 @@ async def test_idempotency_unique_subject_route_key(pg_fresh):
         assert row.created_at is not None
     # 同三元组 → 违反
     async with maker() as s:
-        s.add(IdempotencyRecord(
-            subject_hash=subject, route="/v1/tasks", key="idem-1",
-            request_hash="r" * 64, expires_at=EXPIRES_SOON,
-        ))
+        s.add(
+            IdempotencyRecord(
+                subject_hash=subject,
+                route="/v1/tasks",
+                key="idem-1",
+                request_hash="r" * 64,
+                expires_at=EXPIRES_SOON,
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # 同 subject+route，不同 key → 合法
     async with maker() as s:
-        s.add(IdempotencyRecord(
-            subject_hash=subject, route="/v1/tasks", key="idem-2",
-            request_hash="r" * 64, expires_at=EXPIRES_SOON,
-        ))
+        s.add(
+            IdempotencyRecord(
+                subject_hash=subject,
+                route="/v1/tasks",
+                key="idem-2",
+                request_hash="r" * 64,
+                expires_at=EXPIRES_SOON,
+            )
+        )
         await s.commit()
     # 同 subject+key，不同 route → 合法
     async with maker() as s:
-        s.add(IdempotencyRecord(
-            subject_hash=subject, route="/v1/tasks/abort", key="idem-1",
-            request_hash="r" * 64, expires_at=EXPIRES_SOON,
-        ))
+        s.add(
+            IdempotencyRecord(
+                subject_hash=subject,
+                route="/v1/tasks/abort",
+                key="idem-1",
+                request_hash="r" * 64,
+                expires_at=EXPIRES_SOON,
+            )
+        )
         await s.commit()
     # expires_at NOT NULL
     async with maker() as s:
-        s.add(IdempotencyRecord(
-            subject_hash=subject, route="/v1/x", key="idem-3", request_hash="r" * 64,
-        ))
+        s.add(
+            IdempotencyRecord(
+                subject_hash=subject,
+                route="/v1/x",
+                key="idem-3",
+                request_hash="r" * 64,
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     async with pg_fresh.engine.connect() as conn:
@@ -674,8 +844,11 @@ async def test_task_initial_message_use_alter_fk(pg_fresh):
         s.add(task)
         await s.flush()
         msg = TaskMessage(
-            task_id=task.id, owner_id=parents["owner_id"],
-            event_sequence=0, author="user", content="初始输入",
+            task_id=task.id,
+            owner_id=parents["owner_id"],
+            event_sequence=0,
+            author="user",
+            content="初始输入",
         )
         s.add(msg)
         await s.flush()
@@ -706,9 +879,14 @@ async def test_platform_slot_task_fk_set_null(pg_fresh):
     maker = async_sessionmaker(pg_fresh.engine, expire_on_commit=False)
     task_id, _ = await _seed_task(maker, "slot@example.com")
     async with maker() as s:
-        s.add(PlatformSlot(
-            slot_no=10, state="leased", task_id=task_id, leased_until=EXPIRES_SOON,
-        ))
+        s.add(
+            PlatformSlot(
+                slot_no=10,
+                state="leased",
+                task_id=task_id,
+                leased_until=EXPIRES_SOON,
+            )
+        )
         await s.commit()
     async with maker() as s:
         row = await s.get(PlatformSlot, 10)
@@ -742,8 +920,14 @@ async def test_metadata_compile_circular_chain(pg_fresh):
     Base.metadata.create_all(engine, checkfirst=False)
     ddl = "\n".join(dumped)
     for table in (
-        "tasks", "task_files", "task_reservations", "task_messages",
-        "task_rounds", "task_events", "idempotency_records", "platform_slots",
+        "tasks",
+        "task_files",
+        "task_reservations",
+        "task_messages",
+        "task_rounds",
+        "task_events",
+        "idempotency_records",
+        "platform_slots",
     ):
         assert f"CREATE TABLE {table}" in ddl
     assert "ALTER TABLE tasks ADD CONSTRAINT fk_tasks_initial_message_id_task_messages" in ddl

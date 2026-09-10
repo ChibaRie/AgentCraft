@@ -74,20 +74,14 @@ async def delete_task(
             await db.delete(task)
             await db.commit()
             # 任务专属文件（PRD §4.5.6：项目原有目录不受影响）
-            shutil.rmtree(
-                task_files_root / f"task-{task_id}", ignore_errors=True
-            )
+            shutil.rmtree(task_files_root / f"task-{task_id}", ignore_errors=True)
             (extensions_root / f"task-{task_id}.ts").unlink(missing_ok=True)
 
 
-async def complete_expert_running_tasks(
-    db: AsyncSession, expert_id: int, manager
-) -> int:
+async def complete_expert_running_tasks(db: AsyncSession, expert_id: int, manager) -> int:
     """专家下架联动（§7.8）：running 任务原子置 completed + 回收容器。"""
     rows = (
-        await db.execute(
-            select(Task).where(Task.expert_id == expert_id, Task.status == "running")
-        )
+        await db.execute(select(Task).where(Task.expert_id == expert_id, Task.status == "running"))
     ).scalars()
     tasks = list(rows)
     for task in tasks:

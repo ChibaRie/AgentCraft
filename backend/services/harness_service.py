@@ -94,9 +94,7 @@ def _collect_issues(fmt_out: str, lint_out: str) -> list[dict]:
     return results
 
 
-async def run_ruff_checks(
-    directory: Path, *, runner=None, timeout: float = 30.0
-) -> dict:
+async def run_ruff_checks(directory: Path, *, runner=None, timeout: float = 30.0) -> dict:
     """对目录（或单文件）执行 ruff format --check + ruff check，汇总 issues（§6.8）。"""
     if runner is None:
         runner = _default_runner
@@ -139,8 +137,11 @@ async def run_ruff_checks(
         raise RuffExecutionError("ruff check 执行失败")
 
     results = _collect_issues(fmt_out, lint_out)
-    return {"passed": not results, "issues": results,
-            "checked_at": datetime.now(timezone.utc).isoformat()}
+    return {
+        "passed": not results,
+        "issues": results,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def _resolve_ruff() -> str:

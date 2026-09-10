@@ -57,8 +57,11 @@ async def _seed_expert(maker, email: str, status: str = "draft"):
 def _revision_kwargs(expert_id, owner_id, **overrides):
     """ExpertRevision 构造基线；负例经 overrides 覆写单一字段。"""
     base = dict(
-        expert_id=expert_id, owner_id=owner_id, revision_no=1,
-        content_json=CONTENT, content_sha256=SHA_A,
+        expert_id=expert_id,
+        owner_id=owner_id,
+        revision_no=1,
+        content_json=CONTENT,
+        content_sha256=SHA_A,
     )
     base.update(overrides)
     return base
@@ -95,9 +98,7 @@ async def test_expert_revision_no_unique_per_expert(pg_fresh):
             await s.commit()
     # 反射：复合唯一约束名与列序与 DB §3 一字不差
     async with pg_fresh.engine.connect() as conn:
-        uqs = await conn.run_sync(
-            lambda c: inspect(c).get_unique_constraints("expert_revisions")
-        )
+        uqs = await conn.run_sync(lambda c: inspect(c).get_unique_constraints("expert_revisions"))
     uq = {u["name"]: u["column_names"] for u in uqs}
     assert uq["expert_revision_no"] == ["expert_id", "revision_no"]
 
@@ -108,24 +109,35 @@ async def test_revision_status_enum_rejects_unknown(pg_fresh):
     maker = async_sessionmaker(pg_fresh.engine, expire_on_commit=False)
     expert_id, owner_id = await _seed_expert(maker, "revstat@example.com")
     async with maker() as s:
-        s.add(ExpertRevision(
-            **_revision_kwargs(expert_id, owner_id, status="in_review"),
-        ))
+        s.add(
+            ExpertRevision(
+                **_revision_kwargs(expert_id, owner_id, status="in_review"),
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     assert REVISION_STATUSES == (
-        "draft", "pending_review", "approved", "rejected", "published", "archived",
+        "draft",
+        "pending_review",
+        "approved",
+        "rejected",
+        "published",
+        "archived",
     )
     for no, status in enumerate(REVISION_STATUSES, start=1):
         async with maker() as s:
-            s.add(ExpertRevision(
-                **_revision_kwargs(expert_id, owner_id, revision_no=no, status=status),
-            ))
+            s.add(
+                ExpertRevision(
+                    **_revision_kwargs(expert_id, owner_id, revision_no=no, status=status),
+                )
+            )
             await s.commit()
     async with maker() as s:
-        rows = (await s.execute(
-            select(ExpertRevision).order_by(ExpertRevision.revision_no)
-        )).scalars().all()
+        rows = (
+            (await s.execute(select(ExpertRevision).order_by(ExpertRevision.revision_no)))
+            .scalars()
+            .all()
+        )
         assert [r.status for r in rows] == list(REVISION_STATUSES)
 
 
@@ -173,11 +185,14 @@ async def test_revision_tool_rows_can_be_relisted(pg_fresh):
         with pytest.raises(IntegrityError):
             await s.commit()
     async with maker() as s:
-        row = (await s.execute(
-            select(RevisionTool).where(
-                RevisionTool.tool_id == "fs.write", RevisionTool.version == "1.0.0",
+        row = (
+            await s.execute(
+                select(RevisionTool).where(
+                    RevisionTool.tool_id == "fs.write",
+                    RevisionTool.version == "1.0.0",
+                )
             )
-        )).scalar_one()
+        ).scalar_one()
         await s.delete(row)
         await s.commit()
     async with maker() as s:
@@ -185,7 +200,8 @@ async def test_revision_tool_rows_can_be_relisted(pg_fresh):
         await s.commit()  # relist 成功
         tools = (await s.execute(select(RevisionTool))).scalars().all()
         assert {(t.tool_id, t.version) for t in tools} == {
-            ("fs.write", "1.0.0"), ("net.fetch", "2.3.1"),
+            ("fs.write", "1.0.0"),
+            ("net.fetch", "2.3.1"),
         }
 
 
@@ -202,11 +218,15 @@ async def test_content_review_sha256_bound(pg_fresh):
         )
         s.add(rev)
         await s.flush()
-        s.add(ContentReview(
-            target_type="expert_revision", target_revision_id=rev.id,
-            content_sha256=rev.content_sha256, result="approved",
-            reviewer_id=reviewer_id,
-        ))
+        s.add(
+            ContentReview(
+                target_type="expert_revision",
+                target_revision_id=rev.id,
+                content_sha256=rev.content_sha256,
+                result="approved",
+                reviewer_id=reviewer_id,
+            )
+        )
         await s.commit()
     async with maker() as s:
         row = (await s.execute(select(ContentReview))).scalar_one()
@@ -216,22 +236,32 @@ async def test_content_review_sha256_bound(pg_fresh):
         assert row.created_at is not None and row.updated_at is not None
     # 另一合法 target_type：skill_revision（指向尚不存在的行也可——多态不设硬 FK）
     async with maker() as s:
-        s.add(ContentReview(
-            target_type="skill_revision", target_revision_id=_uuid.uuid4(),
-            content_sha256=SHA_A, result="rejected",
-        ))
+        s.add(
+            ContentReview(
+                target_type="skill_revision",
+                target_revision_id=_uuid.uuid4(),
+                content_sha256=SHA_A,
+                result="rejected",
+            )
+        )
         await s.commit()
     async with maker() as s:
-        row = (await s.execute(
-            select(ContentReview).where(ContentReview.target_type == "skill_revision")
-        )).scalar_one()
+        row = (
+            await s.execute(
+                select(ContentReview).where(ContentReview.target_type == "skill_revision")
+            )
+        ).scalar_one()
         assert row.reviewer_id is None
     # target_type 封闭枚举：task 被拒
     async with maker() as s:
-        s.add(ContentReview(
-            target_type="task", target_revision_id=_uuid.uuid4(),
-            content_sha256=SHA_A, result="approved",
-        ))
+        s.add(
+            ContentReview(
+                target_type="task",
+                target_revision_id=_uuid.uuid4(),
+                content_sha256=SHA_A,
+                result="approved",
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     async with pg_fresh.engine.connect() as conn:
@@ -248,10 +278,14 @@ async def test_report_target_type_enum_and_reason(pg_fresh):
     reporter_id = await _seed_user(maker, "reporter@example.com")
     assert REPORT_STATUSES == ("open", "dismissed", "actioned")
     async with maker() as s:
-        s.add(Report(
-            reporter_id=reporter_id, target_type="expert_revision",
-            target_id=_uuid.uuid4(), reason="输出包含未经授权的内容",
-        ))
+        s.add(
+            Report(
+                reporter_id=reporter_id,
+                target_type="expert_revision",
+                target_id=_uuid.uuid4(),
+                reason="输出包含未经授权的内容",
+            )
+        )
         await s.commit()
     async with maker() as s:
         row = (await s.execute(select(Report))).scalar_one()
@@ -261,33 +295,51 @@ async def test_report_target_type_enum_and_reason(pg_fresh):
     # 其余两个合法 status 成员逐一可插入；target_type 第三成员 message 同时覆盖
     for status in ("dismissed", "actioned"):
         async with maker() as s:
-            s.add(Report(
-                reporter_id=reporter_id, target_type="message",
-                target_id=_uuid.uuid4(), reason="spam", status=status,
-            ))
+            s.add(
+                Report(
+                    reporter_id=reporter_id,
+                    target_type="message",
+                    target_id=_uuid.uuid4(),
+                    reason="spam",
+                    status=status,
+                )
+            )
             await s.commit()
     # target_type 封闭枚举：user 被拒
     async with maker() as s:
-        s.add(Report(
-            reporter_id=reporter_id, target_type="user",
-            target_id=_uuid.uuid4(), reason="x",
-        ))
+        s.add(
+            Report(
+                reporter_id=reporter_id,
+                target_type="user",
+                target_id=_uuid.uuid4(),
+                reason="x",
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # status 封闭枚举：closed 被拒
     async with maker() as s:
-        s.add(Report(
-            reporter_id=reporter_id, target_type="expert_revision",
-            target_id=_uuid.uuid4(), reason="x", status="closed",
-        ))
+        s.add(
+            Report(
+                reporter_id=reporter_id,
+                target_type="expert_revision",
+                target_id=_uuid.uuid4(),
+                reason="x",
+                status="closed",
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # reason NOT NULL
     async with maker() as s:
-        s.add(Report(
-            reporter_id=reporter_id, target_type="expert_revision",
-            target_id=_uuid.uuid4(), reason=None,
-        ))
+        s.add(
+            Report(
+                reporter_id=reporter_id,
+                target_type="expert_revision",
+                target_id=_uuid.uuid4(),
+                reason=None,
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
 
@@ -301,11 +353,17 @@ async def test_audit_log_append_shape(pg_fresh):
     target_id = _uuid.uuid4()
     detail = {"report": str(target_id), "verdict": "upheld"}
     async with maker() as s:
-        s.add(AuditLog(
-            actor_id=actor_id, action="report.actioned", target_type="report",
-            target_id=target_id, reason="经查实违规", request_id="req-41f3",
-            detail=detail,
-        ))
+        s.add(
+            AuditLog(
+                actor_id=actor_id,
+                action="report.actioned",
+                target_type="report",
+                target_id=target_id,
+                reason="经查实违规",
+                request_id="req-41f3",
+                detail=detail,
+            )
+        )
         await s.commit()
     async with maker() as s:
         row = (await s.execute(select(AuditLog))).scalar_one()
@@ -320,9 +378,9 @@ async def test_audit_log_append_shape(pg_fresh):
         s.add(AuditLog(action="job.cleanup", target_type="system", reason="7 天保留期清理"))
         await s.commit()
     async with maker() as s:
-        row = (await s.execute(
-            select(AuditLog).where(AuditLog.action == "job.cleanup")
-        )).scalar_one()
+        row = (
+            await s.execute(select(AuditLog).where(AuditLog.action == "job.cleanup"))
+        ).scalar_one()
         assert row.actor_id is None and row.target_id is None and row.request_id is None
     # reason NOT NULL
     async with maker() as s:
@@ -376,10 +434,16 @@ async def test_skill_revision_mirror_and_set_null(pg_fresh):
         s.add(skill)
         await s.flush()
         skill_id, owner_id = skill.id, user.id
-        s.add(SkillRevision(
-            skill_id=skill_id, owner_id=owner_id, revision_no=1,
-            content_json=CONTENT, content_sha256=SHA_A, status="published",
-        ))
+        s.add(
+            SkillRevision(
+                skill_id=skill_id,
+                owner_id=owner_id,
+                revision_no=1,
+                content_json=CONTENT,
+                content_sha256=SHA_A,
+                status="published",
+            )
+        )
         await s.commit()
     async with maker() as s:
         assert (await s.get(Skill, skill_id)).status == "draft"
@@ -390,10 +454,15 @@ async def test_skill_revision_mirror_and_set_null(pg_fresh):
         rev_id = rev.id
     # 同 skill 第二行 revision_no=1 被拒
     async with maker() as s:
-        s.add(SkillRevision(
-            skill_id=skill_id, owner_id=owner_id, revision_no=1,
-            content_json=CONTENT, content_sha256=SHA_A,
-        ))
+        s.add(
+            SkillRevision(
+                skill_id=skill_id,
+                owner_id=owner_id,
+                revision_no=1,
+                content_json=CONTENT,
+                content_sha256=SHA_A,
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # 删除被引用的 skill_revision → skill.published_revision_id 置空
@@ -404,9 +473,7 @@ async def test_skill_revision_mirror_and_set_null(pg_fresh):
         skill = await s.get(Skill, skill_id)
         assert skill.published_revision_id is None
     async with pg_fresh.engine.connect() as conn:
-        uqs = await conn.run_sync(
-            lambda c: inspect(c).get_unique_constraints("skill_revisions")
-        )
+        uqs = await conn.run_sync(lambda c: inspect(c).get_unique_constraints("skill_revisions"))
     uq = {u["name"]: u["column_names"] for u in uqs}
     assert uq["skill_revision_no"] == ["skill_id", "revision_no"]
 
@@ -419,8 +486,10 @@ async def test_entity_status_enum_members(pg_fresh):
     for i, status in enumerate(ENTITY_STATUSES):
         async with maker() as s:
             user = User(
-                email=f"ent{i}@example.com", password_hash="h",
-                role="user", status="active",
+                email=f"ent{i}@example.com",
+                password_hash="h",
+                role="user",
+                status="active",
             )
             s.add(user)
             await s.flush()
@@ -440,8 +509,10 @@ async def test_entity_status_enum_members(pg_fresh):
     # skill 共用同一封闭枚举
     async with maker() as s:
         user = User(
-            email="skillstat@example.com", password_hash="h",
-            role="user", status="active",
+            email="skillstat@example.com",
+            password_hash="h",
+            role="user",
+            status="active",
         )
         s.add(user)
         await s.flush()

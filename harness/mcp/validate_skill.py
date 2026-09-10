@@ -142,8 +142,7 @@ def validate_skill(skill):
         issues.extend(_scan_field(field, text))
 
     blocking = any(
-        issue["level"] == "ERROR" or issue["rule"] == "jailbreak_template"
-        for issue in issues
+        issue["level"] == "ERROR" or issue["rule"] == "jailbreak_template" for issue in issues
     )
     return {"valid": not blocking, "issues": issues}
 

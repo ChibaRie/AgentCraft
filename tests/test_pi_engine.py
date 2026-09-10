@@ -180,9 +180,7 @@ async def test_ui_dialog_auto_response(
     engine: PiEngine, transport: FakeTransport, method: str, expected: dict
 ):
     await engine.start()
-    transport.feed(
-        {"type": "extension_ui_request", "id": "uuid-1", "method": method, "title": "t"}
-    )
+    transport.feed({"type": "extension_ui_request", "id": "uuid-1", "method": method, "title": "t"})
     for _ in range(50):
         await asyncio.sleep(0.01)
         replies = [w for w in transport.written if w.get("type") == "extension_ui_response"]

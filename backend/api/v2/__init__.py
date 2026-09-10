@@ -1,8 +1,8 @@
 """V2 API 包：路由聚合与依赖 re-export。
 
-FastAPI 依赖（get_v2_runtime / get_admin_db / owner_session）统一定义于
+FastAPI 依赖（get_v2_runtime / get_admin_db / owner_session / client_ip）统一定义于
 ``backend.v2.runtime``，认证依赖 get_v2_auth 定义于 ``backend.v2.session_service``；
-此处仅 re-export，避免出现双导入路径。
+此处仅 re-export（含 client_ip 便捷 re-export），避免出现双导入路径。
 """
 
 from fastapi import APIRouter

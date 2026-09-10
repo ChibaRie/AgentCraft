@@ -66,7 +66,8 @@ class SimpleEnv:
 
 
 async def seed_task(
-    db_env, *,
+    db_env,
+    *,
     tool_sensitive: bool = False,
     tool_enabled: bool = True,
     tool_authorized: datetime | None = None,
@@ -77,43 +78,70 @@ async def seed_task(
     """播种 user/expert/server/tool/binding/task；返回 task_id。"""
     factory = db_env.db.session_factory
     async with factory() as session:
-        user = User(username="mcp-task-u", email="mcp-task-u@example.com",
-                    password_hash="x", role="expert")
+        user = User(
+            username="mcp-task-u", email="mcp-task-u@example.com", password_hash="x", role="expert"
+        )
         session.add(user)
         await session.flush()
-        expert = Expert(owner_id=user.id, name="MCP专家", description="d",
-                        category="tech", persona="p" * 10, methodology="m" * 10)
+        expert = Expert(
+            owner_id=user.id,
+            name="MCP专家",
+            description="d",
+            category="tech",
+            persona="p" * 10,
+            methodology="m" * 10,
+        )
         session.add(expert)
         await session.flush()
-        server = MCPServer(owner_id=user.id, name="fs", description="f",
-                           transport="http-sse", url="http://mcp/mcp",
-                           status=server_status)
+        server = MCPServer(
+            owner_id=user.id,
+            name="fs",
+            description="f",
+            transport="http-sse",
+            url="http://mcp/mcp",
+            status=server_status,
+        )
         session.add(server)
         await session.flush()
         session.add(
             MCPTool(
-                server_id=server.id, name="list_directory", description="列目录",
-                input_schema='{"type":"object"}', sensitive=tool_sensitive,
-                enabled=tool_enabled, authorized_at=tool_authorized,
+                server_id=server.id,
+                name="list_directory",
+                description="列目录",
+                input_schema='{"type":"object"}',
+                sensitive=tool_sensitive,
+                enabled=tool_enabled,
+                authorized_at=tool_authorized,
             )
         )
-        session.add(ExpertMCP(expert_id=expert.id, server_id=server.id,
-                              enabled=binding_enabled))
+        session.add(ExpertMCP(expert_id=expert.id, server_id=server.id, enabled=binding_enabled))
         entry = snapshot_entry or {
-            "name": "list_directory", "label": "list_directory",
-            "description": "列目录", "schema": {"type": "object"},
-            "serverId": server.id, "sensitive": tool_sensitive,
+            "name": "list_directory",
+            "label": "list_directory",
+            "description": "列目录",
+            "schema": {"type": "object"},
+            "serverId": server.id,
+            "sensitive": tool_sensitive,
             "authorized_at": tool_authorized.isoformat() if tool_authorized else None,
         }
         if entry.get("serverId") == "SELF":  # 测试哨兵：引用本任务自己的 server
             entry["serverId"] = server.id
         task = Task(
-            user_id=user.id, expert_id=expert.id, expert_name_snapshot="MCP专家",
-            title="t", status="running", skill_snapshot="{}",
+            user_id=user.id,
+            expert_id=expert.id,
+            expert_name_snapshot="MCP专家",
+            title="t",
+            status="running",
+            skill_snapshot="{}",
             mcp_snapshot=json.dumps({"tools": [entry]}),
-            provider_snapshot=json.dumps({"source": "system", "protocol": "openai",
-                                          "base_url": "http://proxy:8080/v1",
-                                          "model_id": "m"}),
+            provider_snapshot=json.dumps(
+                {
+                    "source": "system",
+                    "protocol": "openai",
+                    "base_url": "http://proxy:8080/v1",
+                    "model_id": "m",
+                }
+            ),
             workdir="/workspaces/authorized",
         )
         session.add(task)
@@ -124,8 +152,12 @@ async def seed_task(
 def call(client, token, task_id, server_id, tool_name="list_directory", args=None):
     return client.post(
         "/internal/mcp/call",
-        json={"task_id": task_id, "server_id": server_id,
-              "tool_name": tool_name, "args": args or {}},
+        json={
+            "task_id": task_id,
+            "server_id": server_id,
+            "tool_name": tool_name,
+            "args": args or {},
+        },
         headers={"X-Task-Token": token},
     )
 
@@ -150,9 +182,7 @@ def test_bad_token_401(client, mcp_env):
 
 def test_token_task_mismatch_401(client, mcp_env):
     task_id, server_id, _user_id = mcp_env.db.run(seed_task(db_env=mcp_env))
-    other_token = create_task_token(
-        task_id + 100, instance="inst-a", model_id="m"
-    )
+    other_token = create_task_token(task_id + 100, instance="inst-a", model_id="m")
     mcp_env.manager.tokens[task_id] = create_task_token(task_id, instance="inst-a", model_id="m")
     response = call(client, other_token, task_id, server_id)
     assert response.status_code == 401
@@ -177,15 +207,14 @@ def test_stale_instance_token_401(client, mcp_env):
 def test_tool_not_in_snapshot_404(client, mcp_env):
     task_id, server_id, _ = mcp_env.db.run(seed_task(db_env=mcp_env))
     mcp_env.manager.tokens[task_id] = create_task_token(task_id, instance="i", model_id="m")
-    response = call(client, mcp_env.manager.tokens[task_id], task_id, server_id,
-                    tool_name="not_registered")
+    response = call(
+        client, mcp_env.manager.tokens[task_id], task_id, server_id, tool_name="not_registered"
+    )
     assert response.status_code == 404
 
 
 def test_server_offline_blocks_403(client, mcp_env):
-    task_id, server_id, _ = mcp_env.db.run(
-        seed_task(db_env=mcp_env, server_status="offline")
-    )
+    task_id, server_id, _ = mcp_env.db.run(seed_task(db_env=mcp_env, server_status="offline"))
     token = create_task_token(task_id, instance="i", model_id="m")
     mcp_env.manager.tokens[task_id] = token
     response = call(client, token, task_id, server_id)
@@ -216,9 +245,12 @@ def test_sensitive_tool_stale_authorization_blocks_403(client, mcp_env):
             tool_sensitive=True,
             tool_authorized=datetime(2026, 9, 1, 12, 0, 0),
             snapshot_entry={
-                "name": "list_directory", "label": "list_directory",
-                "description": "列目录", "schema": {"type": "object"},
-                "serverId": "SELF", "sensitive": True,
+                "name": "list_directory",
+                "label": "list_directory",
+                "description": "列目录",
+                "schema": {"type": "object"},
+                "serverId": "SELF",
+                "sensitive": True,
                 "authorized_at": "2026-09-02T12:00:00",  # 快照晚于 DB 授权
             },
         )

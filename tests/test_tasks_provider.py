@@ -54,9 +54,7 @@ def make_task_owner(client, username="prov-tasker"):
     assert skill.status_code == 201, skill.text
     skill_id = skill.json()["data"]["id"]
     client.post(f"/api/skills/{skill_id}/publish", headers=auth_header(token))
-    expert = client.post(
-        "/api/experts", json=valid_expert(), headers=auth_header(token)
-    )
+    expert = client.post("/api/experts", json=valid_expert(), headers=auth_header(token))
     expert_id = expert.json()["data"]["id"]
     client.post(
         f"/api/experts/{expert_id}/skills", json={"skill_id": skill_id}, headers=auth_header(token)

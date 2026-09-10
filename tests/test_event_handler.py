@@ -48,8 +48,7 @@ def make_handler():
 
 def frames(name: str) -> list[dict]:
     return [
-        json.loads(line)
-        for line in (FRAMES_DIR / name).read_text(encoding="utf-8").splitlines()
+        json.loads(line) for line in (FRAMES_DIR / name).read_text(encoding="utf-8").splitlines()
     ]
 
 
@@ -150,19 +149,30 @@ async def test_tooluse_message_end_is_normal_loop_step():
             "type": "message_end",
             "message": {
                 "role": "assistant",
-                "content": [{"type": "toolCall", "id": "c1", "name": "list_directory",
-                             "arguments": {"path": "/workspace"}}],
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "id": "c1",
+                        "name": "list_directory",
+                        "arguments": {"path": "/workspace"},
+                    }
+                ],
                 "stopReason": "toolUse",
                 "usage": {},
             },
         },
         {
             "type": "tool_execution_start",
-            "toolCallId": "c1", "toolName": "list_directory", "args": {},
+            "toolCallId": "c1",
+            "toolName": "list_directory",
+            "args": {},
         },
         {
             "type": "tool_execution_end",
-            "toolCallId": "c1", "toolName": "list_directory", "isError": False, "args": {},
+            "toolCallId": "c1",
+            "toolName": "list_directory",
+            "isError": False,
+            "args": {},
             "result": {"content": [{"type": "text", "text": "[DIR] sub"}]},
         },
         {
@@ -181,8 +191,7 @@ async def test_tooluse_message_end_is_normal_loop_step():
     assert [name for name, _ in sse if name == "error"] == [], "toolUse 不得触发 error 帧"
     assert [call["content"] for call in spy.assistant_calls] == ["DONE"]
     assert [
-        (c["tool_call_id"], c["tool_name"], c["content"], c["is_error"])
-        for c in spy.tool_calls
+        (c["tool_call_id"], c["tool_name"], c["content"], c["is_error"]) for c in spy.tool_calls
     ] == [("c1", "list_directory", "[DIR] sub", False)]
 
 

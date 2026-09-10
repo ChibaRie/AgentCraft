@@ -13,6 +13,7 @@ skill_revisions 携带冗余 owner_id 裸列（插入时写 parents.owner_id，�
 不可改——Task 6 直接 RLS 用，不设 FK）。content_reviews.target_revision_id
 为多态引用（expert_revision/skill_revision），同样不设硬 FK。
 """
+
 import uuid as _uuid
 from datetime import datetime
 
@@ -34,7 +35,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 from backend.v2.models.base import Base, TimestampMixin, check_enum, pk_uuid
 
 REVISION_STATUSES = (
-    "draft", "pending_review", "approved", "rejected", "published", "archived",
+    "draft",
+    "pending_review",
+    "approved",
+    "rejected",
+    "published",
+    "archived",
 )
 ENTITY_STATUSES = ("draft", "published", "archived")
 REPORT_STATUSES = ("open", "dismissed", "actioned")
@@ -159,17 +165,13 @@ class Report(Base):
     target_revision_hash: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
     reason: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id: Mapped[_uuid.UUID] = pk_uuid()
-    actor_id: Mapped[_uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL")
-    )
+    actor_id: Mapped[_uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     target_type: Mapped[str] = mapped_column(String(40), nullable=False)
     target_id: Mapped[_uuid.UUID | None] = mapped_column(Uuid)

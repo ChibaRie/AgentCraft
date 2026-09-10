@@ -180,9 +180,7 @@ async def update_skill_binding(
     _expert, _skill, enabled = await expert_service.update_skill_binding(
         db, user.id, expert_id, skill_id, payload.enabled
     )
-    return {
-        "data": ExpertBindingResponse(expert_id=expert_id, skill_id=skill_id, enabled=enabled)
-    }
+    return {"data": ExpertBindingResponse(expert_id=expert_id, skill_id=skill_id, enabled=enabled)}
 
 
 @router.delete("/{expert_id}/skills/{skill_id}")
@@ -207,8 +205,11 @@ async def bind_mcp(
         db, user.id, expert_id, payload.server_id, enabled=payload.enabled
     )
     return {
-        "data": {"expert_id": binding.expert_id, "server_id": binding.server_id,
-                 "enabled": bool(binding.enabled)}
+        "data": {
+            "expert_id": binding.expert_id,
+            "server_id": binding.server_id,
+            "enabled": bool(binding.enabled),
+        }
     }
 
 
@@ -224,8 +225,11 @@ async def update_mcp_binding(
         db, user.id, expert_id, server_id, enabled=payload.enabled
     )
     return {
-        "data": {"expert_id": binding.expert_id, "server_id": binding.server_id,
-                 "enabled": bool(binding.enabled)}
+        "data": {
+            "expert_id": binding.expert_id,
+            "server_id": binding.server_id,
+            "enabled": bool(binding.enabled),
+        }
     }
 
 

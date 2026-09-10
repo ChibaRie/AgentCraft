@@ -16,8 +16,8 @@ from typing import Sequence, Union
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '0002'
-down_revision: Union[str, Sequence[str], None] = '0001'
+revision: str = "0002"
+down_revision: Union[str, Sequence[str], None] = "0001"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -60,8 +60,10 @@ def upgrade() -> None:
        '"network"\:false}'::jsonb, true);
     """)
     op.execute("INSERT INTO platform_slots (slot_no, state) VALUES (1,'free'), (2,'free');")
-    op.execute("INSERT INTO platform_storage (singleton, retained_storage_bytes, "
-               "max_retained_storage_bytes) VALUES (true, 0, 64424509440);")
+    op.execute(
+        "INSERT INTO platform_storage (singleton, retained_storage_bytes, "
+        "max_retained_storage_bytes) VALUES (true, 0, 64424509440);"
+    )
 
 
 def downgrade() -> None:

@@ -66,8 +66,10 @@ async def test_one_active_entitlement_unique(pg_fresh):
         s.add(UserEntitlement(user_id=user_id, entitlement="expert_author"))
         await s.commit()
         active = (
-            await s.execute(select(UserEntitlement).where(UserEntitlement.revoked_at.is_(None)))
-        ).scalars().all()
+            (await s.execute(select(UserEntitlement).where(UserEntitlement.revoked_at.is_(None))))
+            .scalars()
+            .all()
+        )
         assert len(active) == 1
 
 
@@ -100,9 +102,14 @@ async def test_account_action_token_purpose_enum(pg_fresh):
         user = User(email="tok@example.com", password_hash="h", role="user", status="pending")
         s.add(user)
         await s.flush()
-        s.add(AccountActionToken(
-            user_id=user.id, purpose="wrong", token_hash="t" * 64, expires_at=EXPIRES_SOON,
-        ))
+        s.add(
+            AccountActionToken(
+                user_id=user.id,
+                purpose="wrong",
+                token_hash="t" * 64,
+                expires_at=EXPIRES_SOON,
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # commit 失败整体回滚（user 未持久化），新会话重建用户后验证合法 purpose
@@ -110,9 +117,14 @@ async def test_account_action_token_purpose_enum(pg_fresh):
         user = User(email="tok@example.com", password_hash="h", role="user", status="pending")
         s.add(user)
         await s.flush()
-        s.add(AccountActionToken(
-            user_id=user.id, purpose="email_verify", token_hash="t" * 64, expires_at=EXPIRES_SOON,
-        ))
+        s.add(
+            AccountActionToken(
+                user_id=user.id,
+                purpose="email_verify",
+                token_hash="t" * 64,
+                expires_at=EXPIRES_SOON,
+            )
+        )
         await s.commit()
 
 
@@ -138,12 +150,14 @@ async def test_session_fk_cascade(pg_fresh):
         user = User(email="sess@example.com", password_hash="h", role="user", status="active")
         s.add(user)
         await s.flush()
-        s.add(Session(
-            token_hash="s" * 64,
-            user_id=user.id,
-            csrf_hash="c" * 64,
-            expires_at=EXPIRES_SOON,
-        ))
+        s.add(
+            Session(
+                token_hash="s" * 64,
+                user_id=user.id,
+                csrf_hash="c" * 64,
+                expires_at=EXPIRES_SOON,
+            )
+        )
         await s.commit()
         user_id = user.id
     async with maker() as s:

@@ -39,8 +39,10 @@ def parse_relative_workdir(raw: str | None) -> str:
     value = raw.strip()
     if value == "":
         return ""
-    if value.startswith(("/", "\\")) or value.startswith("\\\\") or (
-        len(value) >= 2 and value[1] == ":"
+    if (
+        value.startswith(("/", "\\"))
+        or value.startswith("\\\\")
+        or (len(value) >= 2 and value[1] == ":")
     ):
         raise WorkdirInvalidError("工作目录必须为授权根目录内的相对路径")
     parts = [part for part in _SPLIT_PATTERN.split(value) if part not in ("", ".")]

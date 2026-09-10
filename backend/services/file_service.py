@@ -108,9 +108,7 @@ class FileService:
     async def stage_batch(self, task_id: int, uploads: list[UploadFile]) -> list[dict]:
         """整批暂存到 .staging/<批次>/；任一文件失败则清空本批并抛错。"""
         if len(uploads) > self.max_files_per_request:
-            raise FileCountExceededError(
-                f"单次最多上传 {self.max_files_per_request} 个文件"
-            )
+            raise FileCountExceededError(f"单次最多上传 {self.max_files_per_request} 个文件")
         batch_dir = self.root / _STAGING_DIR_NAME / uuid.uuid4().hex
         try:
             self._ensure_dir_writable(batch_dir)
@@ -209,9 +207,7 @@ class FileService:
 
     def assert_task_quota(self, new_total: int) -> None:
         if new_total > self.max_task_bytes:
-            raise FileQuotaExceededError(
-                f"任务累计文件大小超过 {self.max_task_bytes} 字节限制"
-            )
+            raise FileQuotaExceededError(f"任务累计文件大小超过 {self.max_task_bytes} 字节限制")
 
     # -- 内部工具 ----------------------------------------------------------
 
@@ -224,9 +220,7 @@ class FileService:
                 while chunk := await upload.read(_CHUNK_SIZE):
                     size_bytes += len(chunk)
                     if size_bytes > self.max_single_bytes:
-                        raise FileTooLargeError(
-                            f"单文件大小超过 {self.max_single_bytes} 字节限制"
-                        )
+                        raise FileTooLargeError(f"单文件大小超过 {self.max_single_bytes} 字节限制")
                     digest.update(chunk)
                     sink.write(chunk)
         except OSError as exc:

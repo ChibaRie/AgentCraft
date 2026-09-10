@@ -76,9 +76,7 @@ def _set_status(test_db, task_id: int, status: str) -> None:
 
     async def run():
         async with test_db.session_factory() as session:
-            await session.execute(
-                update(Task).where(Task.id == task_id).values(status=status)
-            )
+            await session.execute(update(Task).where(Task.id == task_id).values(status=status))
             await session.commit()
 
     asyncio.run(run())
@@ -91,18 +89,29 @@ async def _seed_task_row(test_db) -> int:
     from backend.models.user import User
 
     async with test_db.session_factory() as session:
-        user = User(username="lc-svc", email="lc-svc@example.com",
-                    password_hash="x", role="expert")
+        user = User(username="lc-svc", email="lc-svc@example.com", password_hash="x", role="expert")
         session.add(user)
         await session.flush()
-        expert = Expert(owner_id=user.id, name="svc专家", description="d" * 10,
-                        category="tech", persona="p" * 10, methodology="m" * 10)
+        expert = Expert(
+            owner_id=user.id,
+            name="svc专家",
+            description="d" * 10,
+            category="tech",
+            persona="p" * 10,
+            methodology="m" * 10,
+        )
         session.add(expert)
         await session.flush()
         task = Task(
-            user_id=user.id, expert_id=expert.id, expert_name_snapshot="svc专家",
-            title="t", status="running", skill_snapshot="{}", mcp_snapshot="{}",
-            provider_snapshot="{}", workdir="/workspaces/authorized",
+            user_id=user.id,
+            expert_id=expert.id,
+            expert_name_snapshot="svc专家",
+            title="t",
+            status="running",
+            skill_snapshot="{}",
+            mcp_snapshot="{}",
+            provider_snapshot="{}",
+            workdir="/workspaces/authorized",
         )
         session.add(task)
         await session.commit()
@@ -188,12 +197,8 @@ def test_complete_twice_409(lifecycle_env):
 def test_complete_foreign_task_404(lifecycle_env):
     env = lifecycle_env
     task_id = env.seed_task()
-    other_token, _ = register_expert(
-        env.client, username="other-lc", email="other-lc@example.com"
-    )
-    response = env.client.post(
-        f"/api/tasks/{task_id}/complete", headers=auth_header(other_token)
-    )
+    other_token, _ = register_expert(env.client, username="other-lc", email="other-lc@example.com")
+    response = env.client.post(f"/api/tasks/{task_id}/complete", headers=auth_header(other_token))
     assert response.status_code == 403  # 任务侧所有权口径：非本人 403
 
 
@@ -212,9 +217,7 @@ async def test_complete_waits_active_round_then_completes(test_db, tmp_path):
     await lock.acquire()  # 模拟活动轮持有 mutation lock
 
     async with factory() as session:
-        coro = asyncio.create_task(
-            task_lifecycle.complete_task(session, 1, task_id, manager)
-        )
+        coro = asyncio.create_task(task_lifecycle.complete_task(session, 1, task_id, manager))
         await asyncio.sleep(0.05)
         assert not coro.done(), "锁被持有时 complete 必须等待"
         assert manager.aborted == [task_id], "持锁等待前先绕锁 request_abort"
@@ -284,7 +287,10 @@ async def test_delete_waits_active_round(test_db, tmp_path):
     async with factory() as session:
         coro = asyncio.create_task(
             task_lifecycle.delete_task(
-                session, 1, task_id, manager,
+                session,
+                1,
+                task_id,
+                manager,
                 task_files_root=tmp_path / "data" / "task-files",
                 extensions_root=tmp_path / "data" / "extensions",
             )
@@ -336,6 +342,7 @@ def test_abort_active_round_202(lifecycle_env):
     task_id = env.seed_task()
     aborted: list[int] = []
     env.manager.has_active_round = lambda tid: True  # 实例级替换：模拟活动轮
+
     async def fake_abort(tid: int) -> None:
         aborted.append(tid)
 

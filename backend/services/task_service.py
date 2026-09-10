@@ -164,9 +164,7 @@ async def create_task(
 
     # 64KiB 上限在创建时把关（§7.5）：超长 prompt 禁止进入后续 argv
     try:
-        (loader or SkillLoader()).build_system_prompt(
-            skill_snapshot, [], expert_name=expert.name
-        )
+        (loader or SkillLoader()).build_system_prompt(skill_snapshot, [], expert_name=expert.name)
     except PromptTooLargeError as exc:
         raise TaskPromptTooLargeError(str(exc)) from exc
 
@@ -231,9 +229,7 @@ async def get_task_detail(
     files = list(
         (
             await db.execute(
-                select(TaskFile)
-                .where(TaskFile.task_id == task_id)
-                .order_by(TaskFile.id)
+                select(TaskFile).where(TaskFile.task_id == task_id).order_by(TaskFile.id)
             )
         ).scalars()
     )
@@ -264,9 +260,7 @@ async def _get_conversation_id(db: AsyncSession, task_id: int) -> int:
     return conversation.id
 
 
-async def prepare_send(
-    db: AsyncSession, user_id: int, task_id: int, content: str
-) -> SendContext:
+async def prepare_send(db: AsyncSession, user_id: int, task_id: int, content: str) -> SendContext:
     """发送前置校验 + 状态流转 + 用户消息落库；全部通过后引擎才开始产流。
 
     状态流转与用户消息落库在 task data lock 内完成，与上传提交互斥
@@ -346,9 +340,7 @@ async def persist_tool_message(
     return message
 
 
-async def fetch_recent_messages(
-    session_factory, task_id: int, limit: int
-) -> list[dict]:
+async def fetch_recent_messages(session_factory, task_id: int, limit: int) -> list[dict]:
     """重播种取数（§7.6）：最近 limit 条持久化消息（user/assistant/tool），时间升序。
 
     使用独立会话：轮处理器在流式生成期间调用，不能复用请求级 session。
@@ -358,9 +350,7 @@ async def fetch_recent_messages(
     factory = session_factory or _factory
     async with factory() as session:
         conversation = (
-            await session.execute(
-                select(Conversation).where(Conversation.task_id == task_id)
-            )
+            await session.execute(select(Conversation).where(Conversation.task_id == task_id))
         ).scalar_one_or_none()
         if conversation is None:
             return []

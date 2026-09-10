@@ -159,7 +159,5 @@ def test_unimplemented_contract_returns_placeholder_status(method: str, path: st
     if path == "/api/tasks/1/files":
         kwargs["files"] = [("files", ("placeholder.txt", b"placeholder"))]
     response = client.request(method, path, **kwargs)
-    expected_status = (
-        401 if any(path.startswith(prefix) for prefix in PROTECTED_PREFIXES) else 501
-    )
+    expected_status = 401 if any(path.startswith(prefix) for prefix in PROTECTED_PREFIXES) else 501
     assert response.status_code == expected_status

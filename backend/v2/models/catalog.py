@@ -12,6 +12,7 @@ model_capabilities 为 v0.12.4 接缝：按模型能力如实声明，形如
 PlatformSlot.task_id 由 Task 5 经 use_alter 接线为 FK → tasks.id（ondelete
 SET NULL；tasks 表在 tasking.py 定义，建表后以 ALTER TABLE 补齐）。
 """
+
 import uuid as _uuid
 from datetime import date, datetime
 

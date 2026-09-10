@@ -26,13 +26,9 @@ COMMAND = "mcp-server-filesystem /workspace"
 
 
 def ensure_network() -> None:
-    result = subprocess.run(
-        ["docker", "network", "inspect", NETWORK], capture_output=True
-    )
+    result = subprocess.run(["docker", "network", "inspect", NETWORK], capture_output=True)
     if result.returncode != 0:
-        subprocess.run(
-            ["docker", "network", "create", "--internal", NETWORK], check=True
-        )
+        subprocess.run(["docker", "network", "create", "--internal", NETWORK], check=True)
         print(f"[probe] created internal network {NETWORK}")
     else:
         print(f"[probe] network {NETWORK} exists")

@@ -118,9 +118,7 @@ class PiEngineManager:
         # §7.8.1 看门狗的 DB 触点（dependencies 注入；测试可替换）
         self._running_tasks_fetcher = running_tasks_fetcher
         self._mark_task_failed = mark_task_failed
-        self._skill_loader = skill_loader or SkillLoader(
-            max_bytes=settings.SKILL_PROMPT_MAX_BYTES
-        )
+        self._skill_loader = skill_loader or SkillLoader(max_bytes=settings.SKILL_PROMPT_MAX_BYTES)
         self._task_files_root = (
             task_files_root
             if task_files_root is not None
@@ -301,9 +299,7 @@ class PiEngineManager:
             if transport is not None:
                 return transport, self._api_removal(spec.container_name)
             if runtime == "docker":
-                raise EngineStateError(
-                    f"Docker API 不可达（{self._settings.DOCKER_API_URL}）"
-                )
+                raise EngineStateError(f"Docker API 不可达（{self._settings.DOCKER_API_URL}）")
             logger.warning("Docker API 不可达，回退 docker CLI 传输")
         if runtime in ("auto", "cli"):
             if shutil.which("docker"):
@@ -317,9 +313,7 @@ class PiEngineManager:
         head = ["node", str(cli_js), *spec.argv[1:-2]]
         argv = [*head, "-e", str(extension_path)]
         return (
-            SubprocessPiTransport(
-                argv, cwd=workdir_host, env={**os.environ, **spec.env}
-            ),
+            SubprocessPiTransport(argv, cwd=workdir_host, env={**os.environ, **spec.env}),
             self._noop_removal,
         )
 
@@ -430,8 +424,11 @@ class PiEngineManager:
                 continue
             if now - last <= idle_seconds:
                 continue
-            logger.info("Task %s: 空闲超过 %d 分钟，回收容器", task_id,
-                        self._settings.PI_IDLE_TIMEOUT_MINUTES)
+            logger.info(
+                "Task %s: 空闲超过 %d 分钟，回收容器",
+                task_id,
+                self._settings.PI_IDLE_TIMEOUT_MINUTES,
+            )
             await self._teardown(task_id)
             reclaimed += 1
         return reclaimed
@@ -547,12 +544,14 @@ class PiEngineManager:
         # 仍失败 → 标记 failed（可重试）并以 error 帧收尾
         for attempt in range(1, _CRASH_RECOVERY_ATTEMPTS + 1):
             handler = EventHandler(persist_assistant, persist_tool)
-            queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue(
-                maxsize=_ROUND_QUEUE_MAX
-            )
+            queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue(maxsize=_ROUND_QUEUE_MAX)
             try:
                 async for event in self._stream_attempt(
-                    engine, queue, handler, task_id=task_id, content=content,
+                    engine,
+                    queue,
+                    handler,
+                    task_id=task_id,
+                    content=content,
                     task_files=task_files,
                 ):
                     yield event
@@ -568,7 +567,10 @@ class PiEngineManager:
                     return
                 logger.warning(
                     "Task %s: 容器崩溃（第 %d/%d 次），重建并重播种: %s",
-                    task_id, attempt, _CRASH_RECOVERY_ATTEMPTS, exc,
+                    task_id,
+                    attempt,
+                    _CRASH_RECOVERY_ATTEMPTS,
+                    exc,
                 )
                 engine = await self.ensure_container(
                     task_id=task_id,
@@ -583,8 +585,14 @@ class PiEngineManager:
                 self._last_activity[task_id] = asyncio.get_running_loop().time()
 
     async def _stream_attempt(
-        self, engine: PiEngine, queue: asyncio.Queue, handler: EventHandler, *, task_id: int,
-        content: str, task_files: list[dict],
+        self,
+        engine: PiEngine,
+        queue: asyncio.Queue,
+        handler: EventHandler,
+        *,
+        task_id: int,
+        content: str,
+        task_files: list[dict],
     ) -> AsyncIterator[tuple[str, dict]]:
         """单次尝试：发消息并转发事件至 done/超时收尾；容器死亡抛 EngineCrashed。"""
 
@@ -599,9 +607,7 @@ class PiEngineManager:
         unsubscribe = engine.on_event(on_frame)
         reader = engine._reader_task
         try:
-            message = await self._build_outgoing_message(
-                engine, task_id, content, task_files
-            )
+            message = await self._build_outgoing_message(engine, task_id, content, task_files)
             await engine.send_prompt(message)
             engine.needs_reseed = False
             # §7.8 轮超时以整轮为限：deadline 一次计算，逐次扣减剩余时间，
@@ -634,7 +640,8 @@ class PiEngineManager:
         waiter = asyncio.create_task(queue.get())
         assert reader is not None
         done_set, _pending = await asyncio.wait(
-            {waiter, reader}, timeout=remaining,
+            {waiter, reader},
+            timeout=remaining,
             return_when=asyncio.FIRST_COMPLETED,
         )
         if waiter in done_set:
@@ -666,9 +673,7 @@ class PiEngineManager:
 
     async def _reseed_message(self, engine: PiEngine, task_id: int, content: str) -> str:
         """重播种消息：最近历史嵌入本条消息开头（§7.6）；无历史则原样发送。"""
-        history = await self._history_fetcher(
-            task_id, self._settings.MAX_HISTORY_MESSAGES
-        )
+        history = await self._history_fetcher(task_id, self._settings.MAX_HISTORY_MESSAGES)
         # 当前用户消息已落库且为最后一条；回顾只包含它之前的历史
         prior = []
         if history and history[-1].get("role") == "user" and history[-1].get("content") == content:
@@ -690,9 +695,7 @@ class PiEngineManager:
     def _attachment_notice(self, engine: PiEngine, task_files: list[dict]) -> str:
         """运行中补传附件的告知块（§6.6）：不在容器播种集合内的文件，
         在消息末尾告知 Agent 经只读挂载 /task-files 读取；告知后并入播种集合。"""
-        new_files = [
-            item for item in task_files if item.get("id") not in engine.seeded_file_ids
-        ]
+        new_files = [item for item in task_files if item.get("id") not in engine.seeded_file_ids]
         if not new_files:
             return ""
         lines = [

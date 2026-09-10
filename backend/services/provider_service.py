@@ -128,9 +128,7 @@ async def create_provider(
 ) -> UserProvider:
     duplicate = (
         await db.execute(
-            select(UserProvider).where(
-                UserProvider.user_id == user_id, UserProvider.name == name
-            )
+            select(UserProvider).where(UserProvider.user_id == user_id, UserProvider.name == name)
         )
     ).scalar_one_or_none()
     if duplicate is not None:
@@ -242,9 +240,15 @@ async def update_provider(
             )
 
     await _apply_update_fields(
-        db, user_id, provider_id, row,
-        name=name, protocol=protocol, base_url=base_url,
-        model_id=model_id, is_default=is_default,
+        db,
+        user_id,
+        provider_id,
+        row,
+        name=name,
+        protocol=protocol,
+        base_url=base_url,
+        model_id=model_id,
+        is_default=is_default,
         apply_key=lambda: apply_key_change(row),
     )
     try:

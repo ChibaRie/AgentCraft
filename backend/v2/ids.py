@@ -1,4 +1,5 @@
 """UUIDv7（RFC 9562）：48bit unix_ms + ver7 + rand_a(12) + var10 + rand_b(62)。"""
+
 import os
 import time
 import uuid

@@ -1,5 +1,6 @@
 """V2 数据层引擎与 owner 作用域。RLS 上下文经 app.set_current_owner 设置（事务本地）。
 注意：asyncpg 单次 execute 只允许一条语句，OWNER_FN_STATEMENTS 必须逐条执行。"""
+
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 # 迁移 0001 逐条执行；此处持有 SQL 文本常量，便于测试与迁移共享

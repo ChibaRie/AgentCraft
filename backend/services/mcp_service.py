@@ -151,9 +151,7 @@ def _validate_env_var_name(key: str) -> None:
         raise MCPServerInvalidError(f"环境变量名不合法: {key[:20]}")
 
 
-def _encrypt_env(
-    env_vars: dict[str, str] | None, server_id: int, settings: Settings
-) -> str | None:
+def _encrypt_env(env_vars: dict[str, str] | None, server_id: int, settings: Settings) -> str | None:
     if not env_vars:
         return None
     active_kid, keyring = _keyring(settings)
@@ -252,7 +250,7 @@ async def create_server(
     settings: Settings,
 ) -> MCPServer:
     _validate_transport_fields(transport, command, url)
-    for key in (env_vars or {}):
+    for key in env_vars or {}:
         _validate_env_var_name(key)
     server = MCPServer(
         owner_id=owner_id,
@@ -327,7 +325,7 @@ async def update_server(
         server.url = url
     if env_vars_provided:
         assert settings is not None
-        for key in (env_vars or {}):
+        for key in env_vars or {}:
             _validate_env_var_name(key)
         server.env_vars = _encrypt_env(env_vars, server.id, settings)
     _validate_transport_fields(server.transport, server.command, server.url)
@@ -629,9 +627,7 @@ async def validate_task_tool_call(
         raise MCPKillSwitchError("MCP Server 已下架，调用被阻断")
     tool = (
         await db.execute(
-            select(MCPTool).where(
-                MCPTool.server_id == server_id, MCPTool.name == tool_name
-            )
+            select(MCPTool).where(MCPTool.server_id == server_id, MCPTool.name == tool_name)
         )
     ).scalar_one_or_none()
     if tool is None or not tool.enabled:

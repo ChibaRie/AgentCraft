@@ -67,9 +67,7 @@ async def _load_task_snapshot(session: AsyncSession, task_id: int) -> dict | Non
 
     from backend.models.task import Task
 
-    row = (
-        await session.execute(select(Task).where(Task.id == task_id))
-    ).scalar_one_or_none()
+    row = (await session.execute(select(Task).where(Task.id == task_id))).scalar_one_or_none()
     if row is None:
         return None
     snapshot = json.loads(row.provider_snapshot or "{}")
@@ -215,8 +213,9 @@ async def chat_completions(
             finally:
                 await upstream_response.aclose()
 
-        return StreamingResponse(relay(), status_code=upstream_response.status_code,
-                                 headers=passthrough_headers)
+        return StreamingResponse(
+            relay(), status_code=upstream_response.status_code, headers=passthrough_headers
+        )
 
     # 非流式 JSON：缓冲透传
     raw = await upstream_response.aread()

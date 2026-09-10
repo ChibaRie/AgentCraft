@@ -22,6 +22,7 @@ task_message_event_sequence / idempotency_route_key /
 one_live_active_reservation / one_live_running_reservation /
 one_live_task_root_reservation / one_live_artifact_copy_reservation。
 """
+
 import uuid as _uuid
 from datetime import datetime
 
@@ -45,7 +46,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 from backend.v2.models.base import Base, TimestampMixin, check_enum, pk_uuid
 
 TASK_STATUSES = (
-    "uploading", "queued", "running", "ready", "completed", "failed", "aborted", "deleted",
+    "uploading",
+    "queued",
+    "running",
+    "ready",
+    "completed",
+    "failed",
+    "aborted",
+    "deleted",
 )
 ROUND_STATES = ("pending", "running", "cancelling", "settled", "failed", "cancelled")
 RESERVATION_STATES = ("held", "consumed", "released")
@@ -53,8 +61,13 @@ RESERVATION_KINDS = ("active", "running", "task_root", "artifact_copy")
 FILE_STATES = ("staged", "committed", "registered", "deleted")
 MESSAGE_AUTHORS = ("user", "assistant", "tool")
 EVENT_TYPES = (
-    "message_saved", "round_queued", "round_running", "round_settled",
-    "round_failed", "round_cancelled", "status_changed",
+    "message_saved",
+    "round_queued",
+    "round_running",
+    "round_settled",
+    "round_failed",
+    "round_cancelled",
+    "status_changed",
 )
 
 

@@ -150,3 +150,42 @@ def test_v2_mode_rejects_short_or_shared_keys():
 def test_v1_only_mode_allows_empty_v2_keys():
     s = _base_kwargs(V2_DATABASE_URL="", V2_ADMIN_DATABASE_URL="")
     assert s.SESSION_COOKIE_SECURE is True
+
+
+# ---- 校验器分支补漏（Task 15 收口，源自 T1 deferred minor）----
+
+
+def test_v2_mode_rejects_non_b64url_key():
+    """非合法 base64url 的 V2 密钥必须被拒绝（binascii.Error 分支：
+
+    丢弃非字母表字符后剩 5 个数据字符，%4==1 触发 Invalid padding）。
+    """
+    with pytest.raises(ValidationError):
+        _base_kwargs(MFA_ENCRYPTION_KEY="abcde")
+
+
+def test_v2_mode_rejects_key_shared_with_secret_key():
+    """V2 密钥与 SECRET_KEY 同值必须被拒绝。
+
+    共用值本身必须是合法 b64url 32 字节才能穿透 decode/长度检查、
+    命中「不得与既有密钥共用」分支（SECRET_KEY 无格式约束，
+    43 字符 b64url 同样满足其 ≥32 字符下限）。
+    """
+    shared = base64.urlsafe_b64encode(b"s" * 32).decode().rstrip("=")
+    assert len(shared) >= 32
+    with pytest.raises(ValidationError):
+        _base_kwargs(SECRET_KEY=shared, MFA_ENCRYPTION_KEY=shared)
+
+
+def test_v2_mode_rejects_half_configured_dsn_pair():
+    """V2 DSN 只配置其一（app 有 admin 缺 / admin 有 app 缺）必须被拒绝。"""
+    with pytest.raises(ValidationError):
+        _base_kwargs(V2_ADMIN_DATABASE_URL="")
+    with pytest.raises(ValidationError):
+        _base_kwargs(V2_DATABASE_URL="")
+
+
+def test_v2_mode_rejects_insecure_session_cookie_without_escape_hatch():
+    """SESSION_COOKIE_SECURE=false 而 ALLOW_INSECURE_SECRETS=false 必须被拒绝。"""
+    with pytest.raises(ValidationError):
+        _base_kwargs(SESSION_COOKIE_SECURE=False, ALLOW_INSECURE_SECRETS=False)

@@ -4,9 +4,15 @@ from backend.errors import AgentCraftError, ErrorCode
 
 def test_new_error_codes_registered():
     for code in (
-        "INVITATION_INVALID", "IDEMPOTENCY_CONFLICT", "INPUT_COMMITTED",
-        "PROVIDER_NOT_CONFIGURED", "KEY_VERSION_REVOKED", "TOOL_REVOKED",
-        "ADMIN_REASON_REQUIRED", "ADMIN_MFA_REQUIRED", "QUOTA_DAILY_EXCEEDED",
+        "INVITATION_INVALID",
+        "IDEMPOTENCY_CONFLICT",
+        "INPUT_COMMITTED",
+        "PROVIDER_NOT_CONFIGURED",
+        "KEY_VERSION_REVOKED",
+        "TOOL_REVOKED",
+        "ADMIN_REASON_REQUIRED",
+        "ADMIN_MFA_REQUIRED",
+        "QUOTA_DAILY_EXCEEDED",
         "REVISION_NOT_PUBLISHED",
     ):
         assert ErrorCode(code)

@@ -187,9 +187,7 @@ def test_workspaces_reject_invalid_paths(client, workspace_root):
     for bad in ("..", "a/../b", "/etc", "C:\\x"):
         response = client.get("/api/workspaces", params={"path": bad}, headers=auth_header(token))
         assert response.status_code == 400, f"path={bad!r}"
-    missing = client.get(
-        "/api/workspaces", params={"path": "ghost"}, headers=auth_header(token)
-    )
+    missing = client.get("/api/workspaces", params={"path": "ghost"}, headers=auth_header(token))
     assert missing.status_code == 404
 
 
@@ -738,9 +736,9 @@ def test_upload_files_409_after_completed(client, file_root):
     token, _, expert_id, _ = make_published_expert(client)
     task_id = create_task(client, token, expert_id).json()["data"]["task_id"]
     assert send_message(client, token, task_id, "开始吧").status_code == 200
-    assert client.post(
-        f"/api/tasks/{task_id}/complete", headers=auth_header(token)
-    ).status_code == 200
+    assert (
+        client.post(f"/api/tasks/{task_id}/complete", headers=auth_header(token)).status_code == 200
+    )
     response = client.post(
         f"/api/tasks/{task_id}/files",
         files=[("files", ("late.txt", b"x", "text/plain"))],

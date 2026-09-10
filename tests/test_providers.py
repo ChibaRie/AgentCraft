@@ -195,9 +195,7 @@ def test_update_provider_partial(client, crypto_settings, test_db):
 
         async with test_db.session_factory() as session:
             row = (
-                await session.execute(
-                    select(UserProvider).where(UserProvider.id == provider_id)
-                )
+                await session.execute(select(UserProvider).where(UserProvider.id == provider_id))
             ).scalar_one()
             return row
 
@@ -222,9 +220,7 @@ def test_update_provider_ciphertext_roundtrip(client, crypto_settings, test_db):
 
         async with test_db.session_factory() as session:
             return (
-                await session.execute(
-                    select(UserProvider).where(UserProvider.id == provider_id)
-                )
+                await session.execute(select(UserProvider).where(UserProvider.id == provider_id))
             ).scalar_one()
 
     row = asyncio_run(load_row())

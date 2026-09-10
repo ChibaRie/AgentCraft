@@ -113,9 +113,14 @@ async def test_create_stdio_requires_command(test_db):
     db = test_db.session_factory()
     with pytest.raises(MCPServerInvalidError):
         await mcp_service.create_server(
-            db, owner,
-            name="fs", description="文件系统", transport="stdio",
-            command=None, url=None, env_vars=None,
+            db,
+            owner,
+            name="fs",
+            description="文件系统",
+            transport="stdio",
+            command=None,
+            url=None,
+            env_vars=None,
             settings=make_settings(),
         )
 
@@ -125,9 +130,14 @@ async def test_create_http_requires_url(test_db):
     db = test_db.session_factory()
     with pytest.raises(MCPServerInvalidError):
         await mcp_service.create_server(
-            db, owner,
-            name="fs", description="文件系统", transport="http-sse",
-            command="mcp-server-fs", url=None, env_vars=None,
+            db,
+            owner,
+            name="fs",
+            description="文件系统",
+            transport="http-sse",
+            command="mcp-server-fs",
+            url=None,
+            env_vars=None,
             settings=make_settings(),
         )
 
@@ -137,9 +147,14 @@ async def test_create_rejects_unknown_transport(test_db):
     db = test_db.session_factory()
     with pytest.raises(MCPServerInvalidError):
         await mcp_service.create_server(
-            db, owner,
-            name="fs", description="x", transport="websocket",
-            command="x", url=None, env_vars=None,
+            db,
+            owner,
+            name="fs",
+            description="x",
+            transport="websocket",
+            command="x",
+            url=None,
+            env_vars=None,
             settings=make_settings(),
         )
 
@@ -148,8 +163,11 @@ async def test_create_encrypts_env_vars_and_hides_from_payload(test_db):
     owner = await seed_user(test_db.session_factory)
     db = test_db.session_factory()
     server = await mcp_service.create_server(
-        db, owner,
-        name="fs", description="文件系统", transport="stdio",
+        db,
+        owner,
+        name="fs",
+        description="文件系统",
+        transport="stdio",
         command="mcp-server-fs /workspace",
         env_vars={"FS_TOKEN": "secret-value-1"},
         settings=make_settings(),
@@ -157,9 +175,7 @@ async def test_create_encrypts_env_vars_and_hides_from_payload(test_db):
     assert server.env_vars  # 信封已落库
     envelope = json.loads(server.env_vars)
     _, keyring = make_keyring(make_settings().MCP_ENCRYPTION_KEYRING, KID)
-    plaintext = decrypt_text(
-        envelope, aad=mcp_env_aad(server.id), keyring=keyring
-    )
+    plaintext = decrypt_text(envelope, aad=mcp_env_aad(server.id), keyring=keyring)
     assert json.loads(plaintext) == {"FS_TOKEN": "secret-value-1"}
     payload = mcp_service.server_payload(server, settings=make_settings())
     assert "env_vars" not in payload  # 信封/明文不出 API
@@ -194,12 +210,20 @@ async def test_discover_persists_tools_conservative(test_db):
     owner = await seed_user(test_db.session_factory)
     db = test_db.session_factory()
     server = await mcp_service.create_server(
-        db, owner,
-        name="fs", description="文件系统", transport="stdio",
-        command="mcp-server-fs /workspace", env_vars=None, settings=make_settings(),
+        db,
+        owner,
+        name="fs",
+        description="文件系统",
+        transport="stdio",
+        command="mcp-server-fs /workspace",
+        env_vars=None,
+        settings=make_settings(),
     )
     tools = await mcp_service.discover_tools(
-        db, owner, server.id, make_settings(),
+        db,
+        owner,
+        server.id,
+        make_settings(),
         client_factory=lambda server: FakeMcpClient(
             [tool_entry("list_directory"), tool_entry("send_email")]
         ),
@@ -215,18 +239,30 @@ async def test_discover_refreshes_but_preserves_state(test_db):
     owner = await seed_user(test_db.session_factory)
     db = test_db.session_factory()
     server = await mcp_service.create_server(
-        db, owner, name="fs", description="f", transport="http-sse",
-        url="http://mcp/mcp", env_vars=None, settings=make_settings(),
+        db,
+        owner,
+        name="fs",
+        description="f",
+        transport="http-sse",
+        url="http://mcp/mcp",
+        env_vars=None,
+        settings=make_settings(),
     )
     await mcp_service.discover_tools(
-        db, owner, server.id, make_settings(),
+        db,
+        owner,
+        server.id,
+        make_settings(),
         client_factory=lambda s: FakeMcpClient([tool_entry("list_directory")]),
     )
     # 手动启用后再次 discover：状态保留，schema 更新
     tool = await mcp_service.update_tool(db, owner, server.id, 1, enabled=True)
     assert tool.enabled is True
     tools = await mcp_service.discover_tools(
-        db, owner, server.id, make_settings(),
+        db,
+        owner,
+        server.id,
+        make_settings(),
         client_factory=lambda s: FakeMcpClient(
             [tool_entry("list_directory", schema={"type": "object", "properties": {}})]
         ),
@@ -241,12 +277,21 @@ async def test_discover_connection_failure_maps_502(test_db):
     owner = await seed_user(test_db.session_factory)
     db = test_db.session_factory()
     server = await mcp_service.create_server(
-        db, owner, name="fs", description="f", transport="http-sse",
-        url="http://mcp/mcp", env_vars=None, settings=make_settings(),
+        db,
+        owner,
+        name="fs",
+        description="f",
+        transport="http-sse",
+        url="http://mcp/mcp",
+        env_vars=None,
+        settings=make_settings(),
     )
     with pytest.raises(mcp_service.MCPUpstreamError) as excinfo:
         await mcp_service.discover_tools(
-            db, owner, server.id, make_settings(),
+            db,
+            owner,
+            server.id,
+            make_settings(),
             client_factory=lambda s: FakeMcpClient(error=MCPClientError("refused")),
         )
     assert excinfo.value.status_code == 502
@@ -268,9 +313,7 @@ async def test_discover_owned_check(test_db):
 # ---------------------------------------------------------------------------
 
 
-async def _server_with_tool(
-    db_factory, owner_id, *, sensitive, enabled=False, status="draft"
-):
+async def _server_with_tool(db_factory, owner_id, *, sensitive, enabled=False, status="draft"):
     """独立创建 Server + 单工具（seed_published_server 恒为已发布+已启用工具）。"""
     from backend.models.mcp_tool import MCPTool
 
@@ -324,8 +367,14 @@ async def test_publish_requires_discovered_tools(test_db):
     owner = await seed_user(test_db.session_factory)
     db = test_db.session_factory()
     server = await mcp_service.create_server(
-        db, owner, name="fs", description="f", transport="http-sse",
-        url="http://mcp/mcp", env_vars=None, settings=make_settings(),
+        db,
+        owner,
+        name="fs",
+        description="f",
+        transport="http-sse",
+        url="http://mcp/mcp",
+        env_vars=None,
+        settings=make_settings(),
     )
     with pytest.raises(MCPServerInvalidError):
         await mcp_service.publish_server(db, owner, server.id)
@@ -338,8 +387,14 @@ async def test_offline_only_from_published(test_db):
     owner = await seed_user(test_db.session_factory)
     db = test_db.session_factory()
     server = await mcp_service.create_server(
-        db, owner, name="fs", description="f", transport="http-sse",
-        url="http://mcp/mcp", env_vars=None, settings=make_settings(),
+        db,
+        owner,
+        name="fs",
+        description="f",
+        transport="http-sse",
+        url="http://mcp/mcp",
+        env_vars=None,
+        settings=make_settings(),
     )
     with pytest.raises(MCPServerInvalidError):
         await mcp_service.offline_server(db, owner, server.id)
@@ -359,10 +414,15 @@ async def test_delete_blocked_by_binding_or_snapshot(test_db):
     async with test_db.session_factory() as session:
         session.add(
             Task(
-                user_id=owner, expert_id=expert_id, expert_name_snapshot="e", title="t",
-                status="running", skill_snapshot="{}",
+                user_id=owner,
+                expert_id=expert_id,
+                expert_name_snapshot="e",
+                title="t",
+                status="running",
+                skill_snapshot="{}",
                 mcp_snapshot=json.dumps({"tools": [{"serverId": server_id}]}),
-                provider_snapshot="{}", workdir="/workspaces/authorized",
+                provider_snapshot="{}",
+                workdir="/workspaces/authorized",
             )
         )
         await session.commit()
@@ -399,9 +459,14 @@ async def test_bind_requires_published_and_same_owner(test_db):
     db = test_db.session_factory()
     own_server = await seed_published_server(test_db.session_factory, owner)
     draft_server = await mcp_service.create_server(
-        db, owner,
-        name="草稿", description="d", transport="http-sse",
-        url="http://mcp/mcp", env_vars=None, settings=make_settings(),
+        db,
+        owner,
+        name="草稿",
+        description="d",
+        transport="http-sse",
+        url="http://mcp/mcp",
+        env_vars=None,
+        settings=make_settings(),
     )
     # 他人 Server：统一 404（不暴露存在性）
     with pytest.raises(MCPServerNotFoundError):
@@ -471,8 +536,12 @@ async def test_load_snapshot_excludes_disabled_tool_and_binding(test_db):
     async with test_db.session_factory() as session:
         session.add(
             MCPTool(
-                server_id=server_id, name="write_file", description="写",
-                input_schema='{"type":"object"}', sensitive=True, enabled=False,
+                server_id=server_id,
+                name="write_file",
+                description="写",
+                input_schema='{"type":"object"}',
+                sensitive=True,
+                enabled=False,
                 authorized_at=None,
             )
         )
@@ -491,8 +560,11 @@ async def test_runtime_env_roundtrip_and_server_client_build(test_db):
     owner = await seed_user(test_db.session_factory)
     db = test_db.session_factory()
     server = await mcp_service.create_server(
-        db, owner,
-        name="fs", description="f", transport="stdio",
+        db,
+        owner,
+        name="fs",
+        description="f",
+        transport="stdio",
         command="mcp-server-fs /workspace",
         env_vars={"FS_TOKEN": "secret-value-1"},
         settings=make_settings(),
@@ -501,7 +573,13 @@ async def test_runtime_env_roundtrip_and_server_client_build(test_db):
     assert env == {"FS_TOKEN": "secret-value-1"}
     # http Server：env 加密缺席时为空 dict
     http_server = await mcp_service.create_server(
-        db, owner, name="h", description="f", transport="http-sse",
-        url="http://mcp/mcp", env_vars=None, settings=make_settings(),
+        db,
+        owner,
+        name="h",
+        description="f",
+        transport="http-sse",
+        url="http://mcp/mcp",
+        env_vars=None,
+        settings=make_settings(),
     )
     assert mcp_service.decrypt_server_env(http_server, make_settings()) == {}

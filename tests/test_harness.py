@@ -117,7 +117,7 @@ async def test_run_ruff_parses_issues(tmp_path):
     runner = FakeRunner(
         [
             (1, "would reformat: pkg/mod.py\n", ""),
-            (1, 'pkg/mod.py:1:8: F401 `os` imported but unused\n', ""),
+            (1, "pkg/mod.py:1:8: F401 `os` imported but unused\n", ""),
         ]
     )
     result = await harness_service.run_ruff_checks(root, runner=runner)
@@ -174,13 +174,19 @@ def test_extension_registers_check_code_style(tmp_path):
 def test_extension_mcp_tools_and_harness_coexist(tmp_path):
     generator = ExtensionGenerator(tmp_path / "extensions")
     tools = [
-        {"name": "list_directory", "label": "list_directory", "description": "d",
-         "schema": {"type": "object"}, "serverId": 1}
+        {
+            "name": "list_directory",
+            "label": "list_directory",
+            "description": "d",
+            "schema": {"type": "object"},
+            "serverId": 1,
+        }
     ]
     path = generator.generate(9, tools, provider="openai")
     source = path.read_text(encoding="utf-8")
-    parsed = json.dumps({"has_mcp": "list_directory" in source,
-                         "has_harness": "check_code_style" in source})
+    parsed = json.dumps(
+        {"has_mcp": "list_directory" in source, "has_harness": "check_code_style" in source}
+    )
     assert json.loads(parsed) == {"has_mcp": True, "has_harness": True}
 
 
@@ -231,22 +237,27 @@ async def test_harness_endpoint_roundtrip(tmp_path, monkeypatch):
     from backend.services.task_token import create_task_token
 
     db_file = tmp_path / "h.db"
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{db_file}", poolclass=NullPool
-    )
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}", poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, class_=AsyncSessionAlias, expire_on_commit=False)
 
-
     async with session_factory() as session:
         from backend.models.task import Task
 
-        session.add(Task(
-            user_id=1, expert_id=1, expert_name_snapshot="e", title="t",
-            status="running", skill_snapshot="{}", mcp_snapshot="{}",
-            provider_snapshot="{}", workdir="/workspaces/authorized",
-        ))
+        session.add(
+            Task(
+                user_id=1,
+                expert_id=1,
+                expert_name_snapshot="e",
+                title="t",
+                status="running",
+                skill_snapshot="{}",
+                mcp_snapshot="{}",
+                provider_snapshot="{}",
+                workdir="/workspaces/authorized",
+            )
+        )
         await session.commit()
 
     workdir = tmp_path / "ws"
@@ -256,8 +267,10 @@ async def test_harness_endpoint_roundtrip(tmp_path, monkeypatch):
     key = os.urandom(32)
     raw = base64.urlsafe_b64encode(key).decode().rstrip("=")
     settings = Settings(
-        MCP_ENCRYPTION_ACTIVE_KID="primary", MCP_ENCRYPTION_KEYRING=f"primary:{raw}",
-        HOST_DATA_ROOT=str(tmp_path / "data"), HOST_WORKSPACE_ROOT=str(tmp_path / "w2"),
+        MCP_ENCRYPTION_ACTIVE_KID="primary",
+        MCP_ENCRYPTION_KEYRING=f"primary:{raw}",
+        HOST_DATA_ROOT=str(tmp_path / "data"),
+        HOST_WORKSPACE_ROOT=str(tmp_path / "w2"),
     )
     token = create_task_token(1, instance="inst", model_id="m")
     manager = FakeManager(token, workdir)
@@ -288,9 +301,7 @@ async def test_harness_endpoint_roundtrip(tmp_path, monkeypatch):
             )
             assert bad_path.status_code == 400
 
-            no_token = client.post(
-                "/internal/harness/check-code-style", json={"task_id": 1}
-            )
+            no_token = client.post("/internal/harness/check-code-style", json={"task_id": 1})
             assert no_token.status_code == 401
     finally:
         app.dependency_overrides.pop(get_pi_engine_manager, None)

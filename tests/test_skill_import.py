@@ -81,6 +81,7 @@ def md_bytes() -> bytes:
 
 def fake_llm(fields=None, *, raw=None):
     """构造注入用 LLM 替身：返回 fields 的 JSON 文本（可包 code fence）。"""
+
     async def _invoke(db, settings, *, user_id, prompt):
         if raw is not None:
             return raw
@@ -150,9 +151,7 @@ def test_import_markdown_tolerates_code_fence(client, import_env, monkeypatch):
 
 def test_import_llm_bad_json_502(client, import_env, monkeypatch):
     env = import_env
-    monkeypatch.setattr(
-        skill_import_service, "invoke_llm_fields", fake_llm(raw="不是 JSON 的输出")
-    )
+    monkeypatch.setattr(skill_import_service, "invoke_llm_fields", fake_llm(raw="不是 JSON 的输出"))
     response = client.post(
         "/api/skills/import",
         files={"file": ("skill.md", md_bytes(), "text/markdown")},

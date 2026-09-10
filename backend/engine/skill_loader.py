@@ -58,8 +58,10 @@ class SkillLoader:
         methodology = (skill_snapshot.get("expert_methodology") or "").strip()
 
         sections: list[str] = []
-        identity = f"你是 AgentCraft 平台的「{expert_name}」专家。" if expert_name else (
-            "你是 AgentCraft 平台的专家。"
+        identity = (
+            f"你是 AgentCraft 平台的「{expert_name}」专家。"
+            if expert_name
+            else ("你是 AgentCraft 平台的专家。")
         )
         sections.append(identity)
         sections.append(f"## 人设\n{persona}")
@@ -121,7 +123,5 @@ class SkillLoader:
         prompt = "\n\n".join(sections)
         size = len(prompt.encode("utf-8"))
         if size > self.max_bytes:
-            raise PromptTooLargeError(
-                f"系统提示词 {size} 字节超过上限 {self.max_bytes}"
-            )
+            raise PromptTooLargeError(f"系统提示词 {size} 字节超过上限 {self.max_bytes}")
         return prompt

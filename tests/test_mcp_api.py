@@ -88,9 +88,7 @@ def test_create_stdio_requires_command(client, crypto_settings):
 
 def test_create_http_requires_url(client, crypto_settings):
     token, _ = register_expert(client)
-    response = create_server(
-        client, token, transport="http-sse", command=None, url=None
-    )
+    response = create_server(client, token, transport="http-sse", command=None, url=None)
     assert response.status_code == 400
 
 
@@ -146,9 +144,7 @@ def _stub_discover_tools(monkeypatch, tools):
 def test_discover_persists_and_returns_tools(client, crypto_settings, monkeypatch):
     token, _ = register_expert(client)
     server_id = create_server(client, token).json()["data"]["id"]
-    _stub_discover_tools(
-        monkeypatch, [tool_entry("list_directory"), tool_entry("write_file")]
-    )
+    _stub_discover_tools(monkeypatch, [tool_entry("list_directory"), tool_entry("write_file")])
     response = client.post(f"/api/mcp/servers/{server_id}/discover", headers=auth_header(token))
     assert response.status_code == 200
     tools = response.json()["data"]["tools"]
@@ -248,9 +244,7 @@ def test_delete_blocked_by_binding_then_ok(client, crypto_settings, monkeypatch)
     )
     blocked = client.delete(f"/api/mcp/servers/{server_id}", headers=auth_header(token))
     assert blocked.status_code == 409
-    client.delete(
-        f"/api/experts/{expert['id']}/mcp/{server_id}", headers=auth_header(token)
-    )
+    client.delete(f"/api/experts/{expert['id']}/mcp/{server_id}", headers=auth_header(token))
     deleted = client.delete(f"/api/mcp/servers/{server_id}", headers=auth_header(token))
     assert deleted.status_code == 200
     assert deleted.json()["data"]["message"] == "deleted"
@@ -326,7 +320,5 @@ def test_bind_draft_server_400_and_foreign_404(client, crypto_settings, monkeypa
 def test_unbind_missing_404(client, crypto_settings):
     token, _ = register_expert(client)
     expert = create_expert(client, token).json()["data"]
-    response = client.delete(
-        f"/api/experts/{expert['id']}/mcp/999", headers=auth_header(token)
-    )
+    response = client.delete(f"/api/experts/{expert['id']}/mcp/999", headers=auth_header(token))
     assert response.status_code == 404

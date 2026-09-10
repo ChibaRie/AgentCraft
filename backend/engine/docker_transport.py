@@ -50,10 +50,12 @@ class ContainerSpec:
     nano_cpus: int = 1_000_000_000  # 1 CPU
     # 只读 rootfs 下的可写点：/tmp 常规临时；~/.pi 供 pi 凭证存储
     # （auth.json 含任务令牌，tmpfs 随容器销毁，不入镜像层）
-    tmpfs: dict = field(default_factory=lambda: {
-        "/tmp": "rw,size=64m,nosuid,nodev,noexec",
-        "/home/piworker/.pi": "rw,size=16m,nosuid,nodev,noexec",
-    })
+    tmpfs: dict = field(
+        default_factory=lambda: {
+            "/tmp": "rw,size=64m,nosuid,nodev,noexec",
+            "/home/piworker/.pi": "rw,size=16m,nosuid,nodev,noexec",
+        }
+    )
 
     def to_cli_config(self) -> dict:
         """`docker run` 参数（DockerCliTransport 用）。"""
@@ -66,18 +68,27 @@ class ContainerSpec:
         return {
             "pre_args": [
                 "run",
-                "--name", self.container_name,
+                "--name",
+                self.container_name,
                 "--rm",
                 "-i",
-                "--detach-keys", "",
-                "--user", self.user,
-                "--workdir", self.workdir,
-                "--network", self.network_name,
-                "--memory", str(self.memory_bytes),
-                "--cpus", str(self.nano_cpus / 1_000_000_000),
+                "--detach-keys",
+                "",
+                "--user",
+                self.user,
+                "--workdir",
+                self.workdir,
+                "--network",
+                self.network_name,
+                "--memory",
+                str(self.memory_bytes),
+                "--cpus",
+                str(self.nano_cpus / 1_000_000_000),
                 "--read-only",
-                "--cap-drop", "ALL",
-                "--security-opt", "no-new-privileges",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
                 *[f"--tmpfs={target}:{opts}" for target, opts in sorted(self.tmpfs.items())],
                 *label_args,
                 *env_args,
@@ -336,19 +347,24 @@ class DockerCliTransport:
 # ---------------------------------------------------------------------------
 
 
-async def docker_ensure_network(
-    name: str, *, docker_bin: str = "docker"
-) -> None:
+async def docker_ensure_network(name: str, *, docker_bin: str = "docker") -> None:
     """确保 internal 任务网络存在（§7.2 网络：仅 control 与 provider-proxy）。"""
     proc = await asyncio.create_subprocess_exec(
-        docker_bin, "network", "inspect", name,
+        docker_bin,
+        "network",
+        "inspect",
+        name,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )
     if await proc.wait() == 0:
         return
     create = await asyncio.create_subprocess_exec(
-        docker_bin, "network", "create", "--internal", name,
+        docker_bin,
+        "network",
+        "create",
+        "--internal",
+        name,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -376,13 +392,17 @@ async def docker_ensure_proxy_container(
     - 已存在则 start（崩溃自愈）；不存在则 create+connect+start
     """
     inspect = await asyncio.create_subprocess_exec(
-        docker_bin, "inspect", container_name,
+        docker_bin,
+        "inspect",
+        container_name,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )
     if await inspect.wait() == 0:
         start = await asyncio.create_subprocess_exec(
-            docker_bin, "start", container_name,
+            docker_bin,
+            "start",
+            container_name,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -390,17 +410,25 @@ async def docker_ensure_proxy_container(
         if start.returncode != 0:
             logger.warning(
                 "启动 proxy 容器 %s 失败（exit=%d，stderr %d 字节）",
-                container_name, start.returncode, len(stderr),
+                container_name,
+                start.returncode,
+                len(stderr),
             )
         return
 
     env_file = app_dir / ".env"
     run = await asyncio.create_subprocess_exec(
-        docker_bin, "run", "-d",
-        "--name", container_name,
-        "--network", network_name,
-        "-v", f"{app_dir}:/app:ro",
-        "-v", f"{env_file}:/app/.env:ro",
+        docker_bin,
+        "run",
+        "-d",
+        "--name",
+        container_name,
+        "--network",
+        network_name,
+        "-v",
+        f"{app_dir}:/app:ro",
+        "-v",
+        f"{env_file}:/app/.env:ro",
         image,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -410,12 +438,18 @@ async def docker_ensure_proxy_container(
         # 红线（§4.7）：stderr 正文不落日志，只记退出码与长度
         logger.warning(
             "创建 proxy 容器 %s 失败（exit=%d，stderr %d 字节）",
-            container_name, run.returncode, len(stderr),
+            container_name,
+            run.returncode,
+            len(stderr),
         )
         return
     # 连接默认 bridge 获得出站公网能力（internal 网络无路由）
     connect = await asyncio.create_subprocess_exec(
-        docker_bin, "network", "connect", "bridge", container_name,
+        docker_bin,
+        "network",
+        "connect",
+        "bridge",
+        container_name,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -432,7 +466,10 @@ async def docker_ensure_proxy_container(
 async def docker_remove_container(name: str, *, docker_bin: str = "docker") -> None:
     """`docker rm -f` 尽力删除（容器不存在视为成功）。"""
     proc = await asyncio.create_subprocess_exec(
-        docker_bin, "rm", "-f", name,
+        docker_bin,
+        "rm",
+        "-f",
+        name,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )
@@ -467,7 +504,9 @@ async def docker_ensure_backend_forwarder(
 ) -> None:
     """确保 dev 后端转发容器运行；compose 形态（控制面已容器化）自动跳过。"""
     inspect = await asyncio.create_subprocess_exec(
-        docker_bin, "inspect", "agentcraft-control",
+        docker_bin,
+        "inspect",
+        "agentcraft-control",
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )
@@ -475,13 +514,17 @@ async def docker_ensure_backend_forwarder(
         return  # 控制面已在网络内（compose 形态），DNS 直达
 
     exists = await asyncio.create_subprocess_exec(
-        docker_bin, "inspect", _FORWARDER_NAME,
+        docker_bin,
+        "inspect",
+        _FORWARDER_NAME,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )
     if await exists.wait() == 0:
         start = await asyncio.create_subprocess_exec(
-            docker_bin, "start", _FORWARDER_NAME,
+            docker_bin,
+            "start",
+            _FORWARDER_NAME,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -489,28 +532,39 @@ async def docker_ensure_backend_forwarder(
         return
 
     run = await asyncio.create_subprocess_exec(
-        docker_bin, "run", "-d",
-        "--name", _FORWARDER_NAME,
-        "--network", network_name,
-        "--network-alias", "agentcraft-control",
-        "-e", f"FWD_PORT={target_port}",
+        docker_bin,
+        "run",
+        "-d",
+        "--name",
+        _FORWARDER_NAME,
+        "--network",
+        network_name,
+        "--network-alias",
+        "agentcraft-control",
+        "-e",
+        f"FWD_PORT={target_port}",
         image,
-        "node", "-e", _FORWARDER_SCRIPT,
+        "node",
+        "-e",
+        _FORWARDER_SCRIPT,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     _, stderr = await run.communicate()
     if run.returncode != 0:
         logger.warning(
-            "启动后端转发容器失败（容器回调 /internal/mcp/call 将不可达；"
-            "exit=%d，stderr %d 字节）",
+            "启动后端转发容器失败（容器回调 /internal/mcp/call 将不可达；exit=%d，stderr %d 字节）",
             run.returncode,
             len(stderr),
         )
         return
     # bridge 供转发容器访问宿主机（internal 网络本身无 host 路由）
     connect = await asyncio.create_subprocess_exec(
-        docker_bin, "network", "connect", "bridge", _FORWARDER_NAME,
+        docker_bin,
+        "network",
+        "connect",
+        "bridge",
+        _FORWARDER_NAME,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -518,7 +572,8 @@ async def docker_ensure_backend_forwarder(
     if connect.returncode != 0:
         logger.warning(
             "转发容器 bridge 连接失败（exit=%d，stderr %d 字节）",
-            connect.returncode, len(stderr),
+            connect.returncode,
+            len(stderr),
         )
     logger.info("后端转发容器已就绪（internal 别名 agentcraft-control → host:%s）", target_port)
 
@@ -528,7 +583,11 @@ async def docker_list_task_containers(
 ) -> list[str]:
     """按 label 查找遗留任务容器（启动巡检用）。"""
     proc = await asyncio.create_subprocess_exec(
-        docker_bin, "ps", "-q", "--filter", f"label={label_filter}",
+        docker_bin,
+        "ps",
+        "-q",
+        "--filter",
+        f"label={label_filter}",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
     )
@@ -554,13 +613,18 @@ def build_container_spec(
     """按 §7.2 清单组装容器规格（挂载源全部服务端派生）。"""
     argv = [
         "pi",
-        "--mode", "rpc",
+        "--mode",
+        "rpc",
         "--no-session",
-        "--system-prompt", system_prompt,
+        "--system-prompt",
+        system_prompt,
         "--approve",
-        "--provider", provider,
-        "--model", model,
-        "-e", "/extension/task.ts",
+        "--provider",
+        provider,
+        "--model",
+        model,
+        "-e",
+        "/extension/task.ts",
     ]
     env = {
         "AGENTCRAFT_BACKEND_URL": backend_url,

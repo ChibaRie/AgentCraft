@@ -41,9 +41,7 @@ async def upload_files(
         rows = await task_service.commit_task_files(db, service, task_id, staged)
         return {"data": {"files": [task_service.task_file_payload(row) for row in rows]}}
     except Exception as exc:
-        if isinstance(
-            exc, (FileTooLargeError, FileCountExceededError, FileQuotaExceededError)
-        ):
+        if isinstance(exc, (FileTooLargeError, FileCountExceededError, FileQuotaExceededError)):
             # 观测（红线 §4.7）：超限拒绝记 task_id/错误码/文件数，正文与文件名不落日志
             logger.warning(
                 "Task %s: 上传超限被拒绝 code=%s 请求数=%d",

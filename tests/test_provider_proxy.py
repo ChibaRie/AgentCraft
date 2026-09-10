@@ -109,9 +109,7 @@ async def seed_task(test_db, user_id, snapshot):
 
 def make_snapshot(source, base_url, model="deepseek-chat", key=None, user_id=1):
     envelope = (
-        encrypt_text(
-            key, aad=provider_key_aad(user_id), keyring={KID: KEY}, active_kid=KID
-        )
+        encrypt_text(key, aad=provider_key_aad(user_id), keyring={KID: KEY}, active_kid=KID)
         if key
         else None
     )

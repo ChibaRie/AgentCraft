@@ -49,9 +49,7 @@ def make_published_skill(client, token, **overrides):
 
 def bind_skill(client, token, expert_id, skill_id, **body):
     payload = {"skill_id": skill_id, **body}
-    return client.post(
-        f"/api/experts/{expert_id}/skills", json=payload, headers=auth_header(token)
-    )
+    return client.post(f"/api/experts/{expert_id}/skills", json=payload, headers=auth_header(token))
 
 
 def seed_task(test_db, user_id, expert_id):

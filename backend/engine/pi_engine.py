@@ -117,9 +117,7 @@ class PiEngine:
                 future, timeout=self._command_timeout if timeout is None else timeout
             )
         except asyncio.TimeoutError as exc:
-            raise PiCommandTimeoutError(
-                f"命令 {cmd.get('type')} 在时限内未收到 response"
-            ) from exc
+            raise PiCommandTimeoutError(f"命令 {cmd.get('type')} 在时限内未收到 response") from exc
         finally:
             self._pending.pop(cmd["id"], None)
 
@@ -188,9 +186,7 @@ class PiEngine:
         future = self._pending.pop(frame_id, None)
         if future is None:
             # id 错配 = 容器状态被污染（§7.2.1），交 manager 重建
-            logger.error(
-                "Task %s: response id %s 无关联命令，标记容器重建", self.task_id, frame_id
-            )
+            logger.error("Task %s: response id %s 无关联命令，标记容器重建", self.task_id, frame_id)
             self.needs_rebuild = True
             return
         if not future.done():

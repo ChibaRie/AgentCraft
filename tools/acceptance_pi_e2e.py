@@ -152,9 +152,7 @@ async def main() -> None:
 
         # ① 首条消息：流式出字（首条含容器启动，10s 内）
         t0 = time.perf_counter()
-        frames1, first_delta = await send_and_collect(
-            client, token, task_id, "请记住暗号：星尘-42"
-        )
+        frames1, first_delta = await send_and_collect(client, token, task_id, "请记住暗号：星尘-42")
         check("首条消息流式出字（10s 内）", first_delta <= 10.0, f"{first_delta:.2f}s")
         reply1 = reply_text(frames1)
         check("首条回复包含暗号", "星尘-42" in reply1, reply1[:60])
@@ -193,9 +191,7 @@ async def main() -> None:
             send_and_collect(client, token, task_id, "这是一条会被中止的长回复" + "详细展开 " * 400)
         )
         await asyncio.sleep(1.5)
-        aborted = await client.post(
-            f"{BASE}/api/tasks/{task_id}/abort", headers=headers
-        )
+        aborted = await client.post(f"{BASE}/api/tasks/{task_id}/abort", headers=headers)
         check("abort 返回 202", aborted.status_code == 202)
         frames4, _ = await abort_round
         check(

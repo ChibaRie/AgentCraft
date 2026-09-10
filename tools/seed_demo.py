@@ -27,17 +27,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-
-
 async def _ensure_demo_user(db, created: list[str], skipped: list[str]):
     from sqlalchemy import select
 
     from backend.models.user import User
     from backend.services.user_service import hash_password
 
-    demo = (
-        await db.execute(select(User).where(User.username == "demo"))
-    ).scalar_one_or_none()
+    demo = (await db.execute(select(User).where(User.username == "demo"))).scalar_one_or_none()
     if demo is not None:
         skipped.append("用户 demo")
         return demo
@@ -53,9 +49,20 @@ async def _ensure_demo_user(db, created: list[str], skipped: list[str]):
     return demo
 
 
-async def _ensure_skill(db, owner_id: int, created: list[str], skipped: list[str],
-                        *, name: str, use_case: str, role: str, goal: str, steps: str,
-                        output_requirements: str, constraints: str):
+async def _ensure_skill(
+    db,
+    owner_id: int,
+    created: list[str],
+    skipped: list[str],
+    *,
+    name: str,
+    use_case: str,
+    role: str,
+    goal: str,
+    steps: str,
+    output_requirements: str,
+    constraints: str,
+):
     from sqlalchemy import select
 
     from backend.models.skill import Skill
@@ -67,9 +74,15 @@ async def _ensure_skill(db, owner_id: int, created: list[str], skipped: list[str
         skipped.append(f"Skill {name}")
         return row
     row = Skill(
-        owner_id=owner_id, name=name, description=f"{name}：可复用能力包",
-        use_case=use_case, role=role, goal=goal, steps=steps,
-        output_requirements=output_requirements, constraints=constraints,
+        owner_id=owner_id,
+        name=name,
+        description=f"{name}：可复用能力包",
+        use_case=use_case,
+        role=role,
+        goal=goal,
+        steps=steps,
+        output_requirements=output_requirements,
+        constraints=constraints,
         status="published",
     )
     db.add(row)
@@ -78,9 +91,19 @@ async def _ensure_skill(db, owner_id: int, created: list[str], skipped: list[str
     return row
 
 
-async def _ensure_expert(db, owner_id: int, created: list[str], skipped: list[str],
-                         *, name: str, description: str, persona: str, methodology: str,
-                         category: str, skill):
+async def _ensure_expert(
+    db,
+    owner_id: int,
+    created: list[str],
+    skipped: list[str],
+    *,
+    name: str,
+    description: str,
+    persona: str,
+    methodology: str,
+    category: str,
+    skill,
+):
     from sqlalchemy import select
 
     from backend.models.expert import Expert
@@ -91,9 +114,14 @@ async def _ensure_expert(db, owner_id: int, created: list[str], skipped: list[st
     ).scalar_one_or_none()
     if row is None:
         row = Expert(
-            owner_id=owner_id, name=name, description=description,
-            avatar_url=None, category=category, persona=persona,
-            methodology=methodology, status="published",
+            owner_id=owner_id,
+            name=name,
+            description=description,
+            avatar_url=None,
+            category=category,
+            persona=persona,
+            methodology=methodology,
+            status="published",
         )
         db.add(row)
         await db.flush()
@@ -126,9 +154,11 @@ async def _ensure_fs_server(db, owner_id: int, created: list[str]):
     if server is not None:
         return server
     server = MCPServer(
-        owner_id=owner_id, name="文件系统",
+        owner_id=owner_id,
+        name="文件系统",
         description="在沙箱内浏览与读写授权目录中的文件",
-        transport="stdio", command="mcp-server-filesystem /workspace",
+        transport="stdio",
+        command="mcp-server-filesystem /workspace",
         status="published",
     )
     db.add(server)
@@ -137,7 +167,8 @@ async def _ensure_fs_server(db, owner_id: int, created: list[str]):
     db.add_all(
         [
             MCPTool(
-                server_id=server.id, name="list_directory",
+                server_id=server.id,
+                name="list_directory",
                 description="列出目录内容（只读）",
                 input_schema=json.dumps(
                     {
@@ -146,20 +177,22 @@ async def _ensure_fs_server(db, owner_id: int, created: list[str]):
                         "required": ["path"],
                     }
                 ),
-                sensitive=False, enabled=True,
+                sensitive=False,
+                enabled=True,
             ),
             MCPTool(
-                server_id=server.id, name="write_file",
+                server_id=server.id,
+                name="write_file",
                 description="写入文件（敏感，默认关闭）",
                 input_schema=json.dumps(
                     {
                         "type": "object",
-                        "properties": {"path": {"type": "string"},
-                                       "content": {"type": "string"}},
+                        "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
                         "required": ["path", "content"],
                     }
                 ),
-                sensitive=True, enabled=False,
+                sensitive=True,
+                enabled=False,
             ),
         ]
     )
@@ -183,8 +216,16 @@ async def _ensure_binding(db, expert_id: int, server_id: int, created: list[str]
         created.append(f"专家 #{expert_id} 绑定文件系统 Server")
 
 
-async def _ensure_task(db, user_id: int, expert, server_id: int, title: str,
-                       status: str, created: list[str], skipped: list[str]) -> None:
+async def _ensure_task(
+    db,
+    user_id: int,
+    expert,
+    server_id: int,
+    title: str,
+    status: str,
+    created: list[str],
+    skipped: list[str],
+) -> None:
     from sqlalchemy import select
 
     from backend.models.conversation import Conversation
@@ -200,18 +241,26 @@ async def _ensure_task(db, user_id: int, expert, server_id: int, title: str,
     now = datetime.now(timezone.utc)
     snapshot_tools = [
         {
-            "name": "list_directory", "label": "list_directory",
+            "name": "list_directory",
+            "label": "list_directory",
             "description": "列出目录内容（只读）",
-            "schema": {"type": "object", "properties": {"path": {"type": "string"}},
-                       "required": ["path"]},
-            "serverId": server_id, "sensitive": False, "authorized_at": None,
+            "schema": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+            "serverId": server_id,
+            "sensitive": False,
+            "authorized_at": None,
         }
     ]
     row = Task(
-        user_id=user_id, expert_id=expert.id,
-        expert_name_snapshot=expert.name, title=title, status=status,
-        skill_snapshot=json.dumps({"skills": [], "loaded_at": now.isoformat()},
-                                  ensure_ascii=False),
+        user_id=user_id,
+        expert_id=expert.id,
+        expert_name_snapshot=expert.name,
+        title=title,
+        status=status,
+        skill_snapshot=json.dumps({"skills": [], "loaded_at": now.isoformat()}, ensure_ascii=False),
         mcp_snapshot=json.dumps({"tools": snapshot_tools}, ensure_ascii=False),
         provider_snapshot=json.dumps({"source": "system"}),
         workdir="/workspaces/authorized",
@@ -225,13 +274,16 @@ async def _ensure_task(db, user_id: int, expert, server_id: int, title: str,
         base = now - timedelta(hours=1)
         db.add(
             Message(
-                conversation_id=conversation.id, role="user",
-                content="请整理本周的技术周报要点。", created_at=base,
+                conversation_id=conversation.id,
+                role="user",
+                content="请整理本周的技术周报要点。",
+                created_at=base,
             )
         )
         db.add(
             Message(
-                conversation_id=conversation.id, role="assistant",
+                conversation_id=conversation.id,
+                role="assistant",
                 content="本周要点已按主题归类完成：共 3 个主题、2 条风险提示，详见正文。",
                 created_at=base + timedelta(minutes=2),
             )
@@ -272,7 +324,10 @@ async def seed(database_url: str | None) -> None:
         demo = await _ensure_demo_user(db, created, skipped)
 
         weekly = await _ensure_skill(
-            db, demo.id, created, skipped,
+            db,
+            demo.id,
+            created,
+            skipped,
             name="技术周报整理",
             use_case="团队每周技术动态汇总",
             role="技术编辑",
@@ -282,7 +337,10 @@ async def seed(database_url: str | None) -> None:
             constraints="不虚构事实；引用需注明来源；不输出与工作无关内容",
         )
         minutes = await _ensure_skill(
-            db, demo.id, created, skipped,
+            db,
+            demo.id,
+            created,
+            skipped,
             name="会议纪要提炼",
             use_case="例会/评审的记录沉淀",
             role="会议秘书",
@@ -292,7 +350,10 @@ async def seed(database_url: str | None) -> None:
             constraints="不添加会议中未出现的决议；存疑处标注待确认",
         )
         editor = await _ensure_expert(
-            db, demo.id, created, skipped,
+            db,
+            demo.id,
+            created,
+            skipped,
             name="周报编辑",
             description="整理团队技术周报的编辑专家",
             persona="严谨的资深技术编辑，擅长从零散素材中提炼主线",
@@ -301,7 +362,10 @@ async def seed(database_url: str | None) -> None:
             skill=weekly,
         )
         assistant = await _ensure_expert(
-            db, demo.id, created, skipped,
+            db,
+            demo.id,
+            created,
+            skipped,
             name="会议助手",
             description="把会议记录变成决议与行动项",
             persona="耐心细致的会议秘书，重视事实与责任人",
@@ -316,10 +380,12 @@ async def seed(database_url: str | None) -> None:
             await _ensure_binding(db, expert.id, fs_server.id, created)
 
         # 3) 示例任务（completed + created 各一，展示 P05/P09 视图）
-        await _ensure_task(db, demo.id, editor, fs_server.id,
-                           "整理本周技术周报", "completed", created, skipped)
-        await _ensure_task(db, demo.id, editor, fs_server.id,
-                           "起草月度技术回顾", "created", created, skipped)
+        await _ensure_task(
+            db, demo.id, editor, fs_server.id, "整理本周技术周报", "completed", created, skipped
+        )
+        await _ensure_task(
+            db, demo.id, editor, fs_server.id, "起草月度技术回顾", "created", created, skipped
+        )
 
         await db.commit()
 

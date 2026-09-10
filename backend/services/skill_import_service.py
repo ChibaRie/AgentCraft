@@ -32,19 +32,35 @@ MAX_ZIP_FILES = 200
 MAX_LLM_CHARS = 24_000  # 提示词正文截断
 MAX_EXCERPT_FILES = 8
 _EXCERPT_EXTENSIONS = {
-    ".md", ".txt", ".py", ".js", ".ts", ".sh", ".json", ".yaml", ".yml", ".toml",
+    ".md",
+    ".txt",
+    ".py",
+    ".js",
+    ".ts",
+    ".sh",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
 }
 _PLACEHOLDER = "（待补充）"
 
 _FIELDS = (
-    "name", "description", "use_case", "role", "goal", "steps",
-    "input_requirements", "output_requirements", "constraints",
+    "name",
+    "description",
+    "use_case",
+    "role",
+    "goal",
+    "steps",
+    "input_requirements",
+    "output_requirements",
+    "constraints",
 )
 
 _SYSTEM_PROMPT = (
     "你是 Skill 结构化助手。把用户提供的材料拆解为 AgentCraft Skill 的字段，"
     "只输出一个 JSON 对象（不要 markdown 代码块、不要解释文字），字段如下：\n"
-    'name：能力名（≤30 字符）；description：功能描述（10-200 字）；'
+    "name：能力名（≤30 字符）；description：功能描述（10-200 字）；"
     "use_case：适用场景；role：专家角色；goal：目标；steps：分步骤工作方法；"
     "input_requirements：用户需要提供什么；output_requirements：产出要求；"
     "constraints：约束。\n所有字段都用中文，值为字符串。"
@@ -63,9 +79,7 @@ class LLMUpstreamError(UserSystemError):
 
 async def invoke_llm_fields(db, settings, *, user_id: int, prompt: str) -> str:
     """默认 LLM 调用：Provider 回退链解析路由 → chat/completions（注入点）。"""
-    snapshot, _config_id = await provider_service.resolve_task_provider(
-        db, user_id, None, settings
-    )
+    snapshot, _config_id = await provider_service.resolve_task_provider(db, user_id, None, settings)
     if snapshot.get("source") == "user":
         base_url = (snapshot.get("base_url") or "").rstrip("/")
         api_key = None
@@ -75,9 +89,7 @@ async def invoke_llm_fields(db, settings, *, user_id: int, prompt: str) -> str:
                 _, keyring = make_keyring(
                     settings.MCP_ENCRYPTION_KEYRING, active_kid=settings.MCP_ENCRYPTION_ACTIVE_KID
                 )
-                api_key = decrypt_text(
-                    encrypted, aad=provider_key_aad(user_id), keyring=keyring
-                )
+                api_key = decrypt_text(encrypted, aad=provider_key_aad(user_id), keyring=keyring)
             except EncryptionError as exc:
                 raise LLMUpstreamError("Provider Key 解密失败") from exc
     else:
@@ -100,8 +112,7 @@ async def invoke_llm_fields(db, settings, *, user_id: int, prompt: str) -> str:
         headers["Authorization"] = f"Bearer {api_key}"
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(f"{base_url}/chat/completions", json=body,
-                                         headers=headers)
+            response = await client.post(f"{base_url}/chat/completions", json=body, headers=headers)
     except httpx.HTTPError as exc:
         logger.warning("Skill 导入 LLM 连接失败: %s", type(exc).__name__)
         raise LLMUpstreamError("连接 Provider 失败，请稍后重试") from exc
@@ -170,9 +181,7 @@ def _inspect_zip(data: bytes) -> list[tuple[str, bytes]]:
             for name in names:
                 path = PurePosixPath(name)
                 if path.is_absolute() or ".." in path.parts:
-                    raise SkillImportInvalidError(
-                        f"zip 内存在不安全的路径条目: {name[:60]}"
-                    )
+                    raise SkillImportInvalidError(f"zip 内存在不安全的路径条目: {name[:60]}")
                 if not name or name.endswith("/"):
                     continue
                 raw = archive.read(name)

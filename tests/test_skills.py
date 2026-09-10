@@ -8,7 +8,6 @@
 - 删除前置：已从所有专家解绑，否则 409
 """
 
-
 import pytest
 
 from backend.models.expert import Expert

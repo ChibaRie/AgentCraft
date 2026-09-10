@@ -79,9 +79,7 @@ def make_keyring(raw: str, active_kid: str | None = None) -> tuple[str, dict[str
     return active_kid_ref, keyring
 
 
-def encrypt_text(
-    plaintext: str, *, aad: str, keyring: dict[str, bytes], active_kid: str
-) -> dict:
+def encrypt_text(plaintext: str, *, aad: str, keyring: dict[str, bytes], active_kid: str) -> dict:
     """加密为信封 JSON（dict）。恒用 active kid；nonce 随机 12B。"""
     if not plaintext:
         raise EncryptionError("明文不能为空")

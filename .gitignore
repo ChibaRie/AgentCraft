@@ -11,3 +11,5 @@ __pycache__/
 data/
 workspaces/
 .playwright-mcp/
+output/
+.pytest.xml

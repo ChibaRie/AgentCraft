@@ -223,15 +223,11 @@ class ExtensionGenerator:
     def generate(self, task_id: int, mcp_tools: list[dict], provider: str) -> Path:
         """生成 task-<id>.ts，返回文件路径。mcp_tools 来自 mcp_snapshot。"""
         if provider == "faux":
-            faux_block = _FAUX_BLOCK_TEMPLATE.replace(
-                "__ECHO_MAX__", str(_FAUX_ECHO_MAX_CHARS)
-            )
+            faux_block = _FAUX_BLOCK_TEMPLATE.replace("__ECHO_MAX__", str(_FAUX_ECHO_MAX_CHARS))
         else:
             faux_block = _NO_FAUX_BLOCK
         source = (
-            _EXTENSION_TEMPLATE.replace(
-                "__TOOLS_JSON__", json.dumps(mcp_tools, ensure_ascii=False)
-            )
+            _EXTENSION_TEMPLATE.replace("__TOOLS_JSON__", json.dumps(mcp_tools, ensure_ascii=False))
             .replace("__TASK_ID__", str(int(task_id)))
             .replace("__FAUX_BLOCK__", faux_block)
         )

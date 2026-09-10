@@ -53,8 +53,12 @@ def make_manager(tmp_path: Path, history: list[dict]):
     async def resolve_provider(user_id: int, provider_config_id: int | None) -> dict:
         if provider_snapshots:
             return provider_snapshots.pop(0)
-        return {"source": "system", "protocol": "openai",
-                "base_url": "http://provider-proxy:8080/v1", "model_id": "gpt-4o-mini"}
+        return {
+            "source": "system",
+            "protocol": "openai",
+            "base_url": "http://provider-proxy:8080/v1",
+            "model_id": "gpt-4o-mini",
+        }
 
     manager = PiEngineManager(
         settings,
@@ -196,7 +200,10 @@ async def test_reseed_skipped_when_no_prior_history(tmp_path):
 
 def _file(fid: int, name: str, path: str, size: int) -> dict:
     return {
-        "id": fid, "original_name": name, "agent_path": path, "size_bytes": size,
+        "id": fid,
+        "original_name": name,
+        "agent_path": path,
+        "size_bytes": size,
     }
 
 
@@ -366,10 +373,20 @@ async def test_provider_fingerprint_change_rebuilds_and_reseeds(tmp_path):
 
     # 当前生效配置变化（用户改了默认 Provider 的模型）
     manager._provider_snapshots.append(  # type: ignore[attr-defined]
-        {"source": "user", "protocol": "openai",
-         "base_url": "https://api.deepseek.com/v1", "model_id": "deepseek-chat",
-         "api_key_encrypted": {"v": 1, "alg": "A256GCM", "kid": "primary",
-                               "nonce": "x", "ciphertext": "y", "tag": "z"}}
+        {
+            "source": "user",
+            "protocol": "openai",
+            "base_url": "https://api.deepseek.com/v1",
+            "model_id": "deepseek-chat",
+            "api_key_encrypted": {
+                "v": 1,
+                "alg": "A256GCM",
+                "kid": "primary",
+                "nonce": "x",
+                "ciphertext": "y",
+                "tag": "z",
+            },
+        }
     )
     history = [
         {"role": "user", "content": "历史一"},

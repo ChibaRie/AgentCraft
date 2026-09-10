@@ -229,9 +229,7 @@ def test_resolve_stdio_argv_uses_sandbox_image_with_env(monkeypatch):
         MCP_SANDBOX_IMAGE="agentcraft-mcp-sandbox:test",
         PI_NETWORK_NAME="agentcraft-internal",
     )
-    argv, env = resolve_stdio_argv(
-        "mcp-server-fs /workspace", {"FS_ROOT": "/workspace"}, settings
-    )
+    argv, env = resolve_stdio_argv("mcp-server-fs /workspace", {"FS_ROOT": "/workspace"}, settings)
     assert argv[0] == "docker"
     assert "run" in argv and "--rm" in argv and "-i" in argv
     assert "agentcraft-mcp-sandbox:test" in argv
@@ -246,9 +244,7 @@ def test_resolve_stdio_argv_uses_sandbox_image_with_env(monkeypatch):
 def test_resolve_stdio_argv_falls_back_to_local_subprocess(monkeypatch):
     monkeypatch.setattr("backend.engine.mcp_client.shutil.which", lambda name: None)
     settings = make_settings()
-    argv, env = resolve_stdio_argv(
-        "mcp-server-fs  /workspace", {"FS_ROOT": "/workspace"}, settings
-    )
+    argv, env = resolve_stdio_argv("mcp-server-fs  /workspace", {"FS_ROOT": "/workspace"}, settings)
     assert argv == ["mcp-server-fs", "/workspace"]
     assert env["FS_ROOT"] == "/workspace"  # env 经子进程环境注入
 

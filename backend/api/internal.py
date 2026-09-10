@@ -48,14 +48,10 @@ def _require_task_token(
     try:
         claims = decode_task_token(token)
     except TaskTokenInvalid as exc:
-        logger.warning(
-            "内部回调任务令牌校验失败 layer=signature task_id=%s", payload.task_id
-        )
+        logger.warning("内部回调任务令牌校验失败 layer=signature task_id=%s", payload.task_id)
         raise TaskTokenUnauthorized() from exc
     if claims["task_id"] != payload.task_id:
-        logger.warning(
-            "内部回调任务令牌校验失败 layer=task-mismatch task_id=%s", payload.task_id
-        )
+        logger.warning("内部回调任务令牌校验失败 layer=task-mismatch task_id=%s", payload.task_id)
         raise TaskTokenUnauthorized()
     if manager.get_task_token(payload.task_id) != token:
         logger.warning(

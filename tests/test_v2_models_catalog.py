@@ -54,12 +54,14 @@ async def test_provider_catalog_models_field(pg_fresh):
     """models 为 JSONB list[str]；path_prefix/method/enabled/capabilities 走默认。"""
     maker = async_sessionmaker(pg_fresh.engine, expire_on_commit=False)
     async with maker() as s:
-        s.add(ProviderCatalog(
-            display_name="OpenAI",
-            allowed_host="api.openai.com",
-            models=["gpt-4o", "gpt-4o-mini"],
-            healthcheck_path="/v1/models",
-        ))
+        s.add(
+            ProviderCatalog(
+                display_name="OpenAI",
+                allowed_host="api.openai.com",
+                models=["gpt-4o", "gpt-4o-mini"],
+                healthcheck_path="/v1/models",
+            )
+        )
         await s.commit()
     async with maker() as s:
         row = (await s.execute(select(ProviderCatalog))).scalar_one()
@@ -75,13 +77,15 @@ async def test_provider_catalog_model_capabilities_persist(pg_fresh):
     （形如 {"gpt-4o": {"input": ["text", "image"]}}；缺失条目由消费方视为纯文本）。"""
     maker = async_sessionmaker(pg_fresh.engine, expire_on_commit=False)
     async with maker() as s:
-        s.add(ProviderCatalog(
-            display_name="OpenAI Vision",
-            allowed_host="api.openai.com",
-            models=["gpt-4o", "gpt-4o-mini"],
-            model_capabilities={"gpt-4o": {"input": ["text", "image"]}},
-            healthcheck_path="/v1/models",
-        ))
+        s.add(
+            ProviderCatalog(
+                display_name="OpenAI Vision",
+                allowed_host="api.openai.com",
+                models=["gpt-4o", "gpt-4o-mini"],
+                model_capabilities={"gpt-4o": {"input": ["text", "image"]}},
+                healthcheck_path="/v1/models",
+            )
+        )
         await s.commit()
     async with maker() as s:
         row = (await s.execute(select(ProviderCatalog))).scalar_one()
@@ -104,14 +108,16 @@ async def test_user_provider_key_fields_and_status_enum(pg_fresh):
         )
         s.add(catalog)
         await s.flush()
-        s.add(UserProvider(
-            user_id=user.id,
-            catalog_id=catalog.id,
-            model_id="gpt-4o",
-            key_ciphertext="ct",
-            dek_wrapped="dek",
-            key_last4="Ab1!",
-        ))
+        s.add(
+            UserProvider(
+                user_id=user.id,
+                catalog_id=catalog.id,
+                model_id="gpt-4o",
+                key_ciphertext="ct",
+                dek_wrapped="dek",
+                key_last4="Ab1!",
+            )
+        )
         await s.commit()
         user_id, catalog_id = user.id, catalog.id
     async with maker() as s:
@@ -122,41 +128,65 @@ async def test_user_provider_key_fields_and_status_enum(pg_fresh):
         assert row.is_default is False
     # 枚举另一合法值 revoked 可插入（与槽位 state 正例对称）
     async with maker() as s:
-        s.add(UserProvider(
-            user_id=user_id, catalog_id=catalog_id, model_id="gpt-4o",
-            key_ciphertext="ct-r", dek_wrapped="dek-r", key_last4="Zz9$",
-            status="revoked",
-        ))
+        s.add(
+            UserProvider(
+                user_id=user_id,
+                catalog_id=catalog_id,
+                model_id="gpt-4o",
+                key_ciphertext="ct-r",
+                dek_wrapped="dek-r",
+                key_last4="Zz9$",
+                status="revoked",
+            )
+        )
         await s.commit()
     async with maker() as s:
-        revoked = (await s.execute(
-            select(UserProvider).where(UserProvider.status == "revoked")
-        )).scalar_one()
+        revoked = (
+            await s.execute(select(UserProvider).where(UserProvider.status == "revoked"))
+        ).scalar_one()
         assert revoked.key_last4 == "Zz9$"
     # status 封闭枚举（PROVIDER_STATUSES = ("active", "revoked")）
     assert PROVIDER_STATUSES == ("active", "revoked")
     async with maker() as s:
-        s.add(UserProvider(
-            user_id=user_id, catalog_id=catalog_id, model_id="gpt-4o",
-            key_ciphertext="ct", dek_wrapped="dek", key_last4="Xy2@",
-            status="expired",
-        ))
+        s.add(
+            UserProvider(
+                user_id=user_id,
+                catalog_id=catalog_id,
+                model_id="gpt-4o",
+                key_ciphertext="ct",
+                dek_wrapped="dek",
+                key_last4="Xy2@",
+                status="expired",
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # key_last4 恰 4 字符：3 字符落入 CHECK（ck_user_providers_key_last4_len）
     async with maker() as s:
-        s.add(UserProvider(
-            user_id=user_id, catalog_id=catalog_id, model_id="gpt-4o",
-            key_ciphertext="ct", dek_wrapped="dek", key_last4="abc",
-        ))
+        s.add(
+            UserProvider(
+                user_id=user_id,
+                catalog_id=catalog_id,
+                model_id="gpt-4o",
+                key_ciphertext="ct",
+                dek_wrapped="dek",
+                key_last4="abc",
+            )
+        )
         with pytest.raises(IntegrityError):
             await s.commit()
     # 5 字符先撞 varchar(4) 宽度（PG 22001 超长，asyncpg 侧不归一为 IntegrityError/DataError）
     async with maker() as s:
-        s.add(UserProvider(
-            user_id=user_id, catalog_id=catalog_id, model_id="gpt-4o",
-            key_ciphertext="ct", dek_wrapped="dek", key_last4="abcde",
-        ))
+        s.add(
+            UserProvider(
+                user_id=user_id,
+                catalog_id=catalog_id,
+                model_id="gpt-4o",
+                key_ciphertext="ct",
+                dek_wrapped="dek",
+                key_last4="abcde",
+            )
+        )
         with pytest.raises(DBAPIError) as excinfo:
             await s.commit()
     assert "value too long for type character varying(4)" in str(excinfo.value)
@@ -307,9 +337,13 @@ async def test_user_provider_one_default_per_user(pg_fresh):
 
     def _provider(last4: str, is_default: bool) -> UserProvider:
         return UserProvider(
-            user_id=user_id, catalog_id=catalog_id, model_id="gpt-4o",
-            key_ciphertext=f"ct-{last4}", dek_wrapped=f"dek-{last4}",
-            key_last4=last4, is_default=is_default,
+            user_id=user_id,
+            catalog_id=catalog_id,
+            model_id="gpt-4o",
+            key_ciphertext=f"ct-{last4}",
+            dek_wrapped=f"dek-{last4}",
+            key_last4=last4,
+            is_default=is_default,
         )
 
     async with maker() as s:
@@ -320,17 +354,19 @@ async def test_user_provider_one_default_per_user(pg_fresh):
         with pytest.raises(IntegrityError):  # 第二个默认行被拒
             await s.commit()
     async with maker() as s:
-        row = (await s.execute(
-            select(UserProvider).where(UserProvider.is_default.is_(True))
-        )).scalar_one()
+        row = (
+            await s.execute(select(UserProvider).where(UserProvider.is_default.is_(True)))
+        ).scalar_one()
         row.is_default = False
         await s.commit()
     async with maker() as s:
         s.add(_provider("Qw3#", True))
         await s.commit()  # 原默认行已退位 → 新默认行可建
-        defaults = (await s.execute(
-            select(UserProvider).where(UserProvider.is_default.is_(True))
-        )).scalars().all()
+        defaults = (
+            (await s.execute(select(UserProvider).where(UserProvider.is_default.is_(True))))
+            .scalars()
+            .all()
+        )
         assert len(defaults) == 1 and defaults[0].key_last4 == "Qw3#"
 
 

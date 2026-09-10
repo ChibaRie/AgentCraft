@@ -31,9 +31,7 @@ class UserProvider(Base):
         CheckConstraint("is_default IN (0,1)", name="ck_user_providers_is_default"),
     )
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(30), nullable=False)
     protocol: Mapped[str] = mapped_column(String(20), default="openai", nullable=False)
     base_url: Mapped[str] = mapped_column(String(500), nullable=False)

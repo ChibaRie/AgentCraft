@@ -18,9 +18,7 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture()
 def env(tmp_path: Path):
-    manager, transports = make_scripted_manager(
-        tmp_path, round_timeout=30, max_concurrent=1
-    )
+    manager, transports = make_scripted_manager(tmp_path, round_timeout=30, max_concurrent=1)
     return manager, transports
 
 
@@ -38,9 +36,15 @@ async def test_second_task_gets_queued_when_slot_full(env):
         return {"message_id": 2}
 
     gen_a = manager.run_round(
-        task_id=1, user_id=1, stored_workdir="/workspaces/authorized",
-        skill_snapshot={}, task_files=[], expert_name="e",
-        content="a", persist_assistant=persist_assistant, persist_tool=persist_tool,
+        task_id=1,
+        user_id=1,
+        stored_workdir="/workspaces/authorized",
+        skill_snapshot={},
+        task_files=[],
+        expert_name="e",
+        content="a",
+        persist_assistant=persist_assistant,
+        persist_tool=persist_tool,
     )
     first_a = await gen_a.__anext__()
     assert first_a[0] != "queued"  # 槽空闲：A 直接开跑
@@ -51,9 +55,15 @@ async def test_second_task_gets_queued_when_slot_full(env):
     assert 1 in manager._containers
 
     gen_b = manager.run_round(
-        task_id=2, user_id=1, stored_workdir="/workspaces/authorized",
-        skill_snapshot={}, task_files=[], expert_name="e",
-        content="b", persist_assistant=persist_assistant, persist_tool=persist_tool,
+        task_id=2,
+        user_id=1,
+        stored_workdir="/workspaces/authorized",
+        skill_snapshot={},
+        task_files=[],
+        expert_name="e",
+        content="b",
+        persist_assistant=persist_assistant,
+        persist_tool=persist_tool,
     )
     first_b = await gen_b.__anext__()
     assert first_b == ("queued", {}), "槽满时新任务必须先收到 queued"
@@ -67,9 +77,13 @@ async def test_second_task_gets_queued_when_slot_full(env):
 async def test_slot_released_on_teardown(env):
     manager, _transports = env
     await manager.ensure_container(
-        task_id=1, user_id=1, provider_config_id=None,
-        stored_workdir="/workspaces/authorized", skill_snapshot={},
-        task_files=[], expert_name="e",
+        task_id=1,
+        user_id=1,
+        provider_config_id=None,
+        stored_workdir="/workspaces/authorized",
+        skill_snapshot={},
+        task_files=[],
+        expert_name="e",
     )
     assert manager._slots.locked()
     await manager.stop_container(1)
@@ -79,9 +93,13 @@ async def test_slot_released_on_teardown(env):
 async def test_idle_sweep_reclaims_and_next_message_reseeds(env):
     manager, _transports = env
     await manager.ensure_container(
-        task_id=1, user_id=1, provider_config_id=None,
-        stored_workdir="/workspaces/authorized", skill_snapshot={},
-        task_files=[], expert_name="e",
+        task_id=1,
+        user_id=1,
+        provider_config_id=None,
+        stored_workdir="/workspaces/authorized",
+        skill_snapshot={},
+        task_files=[],
+        expert_name="e",
     )
     engine_before = manager._containers[1]
     # 回溯活动时间到远超空闲阈值
@@ -98,9 +116,15 @@ async def test_idle_sweep_reclaims_and_next_message_reseeds(env):
         return {"message_id": 1}
 
     gen = manager.run_round(
-        task_id=1, user_id=1, stored_workdir="/workspaces/authorized",
-        skill_snapshot={}, task_files=[], expert_name="e",
-        content="again", persist_assistant=noop, persist_tool=noop,
+        task_id=1,
+        user_id=1,
+        stored_workdir="/workspaces/authorized",
+        skill_snapshot={},
+        task_files=[],
+        expert_name="e",
+        content="again",
+        persist_assistant=noop,
+        persist_tool=noop,
     )
     async for _ in gen:
         pass
@@ -112,9 +136,13 @@ async def test_idle_sweep_reclaims_and_next_message_reseeds(env):
 async def test_sweep_keeps_active_container(env):
     manager, _transports = env
     await manager.ensure_container(
-        task_id=1, user_id=1, provider_config_id=None,
-        stored_workdir="/workspaces/authorized", skill_snapshot={},
-        task_files=[], expert_name="e",
+        task_id=1,
+        user_id=1,
+        provider_config_id=None,
+        stored_workdir="/workspaces/authorized",
+        skill_snapshot={},
+        task_files=[],
+        expert_name="e",
     )
     manager._last_activity[1] -= manager._settings.PI_IDLE_TIMEOUT_MINUTES * 60 + 1
     engine = manager._containers[1]
@@ -159,9 +187,15 @@ async def test_crash_recovery_rebuilds_and_reseeds(tmp_path):
     events = [
         event
         async for event in manager.run_round(
-            task_id=1, user_id=1, stored_workdir="/workspaces/authorized",
-            skill_snapshot={}, task_files=[], expert_name="e",
-            content="retry", persist_assistant=noop, persist_tool=noop,
+            task_id=1,
+            user_id=1,
+            stored_workdir="/workspaces/authorized",
+            skill_snapshot={},
+            task_files=[],
+            expert_name="e",
+            content="retry",
+            persist_assistant=noop,
+            persist_tool=noop,
         )
     ]
     assert len(transports) == 2, "崩溃后必须重建容器"
@@ -198,9 +232,15 @@ async def test_crash_recovery_exhausts_and_marks_failed(tmp_path):
     events = [
         event
         async for event in manager.run_round(
-            task_id=1, user_id=1, stored_workdir="/workspaces/authorized",
-            skill_snapshot={}, task_files=[], expert_name="e",
-            content="retry", persist_assistant=noop, persist_tool=noop,
+            task_id=1,
+            user_id=1,
+            stored_workdir="/workspaces/authorized",
+            skill_snapshot={},
+            task_files=[],
+            expert_name="e",
+            content="retry",
+            persist_assistant=noop,
+            persist_tool=noop,
         )
     ]
     assert len(transports) == 3, "最多重建 3 次"
@@ -217,9 +257,13 @@ async def test_crash_recovery_exhausts_and_marks_failed(tmp_path):
 
 async def _make_container(manager, task_id: int = 1):
     await manager.ensure_container(
-        task_id=task_id, user_id=1, provider_config_id=None,
-        stored_workdir="/workspaces/authorized", skill_snapshot={},
-        task_files=[], expert_name="e",
+        task_id=task_id,
+        user_id=1,
+        provider_config_id=None,
+        stored_workdir="/workspaces/authorized",
+        skill_snapshot={},
+        task_files=[],
+        expert_name="e",
     )
     return manager._containers[task_id]
 
@@ -253,9 +297,7 @@ async def test_watchdog_reclaims_dead_container_and_marks_failed(tmp_path):
 async def test_watchdog_total_timeout_aborts_active_round(tmp_path):
     from datetime import datetime, timedelta, timezone
 
-    manager, _transports = make_scripted_manager(
-        tmp_path, round_timeout=30, max_lifetime_minutes=1
-    )
+    manager, _transports = make_scripted_manager(tmp_path, round_timeout=30, max_lifetime_minutes=1)
     engine = await _make_container(manager)
     engine.is_round_settled = False  # 活动轮进行中
 
@@ -267,10 +309,12 @@ async def test_watchdog_total_timeout_aborts_active_round(tmp_path):
     manager._mark_task_failed = mark_failed
 
     async def fetch_running():
-        return [{
-            "id": 1,
-            "running_since": datetime.now(timezone.utc) - timedelta(minutes=5),
-        }]
+        return [
+            {
+                "id": 1,
+                "running_since": datetime.now(timezone.utc) - timedelta(minutes=5),
+            }
+        ]
 
     manager._running_tasks_fetcher = fetch_running
     reclaimed = await manager.sweep_watchdog()

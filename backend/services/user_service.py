@@ -124,9 +124,7 @@ async def register_user(db: AsyncSession, username: str, email: str, password: s
 
 async def authenticate_user(db: AsyncSession, login: str, password: str) -> User:
     """Verify credentials; ``login`` accepts username or email (PRD §4.1.3)."""
-    user = await db.scalar(
-        select(User).where((User.username == login) | (User.email == login))
-    )
+    user = await db.scalar(select(User).where((User.username == login) | (User.email == login)))
     if user is None:
         # 对哑哈希执行同等 bcrypt 验证，两条 401 路径耗时一致
         verify_password(password, _DUMMY_PASSWORD_HASH)
