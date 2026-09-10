@@ -198,8 +198,9 @@ async def seed_task_for_provider(
             await conn.execute(
                 text(
                     "INSERT INTO task_rounds (id, task_id, owner_id, source_message_id, "
-                    "state, attempt) VALUES (gen_random_uuid(), :t, :u, :m, 'pending', 0)"
-                ),
+                    "state, lease_epoch, attempt) "
+                    "VALUES (gen_random_uuid(), :t, :u, :m, 'pending', 0, 0)"
+                ),  # lease_epoch NOT NULL 无 server default（模型 default=0 仅 Python 侧）
                 {"t": task_id, "u": uid, "m": message_id},
             )
         return task_id
