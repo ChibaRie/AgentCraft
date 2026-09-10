@@ -122,3 +122,26 @@ class DeletionCancelRequest(V2BaseModel):
     # 合法 token = token_urlsafe(32) ≈ 43 字符，256 为宽裕上限
     cancel_token: str = Field(max_length=256)
     password: str = Field(max_length=1024)
+
+
+class ProviderCatalogItem(V2BaseModel):
+    """GET /providers/catalog 条目（Sup §3：id、显示名、允许 FQDN、模型白名单）。"""
+
+    id: str
+    display_name: str
+    allowed_host: str
+    models: list[str]
+
+
+class ProviderOut(V2BaseModel):
+    """GET/POST/PUT /providers 的 Provider 行视图（裁决 D13：无任何 Key 材料）。"""
+
+    id: str
+    catalog_id: str
+    catalog_display_name: str
+    model_id: str
+    key_last4: str
+    key_version: int
+    status: str
+    is_default: bool
+    created_at: str  # ISO8601

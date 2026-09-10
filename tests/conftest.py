@@ -38,6 +38,29 @@ from backend.models import Base
 _TEXT_CHUNK = 3  # 与 EchoEngine 相同的分帧粒度，验证前端流式拼帧
 
 
+@pytest.fixture(autouse=True)
+def neutralize_v2_env(monkeypatch):
+    """dev .env 的 V2 双 DSN 与四把密钥材料不得进入测试进程（与 CI 无 .env 行为一致）。
+
+    必须 setenv("") 而非 delenv：delenv 后 pydantic-settings 回落读取 CWD 下
+    .env 文件值（dev 机泄漏复现路径）。双空 DSN 经 _validate_v2_secrets 的
+    v2_mode 判定 → V1-only 形态。需要 V2 DB 的测试一律经 make_v2_runtime
+    + 依赖 override 注入，与 Settings 环境无关；个别需测 V2 配置校验的用例在
+    测试内自行 monkeypatch.setenv 覆盖本夹具（用例级 monkeypatch 晚于 autouse）。
+
+    中和范围（PlanD-T1/T4 实测交接，超出 brief 的双 DSN）：dev .env 的
+    MFA_ENCRYPTION_KEY / EMAIL_OUTBOX_ENCRYPTION_KEY / RATE_LIMIT_HMAC_KEY /
+    PROVIDER_KEY_ENCRYPTION_KEY 同样透读测试进程（打破 outbox、models_catalog
+    等用例的「未配置」语义），一并 setenv("") 钉空。
+    """
+    monkeypatch.setenv("V2_DATABASE_URL", "")
+    monkeypatch.setenv("V2_ADMIN_DATABASE_URL", "")
+    monkeypatch.setenv("MFA_ENCRYPTION_KEY", "")
+    monkeypatch.setenv("EMAIL_OUTBOX_ENCRYPTION_KEY", "")
+    monkeypatch.setenv("RATE_LIMIT_HMAC_KEY", "")
+    monkeypatch.setenv("PROVIDER_KEY_ENCRYPTION_KEY", "")
+
+
 class FakePiTransport:
     """脚本化假 Pi（共享测试仿真）：prompt → ACK + 回显整条 outgoing 消息。
 
@@ -395,3 +418,10 @@ async def pg_fresh(pg) -> PgDb:
         for table in reversed(Base.metadata.sorted_tables):
             await conn.execute(table.delete())
     return pg
+
+
+# Provider 域共享夹具 re-export：普通模块夹具不被 pytest 自动发现，经本 conftest
+# 命名空间使其对 tests/ 下全部测试可见（T7-T12 复用；冗余 as 为显式 re-export 惯例）。
+# 必须置于文件末尾：helpers → test_v2_runtime 反向 import 本模块的 ADMIN_ROLE/
+# APP_ROLE/PgDb，早置会撞循环导入。
+from tests.v2_provider_helpers import provider_env as provider_env  # noqa: E402
