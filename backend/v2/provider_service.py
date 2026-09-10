@@ -37,6 +37,16 @@ def _provider_not_found() -> HTTPException:
     return HTTPException(status_code=404, detail=_NOT_FOUND_DETAIL)
 
 
+def _assert_catalog_usable(catalog: ProviderCatalog, model_id: str | None = None) -> None:
+    """目录可用门（create/test/resolve 三处共用；D11/D17）：enabled 门恒查；
+    model_id 给定时加白名单门。test 路径不传 model_id——D10 连通性测试不做
+    白名单复验（存量行的模型允许目录白名单收缩后仍可测试）。"""
+    if not catalog.enabled:
+        raise AgentCraftError(ErrorCode.CATALOG_ITEM_DISABLED, "目录条目已停用", http_status=400)
+    if model_id is not None and model_id not in list(catalog.models):
+        raise AgentCraftError(ErrorCode.MODEL_NOT_ALLOWED, "模型不在目录白名单", http_status=400)
+
+
 def _out(row: UserProvider, catalog_display_name: str) -> dict:
     """ORM 行 → ProviderOut 形态 dict（裁决 D13 字段清单；key_last4 裸 4 字符）。"""
     return {
@@ -121,6 +131,61 @@ async def get_provider_detail(db: AsyncSession, provider_id: str) -> dict:
     return _out(row, catalog.display_name)
 
 
+@dataclass(frozen=True)
+class ResolvedProvider:
+    """任务创建的 Provider 解析产物（裁决 D17；Phase 6 复用接口冻结）。"""
+
+    provider_id: str
+    catalog_id: str
+    model_id: str
+    key_version: int
+
+
+async def _resolve_default_row(db: AsyncSession, user_id: str) -> UserProvider:
+    """默认位 active 行（D17：WHERE user_id + is_default + status='active'，RLS 限定）；
+    无 → PROVIDER_NOT_CONFIGURED 400。"""
+    row = (
+        await db.execute(
+            select(UserProvider).where(
+                UserProvider.user_id == _uuid.UUID(user_id),
+                UserProvider.is_default.is_(True),
+                UserProvider.status == "active",
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise AgentCraftError(
+            ErrorCode.PROVIDER_NOT_CONFIGURED, "未配置有效 Provider", http_status=400
+        )
+    return row
+
+
+async def resolve_task_provider(
+    db: AsyncSession, *, user_id: str, provider_id: str | None
+) -> ResolvedProvider:
+    """任务创建的 Provider 解析（裁决 D17；Phase 6 复用接口冻结）。
+
+    判定链：provider_id 给定 → UUID/active 行门（get_provider_row：非法 400 /
+    缺失、revoked 404）；None → 默认位 active 行（无 → PROVIDER_NOT_CONFIGURED
+    400）。两路同链复验目录可用性（enabled → 白名单）。调用方传入的 db 必须已
+    设 GUC（owner_session / Phase 6 创建事务）；本函数不 commit。
+    """
+    if provider_id is not None:
+        row = await get_provider_row(db, provider_id)
+    else:
+        row = await _resolve_default_row(db, user_id)
+    catalog = (
+        await db.execute(select(ProviderCatalog).where(ProviderCatalog.id == row.catalog_id))
+    ).scalar_one()
+    _assert_catalog_usable(catalog, row.model_id)
+    return ResolvedProvider(
+        provider_id=str(row.id),
+        catalog_id=str(row.catalog_id),
+        model_id=row.model_id,
+        key_version=row.key_version,
+    )
+
+
 ROUTE_CREATE = "/api/v2/providers"
 
 _ACTIVE_ENTRY_UQ = "uq_user_providers_active_entry"
@@ -191,14 +256,7 @@ async def create_provider(
                 status_code=400,
                 detail={"code": "VALIDATION_ERROR", "message": "目录条目不存在"},
             )
-        if not catalog.enabled:
-            raise AgentCraftError(
-                ErrorCode.CATALOG_ITEM_DISABLED, "目录条目已停用", http_status=400
-            )
-        if updates["model_id"] not in list(catalog.models):
-            raise AgentCraftError(
-                ErrorCode.MODEL_NOT_ALLOWED, "模型不在目录白名单", http_status=400
-            )
+        _assert_catalog_usable(catalog, updates["model_id"])
         dup = (
             await db.execute(
                 select(UserProvider.id).where(
@@ -519,10 +577,7 @@ async def test_provider_connectivity(
         catalog = (
             await db.execute(select(ProviderCatalog).where(ProviderCatalog.id == row.catalog_id))
         ).scalar_one()
-        if not catalog.enabled:
-            raise AgentCraftError(
-                ErrorCode.CATALOG_ITEM_DISABLED, "目录条目已停用", http_status=400
-            )
+        _assert_catalog_usable(catalog)  # D10：仅 enabled 门，不做白名单复验
         key_ciphertext, dek_wrapped, aad_pid = row.key_ciphertext, row.dek_wrapped, str(row.id)
         method = catalog.healthcheck_method
         url = _TEST_URL_TEMPLATE.format(host=catalog.allowed_host, path=catalog.healthcheck_path)
