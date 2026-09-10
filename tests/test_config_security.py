@@ -96,7 +96,9 @@ def test_get_settings_weak_secret_raises_sanitized_runtime_error(monkeypatch):
     """
     monkeypatch.setenv("SECRET_KEY", "replace-me")
     monkeypatch.setenv("TASK_TOKEN_SECRET", "strong-task-token-secret-LEAKTAIL123456")
-    monkeypatch.delenv("ALLOW_INSECURE_SECRETS", raising=False)
+    # 显式钉住而非 delenv：本地 .env 若有 ALLOW_INSECURE_SECRETS=true 会透读进来，
+    # 使逃生舱意外开启、校验被跳过（pydantic-settings env var > dotenv）
+    monkeypatch.setenv("ALLOW_INSECURE_SECRETS", "false")
     with pytest.raises(RuntimeError) as excinfo:
         get_settings()
     msg = str(excinfo.value)
@@ -108,7 +110,7 @@ def test_get_settings_weak_secret_raises_sanitized_runtime_error(monkeypatch):
 def test_get_settings_strong_secrets_returns_settings(monkeypatch):
     monkeypatch.setenv("SECRET_KEY", "x" * 32)
     monkeypatch.setenv("TASK_TOKEN_SECRET", "t" * 32)
-    monkeypatch.delenv("ALLOW_INSECURE_SECRETS", raising=False)
+    monkeypatch.setenv("ALLOW_INSECURE_SECRETS", "false")
     settings = get_settings()
     assert isinstance(settings, Settings)
     assert settings.SECRET_KEY == "x" * 32
@@ -129,6 +131,7 @@ def _base_kwargs(**over):
         MFA_ENCRYPTION_KEY=base64.urlsafe_b64encode(b"m" * 32).decode().rstrip("="),
         EMAIL_OUTBOX_ENCRYPTION_KEY=base64.urlsafe_b64encode(b"o" * 32).decode().rstrip("="),
         RATE_LIMIT_HMAC_KEY=base64.urlsafe_b64encode(b"r" * 32).decode().rstrip("="),
+        PROVIDER_KEY_ENCRYPTION_KEY=base64.urlsafe_b64encode(b"p" * 32).decode().rstrip("="),
     )
     kwargs.update(over)
     return Settings(**kwargs)
@@ -189,3 +192,56 @@ def test_v2_mode_rejects_insecure_session_cookie_without_escape_hatch():
     """SESSION_COOKIE_SECURE=false 而 ALLOW_INSECURE_SECRETS=false 必须被拒绝。"""
     with pytest.raises(ValidationError):
         _base_kwargs(SESSION_COOKIE_SECURE=False, ALLOW_INSECURE_SECRETS=False)
+
+
+# ---- V2 模式第 4 把 KEK：PROVIDER_KEY_ENCRYPTION_KEY（Phase 3, PlanD-T1, 裁决 D9）----
+
+
+_KEY_A = base64.urlsafe_b64encode(bytes(range(32))).decode()
+_KEY_B = base64.urlsafe_b64encode(bytes(range(32, 64))).decode()
+_KEY_C = base64.urlsafe_b64encode(bytes(range(64, 96))).decode()
+_KEY_D = base64.urlsafe_b64encode(bytes(range(96, 128))).decode()
+_V2_DSN = "postgresql+asyncpg://u:p@localhost:5432/db"
+
+
+def _set_v2_env(monkeypatch, *, omit: str | None = None, override: dict[str, str] | None = None):
+    """四把互异 b64url 32B + 双 DSN + 关闭逃生舱（conftest 默认 ALLOW_INSECURE_SECRETS=true）。
+
+    未列出的 Settings 字段会透读本地 .env（pydantic-settings env var > dotenv），
+    故显式钉住 SESSION_COOKIE_SECURE，避免环境依赖的脆弱性。
+    """
+    values = {
+        "ALLOW_INSECURE_SECRETS": "false",
+        "SESSION_COOKIE_SECURE": "true",
+        "V2_DATABASE_URL": _V2_DSN,
+        "V2_ADMIN_DATABASE_URL": _V2_DSN,
+        "MFA_ENCRYPTION_KEY": _KEY_A,
+        "EMAIL_OUTBOX_ENCRYPTION_KEY": _KEY_B,
+        "RATE_LIMIT_HMAC_KEY": _KEY_C,
+        "PROVIDER_KEY_ENCRYPTION_KEY": _KEY_D,
+    }
+    if override:
+        values.update(override)
+    if omit:
+        values[omit] = ""
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+
+
+def test_v2_mode_requires_provider_kek(monkeypatch):
+    """V2 模式缺 PROVIDER_KEY_ENCRYPTION_KEY → 启动失败（第 4 把 KEK，裁决 D9）。"""
+    _set_v2_env(monkeypatch, omit="PROVIDER_KEY_ENCRYPTION_KEY")
+    with pytest.raises(RuntimeError, match="PROVIDER_KEY_ENCRYPTION_KEY"):
+        get_settings()
+
+
+def test_v2_mode_provider_kek_must_differ(monkeypatch):
+    """PROVIDER_KEY_ENCRYPTION_KEY 与其它三把任一相同 → 拒绝（互异断言扩四把）。"""
+    _set_v2_env(monkeypatch, override={"PROVIDER_KEY_ENCRYPTION_KEY": _KEY_A})
+    with pytest.raises(RuntimeError, match="四把 V2 密钥材料必须互不相同"):
+        get_settings()
+
+
+def test_v2_mode_four_keys_ok(monkeypatch):
+    _set_v2_env(monkeypatch)
+    get_settings()  # 不抛

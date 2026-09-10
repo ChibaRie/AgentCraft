@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     MFA_ENCRYPTION_KEY: str = ""  # b64url 32B；TOTP secret 信封加密（Ops §4.2 独立密钥材料）
     EMAIL_OUTBOX_ENCRYPTION_KEY: str = ""  # b64url 32B；outbox payload 信封加密
     RATE_LIMIT_HMAC_KEY: str = ""  # b64url 32B；限流 HMAC（独立于加密密钥）
+    # b64url 32B；user_providers BYOK DEK 包装 KEK（Ops §4.2 独立密钥材料）
+    PROVIDER_KEY_ENCRYPTION_KEY: str = ""
     MAIL_TRANSPORT: str = "console"  # outbox 传输选择：console | mailegress（部署阶段接线）
     SESSION_COOKIE_SECURE: bool = True  # dev 经 http://localhost 浏览器豁免；LAN 调试可关
     LOG_LEVEL: str = "INFO"
@@ -89,6 +91,7 @@ class Settings(BaseSettings):
             ("MFA_ENCRYPTION_KEY", self.MFA_ENCRYPTION_KEY),
             ("EMAIL_OUTBOX_ENCRYPTION_KEY", self.EMAIL_OUTBOX_ENCRYPTION_KEY),
             ("RATE_LIMIT_HMAC_KEY", self.RATE_LIMIT_HMAC_KEY),
+            ("PROVIDER_KEY_ENCRYPTION_KEY", self.PROVIDER_KEY_ENCRYPTION_KEY),
         )
         decoded: dict[str, bytes] = {}
         for name, raw in key_specs:
@@ -104,7 +107,7 @@ class Settings(BaseSettings):
                 raise ValueError(f"{name} 不得与既有密钥共用")
             decoded[name] = material
         if len(set(decoded.values())) != len(decoded):
-            raise ValueError("三把 V2 密钥材料必须互不相同")
+            raise ValueError("四把 V2 密钥材料必须互不相同")
         if not self.SESSION_COOKIE_SECURE and not self.ALLOW_INSECURE_SECRETS:
             raise ValueError(
                 "SESSION_COOKIE_SECURE=false 仅限 ALLOW_INSECURE_SECRETS=true 的开发环境"
