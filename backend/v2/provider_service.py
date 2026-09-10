@@ -9,7 +9,6 @@
 """
 
 import json
-import logging
 import time
 import uuid as _uuid
 from dataclasses import dataclass
@@ -28,7 +27,7 @@ from backend.v2.models.tasking import TaskEvent
 from backend.v2.provider_crypto import key_sealer
 from backend.v2.runtime import V2Runtime, owner_session
 
-logger = logging.getLogger("agentcraft.provider")
+# 本域刻意零日志：Key 材料红线（明文/密文/DEK 不得进入任何 log 调用）。
 
 _NOT_FOUND_DETAIL = {"code": "NOT_FOUND", "message": "资源不存在"}
 
@@ -411,6 +410,26 @@ async def fail_unstarted_tasks(
 
 
 _NULL_API_KEY_MESSAGE = "api_key 不支持置空（两态语义：缺席=不变，字符串=替换）"
+_NULL_MODEL_ID_MESSAGE = "model_id 不支持置空（缺席=不变，字符串=替换）"
+_NULL_IS_DEFAULT_MESSAGE = "is_default 不支持置空（缺席=不变，布尔=覆盖）"
+
+
+def _reject_explicit_nulls(updates: dict) -> None:
+    """显式 null 门（api_key/model_id/is_default）：缺席=不变，显式 null 一律 400。
+
+    schema 保持 Optional——exclude_unset 链路依赖缺席与显式 null 的可区分性；
+    null 落此 400 VALIDATION_ERROR，不静默按缺席处理（不触发轮换/白名单/默认位）。
+    """
+    for field, message in (
+        ("api_key", _NULL_API_KEY_MESSAGE),
+        ("model_id", _NULL_MODEL_ID_MESSAGE),
+        ("is_default", _NULL_IS_DEFAULT_MESSAGE),
+    ):
+        if field in updates and updates[field] is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "VALIDATION_ERROR", "message": message},
+            )
 
 
 async def update_provider(
@@ -439,11 +458,7 @@ async def update_provider(
 
     async with owner_session(runtime, user_id) as db:
         row = await get_provider_row(db, provider_id)  # 缺失/revoked → 404（跨用户同形）
-        if "api_key" in updates and updates["api_key"] is None:
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "VALIDATION_ERROR", "message": _NULL_API_KEY_MESSAGE},
-            )
+        _reject_explicit_nulls(updates)  # api_key/model_id/is_default 显式 null → 400
         if "model_id" in updates and updates["model_id"] != row.model_id:
             catalog = (
                 await db.execute(

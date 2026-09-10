@@ -284,6 +284,51 @@ async def test_put_null_api_key_rejected(provider_env, pg):
     assert v == 1
 
 
+async def test_put_null_model_id_rejected(provider_env, pg):
+    """LOW-1 语义门：显式 null model_id → 400 VALIDATION_ERROR；行不变（缺席≠null）。"""
+    uid = await seed_active_user(pg, "nullmdl@example.com")
+    pid = await seed_provider(pg, uid)
+    async with auth_client() as client:
+        await login(client, "nullmdl@example.com", "User-Passw0rd!")
+        resp = await client.put(
+            f"/api/v2/providers/{pid}",
+            json={"model_id": None},
+            headers={"Idempotency-Key": "idem-null-m1"},
+        )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "不支持置空" in resp.json()["error"]["message"]
+    async with pg.engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT model_id, key_version FROM user_providers WHERE id=:i"), {"i": pid}
+            )
+        ).one()
+    assert row.model_id == "gpt-4o-mini" and row.key_version == 1
+
+
+async def test_put_null_is_default_rejected(provider_env, pg):
+    """LOW-1 语义门：显式 null is_default → 400 VALIDATION_ERROR（缺席=不变，布尔=覆盖）。"""
+    uid = await seed_active_user(pg, "nulldf@example.com")
+    pid = await seed_provider(pg, uid)
+    async with auth_client() as client:
+        await login(client, "nulldf@example.com", "User-Passw0rd!")
+        resp = await client.put(
+            f"/api/v2/providers/{pid}",
+            json={"is_default": None},
+            headers={"Idempotency-Key": "idem-null-d1"},
+        )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    async with pg.engine.connect() as conn:
+        d = (
+            await conn.execute(
+                text("SELECT is_default FROM user_providers WHERE id=:i"), {"i": pid}
+            )
+        ).scalar_one()
+    assert d is False
+
+
 async def test_put_absent_api_key_unchanged(provider_env, pg):
     """缺席=不变：仅 is_default 变更，key_version 不动。"""
     uid = await seed_active_user(pg, "keep@example.com")

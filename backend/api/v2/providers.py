@@ -52,12 +52,13 @@ async def create_provider(
     runtime: V2Runtime = Depends(get_v2_runtime),
 ) -> JSONResponse:
     """创建 BYOK Provider（写端点：Idempotency-Key 必带，A5；命中重放不携带 Set-Cookie）。"""
+    updates = payload.model_dump(exclude_unset=True)
     outcome = await provider_service.create_provider(
         runtime,
         user_id=str(user_ctx.user.id),
-        updates=payload.model_dump(exclude_unset=True),
+        updates=updates,
         idem_key=idem_key,
-        idem_hash=idempotency.request_hash(payload.model_dump(exclude_unset=True)),
+        idem_hash=idempotency.request_hash(updates),
     )
     if isinstance(outcome, provider_service.Replay):
         return JSONResponse(status_code=outcome.status_code, content=outcome.response_json)

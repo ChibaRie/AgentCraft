@@ -48,7 +48,8 @@ CREDENTIAL_FIELDS: frozenset[str] = frozenset(
         "totp_code",
     }
 )
-"""request_hash 脱敏字段（仅顶层键）：值以固定占位符参与哈希，凭据差异不构成冲突。"""
+"""request_hash 脱敏字段（仅顶层键）：值以固定占位符参与哈希，凭据差异不构成冲突；
+显式 null 以 REDACTED_NULL_PLACEHOLDER 参与哈希（三态标记，裁决 D12）。"""
 
 REDACTED_PLACEHOLDER = "***IDEMPOTENCY-REDACTED***"
 

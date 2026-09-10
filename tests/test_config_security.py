@@ -118,7 +118,7 @@ def test_get_settings_strong_secrets_returns_settings(monkeypatch):
     assert settings.ALLOW_INSECURE_SECRETS is False
 
 
-# ---- V2 认证/会话设置：三把新密钥 + V2 DSN（Phase 2, Task 1）----
+# ---- V2 认证/会话设置：四把新密钥 + V2 DSN（Phase 2, Task 1）----
 
 
 def _base_kwargs(**over):

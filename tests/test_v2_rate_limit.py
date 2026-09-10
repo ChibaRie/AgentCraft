@@ -69,7 +69,7 @@ async def _count(pg: PgDb, scope: str | None = None, subject_hash: str | None = 
 # ---------- LIMITS 注册表（Phase 2 全量 scope 钉死）----------
 
 
-def test_limits_registry_pins_phase2_scopes():
+def test_limits_registry_pins_registered_scopes():
     assert LIMITS == {
         "login": (10, 900),
         "invitation_accept": (5, 3600),
