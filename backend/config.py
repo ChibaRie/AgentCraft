@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     MFA_ENCRYPTION_KEY: str = ""  # b64url 32B；TOTP secret 信封加密（Ops §4.2 独立密钥材料）
     EMAIL_OUTBOX_ENCRYPTION_KEY: str = ""  # b64url 32B；outbox payload 信封加密
     RATE_LIMIT_HMAC_KEY: str = ""  # b64url 32B；限流 HMAC（独立于加密密钥）
+    MAIL_TRANSPORT: str = "console"  # outbox 传输选择：console | mailegress（部署阶段接线）
     SESSION_COOKIE_SECURE: bool = True  # dev 经 http://localhost 浏览器豁免；LAN 调试可关
     LOG_LEVEL: str = "INFO"
 

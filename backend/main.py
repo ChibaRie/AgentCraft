@@ -1,5 +1,6 @@
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -19,6 +20,9 @@ from backend.middleware.upload_guard import UploadSizeGuardMiddleware
 from backend.services.file_service import sweep_stale_storage
 from backend.services.user_service import UserSystemError
 from backend.services.workspace import CANONICAL_AGENT_ROOT
+from backend.v2.mailer import transport_from_settings
+from backend.v2.outbox import outbox_loop
+from backend.v2.runtime import v2_runtime_from_settings
 
 logger = logging.getLogger("agentcraft")
 
@@ -49,7 +53,27 @@ async def lifespan(_app: FastAPI):
         logger.exception("启动文件巡检失败")
     # §7.2 空闲回收 / §7.8.1 看门狗：后台巡检循环
     get_pi_engine_manager().ensure_background()
-    yield
+    # V2 outbox 派发循环：仅双 DSN 齐备的 V2 模式启动（V1-only 行为完全不变）。
+    # transport 选择在启动时解析——未知 MAIL_TRANSPORT 值启动即失败（fail fast）。
+    v2_rt = v2_runtime_from_settings()
+    outbox_task: asyncio.Task | None = None
+    if v2_rt is not None:
+        transport = transport_from_settings(settings)
+        outbox_task = asyncio.create_task(outbox_loop(v2_rt, transport), name="outbox-dispatcher")
+        logger.info("V2 outbox dispatcher started (transport=%s)", settings.MAIL_TRANSPORT)
+    try:
+        yield
+    finally:
+        # 先停派发任务，再释放引擎；CancelledError 穿透 outbox_loop 的常规异常捕获
+        if outbox_task is not None:
+            outbox_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await outbox_task
+        # T4 review 承接：lifecycle 持有的 runtime 用异步释放（await engine.dispose()），
+        # 不走 V2Runtime.close() 的同步 dispose 路径
+        if v2_rt is not None:
+            for engine in v2_rt.engines:
+                await engine.dispose()
 
 
 app = FastAPI(title="AgentCraft API", version="0.4.0", lifespan=lifespan)

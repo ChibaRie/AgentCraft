@@ -10,7 +10,9 @@ from backend.models import Base
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False：in-process 跑 alembic（测试套件）时不得
+    # 静默禁用既有 logger（否则 agentcraft.* 全部失声，caplog 断言空集）
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option("sqlalchemy.url", get_settings().DATABASE_URL)
 target_metadata = Base.metadata
