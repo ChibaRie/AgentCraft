@@ -534,6 +534,43 @@ async def test_cancel_failure_modes_uniform_409_byte_identical(pg, flow_env):
     assert await _count(pg, "idempotency_records") == 0
 
 
+async def test_cancel_wrong_password_401_token_not_consumed(pg, flow_env):
+    """cancel 唯一用户侧凭据路径（review round 1 补测）：错密码 → 401
+    INVALID_CREDENTIALS「当前密码不正确」（与改密端点统一文案；凭据校验非防探测
+    桶，不要求与 409 形态逐字节一致）。owner 事务回滚：令牌分文不消费、状态仍
+    deleting、无会话；幂等零记录（401 先于幂等 store——begin 未命中即零写入，
+    失败路径不写幂等记录，与 T10/T12 confirm 同款纪律）；attempt 桶照常计数
+    （合法令牌路径的尝试，enforce 自管事务独立提交不随业务回滚）。"""
+    uid = await _seed_user(pg, "c-wrongpw@example.com", password="right-pw-1", status="deleting")
+    token = await _seed_reset_token(pg, uid, purpose="deletion_cancel")
+    async with http_client("10.0.60.18") as pub:
+        resp = await pub.post(
+            _ROUTE_CANCEL,
+            json={"cancel_token": token, "password": "deliberately-wrong"},
+            headers={"Idempotency-Key": "c-wrongpw-1"},
+        )
+
+    assert resp.status_code == 401
+    assert resp.json() == _INVALID_CURRENT_401
+    row = await _one(
+        pg, "SELECT consumed_at FROM account_action_tokens WHERE user_id = :u", {"u": uid}
+    )
+    assert row["consumed_at"] is None  # 事务回滚，令牌分文不消费
+    assert await _count(pg, "users", "id = :u AND status = 'deleting'", {"u": uid}) == 1
+    assert await _count(pg, "sessions") == 0  # 未建新会话
+    assert await _count(pg, "idempotency_records") == 0  # 401 先于幂等 store → 零幂等行
+    # 合法令牌路径的尝试照常计入 attempt 桶（user/ip 两主体各 1 行）；探测桶零计数
+    for kind, value in (("user", uid), ("ip", "10.0.60.18")):
+        n = await _count(
+            pg,
+            "rate_limit_events",
+            "scope = 'deletion_cancel_attempt' AND subject_hash = :h",
+            {"h": hmac_subject(kind, value)},
+        )
+        assert n == 1, kind
+    assert await _count(pg, "rate_limit_events", "scope = 'deletion_cancel_invalid'") == 0
+
+
 async def test_cancel_forged_token_flood_429_ip_bucket(pg, flow_env):
     """伪造令牌探测：deletion_cancel_invalid 10/h [HMAC(ip)]，第 11 次 429 +
     Retry-After；拒绝路径不写事件；attempt 桶零计数（分桶纪律）。"""
