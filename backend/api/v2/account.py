@@ -39,6 +39,7 @@ async def request_account_deletion(
 
     Idempotency-Key 必带（A5，subject=user）：命中 → 存量响应原样重放（刻意不
     携带 Set-Cookie）。新成功路径清除双 cookie（A10：全会话失效，含当前）。
+    请求体哈希以 ``model_dump(exclude_unset=True)`` 供给（凭据三态标记见 D12）。
     """
     outcome = await deletion_service.request_deletion(
         runtime,
@@ -50,7 +51,7 @@ async def request_account_deletion(
         password=payload.password,
         totp_code=payload.totp_code,
         idem_key=idem_key,
-        idem_hash=idempotency.request_hash(payload.model_dump()),
+        idem_hash=idempotency.request_hash(payload.model_dump(exclude_unset=True)),
     )
     if isinstance(outcome, deletion_service.Replay):
         return JSONResponse(status_code=outcome.status_code, content=outcome.response_json)
@@ -70,6 +71,7 @@ async def cancel_account_deletion(
 
     无会话无 CSRF；Idempotency-Key 必带（A5，subject=token）：命中 → 存量响应
     原样重放（刻意不携带 Set-Cookie，不重复建会话 A12）。新成功路径种双 cookie。
+    请求体哈希以 ``model_dump(exclude_unset=True)`` 供给（凭据三态标记见 D12）。
     """
     outcome = await deletion_service.cancel_deletion(
         runtime,
@@ -78,7 +80,7 @@ async def cancel_account_deletion(
         ip=client_ip(request),
         device_label=device_label_from_ua(request.headers.get("user-agent")),
         idem_key=idem_key,
-        idem_hash=idempotency.request_hash(payload.model_dump()),
+        idem_hash=idempotency.request_hash(payload.model_dump(exclude_unset=True)),
     )
     if isinstance(outcome, deletion_service.Replay):
         return JSONResponse(status_code=outcome.status_code, content=outcome.response_json)

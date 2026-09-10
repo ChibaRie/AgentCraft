@@ -86,6 +86,7 @@ async def accept_invitation(
 
     Idempotency-Key 必带（A5）：命中 → 存量响应原样重放（刻意不携带 Set-Cookie）；
     新成功路径才种双 cookie（cookie 明文刻意不入幂等重放载荷）。
+    请求体哈希以 ``model_dump(exclude_unset=True)`` 供给（凭据三态标记见 D12）。
     """
     outcome = await invitation_service.accept_invitation(
         runtime,
@@ -93,7 +94,7 @@ async def accept_invitation(
         email=payload.email,
         password=payload.password,
         idem_key=idem_key,
-        idem_hash=idempotency.request_hash(payload.model_dump()),
+        idem_hash=idempotency.request_hash(payload.model_dump(exclude_unset=True)),
         ip=client_ip(request),
         device_label=device_label_from_ua(request.headers.get("user-agent")),
     )
@@ -112,12 +113,13 @@ async def confirm_email_verification(
 
     无会话无 CSRF；无限流（服务 docstring 注明滥用面由令牌单次消费约束）。
     Idempotency-Key 必带（A5）：命中 → 存量响应原样重放，无论令牌当前状态（§7）。
+    请求体哈希以 ``model_dump(exclude_unset=True)`` 供给（凭据三态标记见 D12）。
     """
     outcome = await verification_service.confirm_email_verification(
         runtime,
         verify_token=payload.verify_token,
         idem_key=idem_key,
-        idem_hash=idempotency.request_hash(payload.model_dump()),
+        idem_hash=idempotency.request_hash(payload.model_dump(exclude_unset=True)),
     )
     if isinstance(outcome, verification_service.Replay):
         return JSONResponse(status_code=outcome.status_code, content=outcome.response_json)
@@ -344,13 +346,14 @@ async def confirm_password_reset(
 
     无会话无 CSRF；无限流（服务 docstring 注明滥用面由令牌单次消费约束，A10）。
     Idempotency-Key 必带（A5）：命中 → 存量响应原样重放，无论令牌当前状态（§7）。
+    请求体哈希以 ``model_dump(exclude_unset=True)`` 供给（凭据三态标记见 D12）。
     """
     outcome = await password_service.confirm_password_reset(
         runtime,
         reset_token=payload.reset_token,
         new_password=payload.new_password,
         idem_key=idem_key,
-        idem_hash=idempotency.request_hash(payload.model_dump()),
+        idem_hash=idempotency.request_hash(payload.model_dump(exclude_unset=True)),
     )
     if isinstance(outcome, password_service.Replay):
         return JSONResponse(status_code=outcome.status_code, content=outcome.response_json)

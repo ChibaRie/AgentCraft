@@ -82,6 +82,21 @@ def test_request_hash_is_canonical_and_deterministic():
         assert request_hash({field: "secret-A"}) == request_hash({field: "secret-B"})
 
 
+def test_request_hash_credential_tri_state():
+    """裁决 D12：凭据缺席/显式 null/字符串 三态哈希互异；值不参与哈希。"""
+    h_absent = request_hash({"model_id": "m"})
+    h_null = request_hash({"model_id": "m", "api_key": None})
+    h_str1 = request_hash({"model_id": "m", "api_key": "sk-aaa"})
+    h_str2 = request_hash({"model_id": "m", "api_key": "sk-bbbbbbbb"})
+    assert h_null != h_absent
+    assert h_str1 == h_str2  # 字符串值不参与哈希（凭据差异不构成冲突）
+    assert h_str1 != h_null and h_str1 != h_absent
+
+
+def test_request_hash_non_credential_value_still_counts():
+    assert request_hash({"model_id": "a"}) != request_hash({"model_id": "b"})
+
+
 def test_subject_helpers_hash_server_side_inputs():
     uid = uuid7()
     assert subject_user(uid) == hash_token(str(uid))

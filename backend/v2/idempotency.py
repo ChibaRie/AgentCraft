@@ -52,6 +52,9 @@ CREDENTIAL_FIELDS: frozenset[str] = frozenset(
 
 REDACTED_PLACEHOLDER = "***IDEMPOTENCY-REDACTED***"
 
+REDACTED_NULL_PLACEHOLDER = "***IDEMPOTENCY-REDACTED-NULL***"
+"""凭据显式 null 占位（与缺席/字符串三态互异——裁决 D12；值仍不参与哈希）。"""
+
 _RECORD_TTL = timedelta(hours=24)  # 重放窗口（§7）
 _KEY_MAX_LENGTH = 100  # key 列 VARCHAR(100)，入库前拒绝防 22001 溢出变 500
 
@@ -59,14 +62,22 @@ _KEY_MAX_LENGTH = 100  # key 列 VARCHAR(100)，入库前拒绝防 22001 溢出�
 def request_hash(payload: dict | None) -> str:
     """规范化 JSON（键排序、紧凑分隔符、ensure_ascii=False）后 SHA-256。
 
-    顶层 CREDENTIAL_FIELDS 键以固定占位符参与哈希；payload 为 None 时按
-    规范化 ``"null"`` 参与哈希。嵌套结构内的同名键不脱敏（仅顶层）。
+    顶层 CREDENTIAL_FIELDS 键三态标记（裁决 D12）：缺席 → 键省略；显式 None →
+    REDACTED_NULL_PLACEHOLDER；其余 → REDACTED_PLACEHOLDER。凭据**值**永不参与
+    哈希（凭据差异不构成 409），仅区分形态。调用方必须以
+    ``payload.model_dump(exclude_unset=True)`` 供哈希（缺席与显式 null 才可区分）。
+    嵌套结构内的同名键不脱敏（仅顶层）。
     """
     body = None
     if payload is not None:
-        body = {
-            k: REDACTED_PLACEHOLDER if k in CREDENTIAL_FIELDS else v for k, v in payload.items()
-        }
+        body = {}
+        for k, v in payload.items():
+            if k not in CREDENTIAL_FIELDS:
+                body[k] = v
+            elif v is None:
+                body[k] = REDACTED_NULL_PLACEHOLDER
+            else:
+                body[k] = REDACTED_PLACEHOLDER
     canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
