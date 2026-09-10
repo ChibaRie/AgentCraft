@@ -34,3 +34,29 @@ class EmailVerificationConfirmRequest(V2BaseModel):
 
     # 合法 token = token_urlsafe(32) ≈ 43 字符，256 为宽裕上限
     verify_token: str = Field(max_length=256)
+
+
+class LoginRequest(V2BaseModel):
+    """POST /auth/login 请求体（Task 11）。
+
+    email 经 pydantic EmailStr（email-validator 同源语法门）边界校验；小写规范化
+    在服务层收口（限流 HMAC 主体与账号查找共用同一形态）。password 资源卫生上限
+    同 InvitationAcceptRequest（Argon2id 输入；schema 校验短路于限流与业务）。
+    """
+
+    email: EmailStr
+    password: str = Field(max_length=1024)
+
+
+class MfaChallengeRequest(V2BaseModel):
+    """POST /auth/login/mfa 请求体（Task 11）：挑战 id + 6-8 位 TOTP 码。"""
+
+    # 合法 challenge_id = token_urlsafe(32) ≈ 43 字符，128 为宽裕上限
+    mfa_challenge_id: str = Field(max_length=128)
+    totp_code: str = Field(min_length=6, max_length=8)
+
+
+class MfaActivateRequest(V2BaseModel):
+    """POST /auth/mfa/activate 请求体（Task 11）：6-8 位 TOTP 码。"""
+
+    totp_code: str = Field(min_length=6, max_length=8)

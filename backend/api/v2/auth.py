@@ -4,15 +4,24 @@ Task 4 占位 ``GET /health``（503 语义探针）；Task 9 增加
 ``POST /auth/invitations/accept``（挂载于 /api/v2，公开端点：无会话无 CSRF，
 Idempotency-Key 必带）；Task 10 增加 ``POST /auth/email-verification/confirm``
 （公开端点：无会话无 CSRF，Idempotency-Key 必带，无限流）与
-``POST /auth/email-verification/resend``（认证端点：get_v2_auth 门序 + 限流）。
+``POST /auth/email-verification/resend``（认证端点：get_v2_auth 门序 + 限流）；
+Task 11 增加 ``POST /auth/login`` 与 ``POST /auth/login/mfa``（公开端点：无会话
+无 CSRF，A5 未列入幂等键控）以及 ``POST /auth/mfa/setup`` /
+``POST /auth/mfa/activate`` / ``DELETE /auth/mfa``（认证端点：get_v2_auth 门序）。
 依赖统一定义于 backend.v2.runtime / idempotency / session_service，此处仅消费。
 """
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from backend.api.v2.schemas import EmailVerificationConfirmRequest, InvitationAcceptRequest
-from backend.v2 import idempotency, invitation_service, verification_service
+from backend.api.v2.schemas import (
+    EmailVerificationConfirmRequest,
+    InvitationAcceptRequest,
+    LoginRequest,
+    MfaActivateRequest,
+    MfaChallengeRequest,
+)
+from backend.v2 import idempotency, invitation_service, login_service, verification_service
 from backend.v2.idempotency import require_key_header
 from backend.v2.runtime import V2Runtime, client_ip, get_v2_runtime
 from backend.v2.security import device_label_from_ua
@@ -24,6 +33,14 @@ from backend.v2.session_service import (
 )
 
 router = APIRouter()
+
+
+def _session_response(body: dict, session_token: str) -> JSONResponse:
+    """登录成功统一出口：200 响应体 + 会话/CSRF 双 cookie（A14）。"""
+    response = JSONResponse(status_code=200, content=body)
+    set_session_cookie(response, session_token)
+    set_csrf_cookie(response, body["data"]["csrf_token"])
+    return response
 
 
 @router.get("/health")
@@ -55,10 +72,7 @@ async def accept_invitation(
     )
     if isinstance(outcome, invitation_service.Replay):
         return JSONResponse(status_code=outcome.status_code, content=outcome.response_json)
-    response = JSONResponse(status_code=200, content=outcome.body)
-    set_session_cookie(response, outcome.session_token)
-    set_csrf_cookie(response, outcome.body["data"]["csrf_token"])
-    return response
+    return _session_response(outcome.body, outcome.session_token)
 
 
 @router.post("/auth/email-verification/confirm")
@@ -100,3 +114,86 @@ async def resend_email_verification(
         status=user_ctx.user.status,
     )
     return JSONResponse(status_code=200, content={"data": {"sent": True}})
+
+
+@router.post("/auth/login")
+async def login(
+    payload: LoginRequest,
+    request: Request,
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """登录（公开端点）：无会话无 CSRF，A5 未列入幂等键控。
+
+    限流/防枚举/状态门在服务层收口。TOTP 已启用 → 200 mfa_required + 挑战 id
+    （不建会话不种 cookie）；常规路径 → 双 cookie + user/csrf 响应体（A14）。
+    """
+    outcome = await login_service.login(
+        runtime,
+        email=payload.email,
+        password=payload.password,
+        ip=client_ip(request),
+        device_label=device_label_from_ua(request.headers.get("user-agent")),
+    )
+    if isinstance(outcome, login_service.MfaRequired):
+        return JSONResponse(
+            status_code=200,
+            content={"data": {"mfa_required": True, "mfa_challenge_id": outcome.mfa_challenge_id}},
+        )
+    return _session_response(outcome.body, outcome.session_token)
+
+
+@router.post("/auth/login/mfa")
+async def login_mfa(
+    payload: MfaChallengeRequest,
+    request: Request,
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """MFA 挑战验证（公开端点）：挑战一次性消费；成功建 mfa_verified 会话。
+
+    挑战未知/过期/码错统一 401 MFA_INVALID；成功 → 双 cookie + user/csrf 响应体。
+    """
+    outcome = await login_service.login_mfa(
+        runtime,
+        mfa_challenge_id=payload.mfa_challenge_id,
+        totp_code=payload.totp_code,
+        device_label=device_label_from_ua(request.headers.get("user-agent")),
+    )
+    return _session_response(outcome.body, outcome.session_token)
+
+
+@router.post("/auth/mfa/setup")
+async def setup_mfa(user_ctx: V2AuthContext = Depends(get_v2_auth)) -> JSONResponse:
+    """TOTP 注册第一步（认证端点）：生成 secret（内存 pending，10 分钟 TTL）。
+
+    secret 与 otpauth URI 入响应体交由用户录入验证器 App；不落库（activate 才写）。
+    """
+    body = login_service.setup_mfa(user_id=str(user_ctx.user.id), email=user_ctx.user.email)
+    return JSONResponse(status_code=200, content=body)
+
+
+@router.post("/auth/mfa/activate")
+async def activate_mfa(
+    payload: MfaActivateRequest,
+    user_ctx: V2AuthContext = Depends(get_v2_auth),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """TOTP 注册第二步（认证端点）：验证码正确 → 信封加密落库 + 当前会话盖 MFA 戳。"""
+    body = await login_service.activate_mfa(
+        runtime,
+        user_id=str(user_ctx.user.id),
+        session_id=str(user_ctx.session.id),
+        totp_code=payload.totp_code,
+    )
+    return JSONResponse(status_code=200, content=body)
+
+
+@router.delete("/auth/mfa")
+async def disable_mfa(
+    user_ctx: V2AuthContext = Depends(get_v2_auth),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """停用 TOTP（认证端点）：admin 不可停用（A9）；其他用户清 mfa_secret_enc。"""
+    body = await login_service.disable_mfa(
+        runtime, user_id=str(user_ctx.user.id), role=user_ctx.user.role
+    )
+    return JSONResponse(status_code=200, content=body)

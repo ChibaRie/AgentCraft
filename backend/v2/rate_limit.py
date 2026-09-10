@@ -9,7 +9,8 @@ owner/业务事务——限流提交独立于业务事务，业务回滚不回�
 
 主体契约：``subjects`` 为**已哈希**主体串（``hmac_subject`` 的输出，64 hex），
 组合维度（如 login = [HMAC(email), HMAC(ip)]）一次调用逐 subject 各写一行；
-窗口内任一 subject 达限即整组 429（``= ANY`` 语义），拒绝路径不写事件行。
+窗口内任一 subject 达限即整组 429（逐主体独立计数，``= ANY`` 匹配面），拒绝
+路径不写事件行。
 
 并发串行化（Eng §1.4）：count-then-insert 不得作为限额机制——enforce 在计数前
 对同一事务取**单把**事务级咨询锁 ``pg_advisory_xact_lock``（锁键 = scope + 排序后
@@ -49,13 +50,19 @@ LIMITS: dict[str, tuple[int, int]] = {
 
 _HMAC_KINDS = frozenset({"email", "ip", "user"})
 
-# 单语句聚合：计数 + 窗口内最老事件 + DB 时钟（now() 语句内一致，
-# 剩余秒数与窗口过滤共用同一时钟基准，杜绝应用/DB 时钟偏差影响边界）。
+# 单语句聚合（per-subject）：逐主体计数取最大值 + 窗口内最老事件 + DB 时钟
+# （now() 语句内一致，剩余秒数与窗口过滤共用同一时钟基准，杜绝应用/DB 时钟偏差
+# 影响边界）。组合维度（login = [HMAC(email), HMAC(ip)]）每次调用逐 subject 各写
+# 一行，限额语义是「任一主体达限即拒」——各主体独立计数，**不得**跨主体求和
+# （否则双主体组合调用的等效限额被腰斩为 limit/2，T11 登录契约 10/900s 失真）。
+# min(oldest) 取全部相关事件中最老者（Retry-After 保守取值）。
 _EVENT_COUNT_SQL = text(
-    "SELECT count(*) AS cnt, min(occurred_at) AS oldest, now() AS now_ts "
+    "SELECT COALESCE(max(cnt), 0) AS cnt, min(oldest) AS oldest, now() AS now_ts FROM ("
+    "SELECT subject_hash, count(*) AS cnt, min(occurred_at) AS oldest "
     "FROM rate_limit_events "
     "WHERE scope = :scope AND subject_hash = ANY(:subjects) "
-    "AND occurred_at > now() - make_interval(secs => :window)"
+    "AND occurred_at > now() - make_interval(secs => :window) "
+    "GROUP BY subject_hash) per_subject"
 ).bindparams(bindparam("subjects", type_=ARRAY(String)))
 
 _CLEANUP_SQL = text(
