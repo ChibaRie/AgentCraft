@@ -1,8 +1,8 @@
-"""V2 迁移链验收：0001（schema+roles+RLS）+ 0002（种子）+ 0003（identity grants/RLS/列）。
+"""V2 迁移链验收：0001（schema+roles+RLS）+ 0002（种子）+ 0003（identity grants/RLS/列）
++ 0004（user_providers 活跃条目唯一索引）。
 
 直接对 testcontainer PG 建一次性库跑 alembic 子进程（不经模板库克隆），
 验证 upgrade/downgrade/upgrade 往返幂等与种子/角色齐备。
-注意：与 brief 逐字一致，仅去掉未使用的 import pytest（ruff F401）。
 """
 
 import asyncio
@@ -12,7 +12,9 @@ import sys
 import uuid
 from pathlib import Path
 
+import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,7 +70,7 @@ def test_seeds_and_roles_present(pg_url_base):
                 ver = (
                     await conn.execute(text("SELECT version_num FROM alembic_version"))
                 ).scalar_one()
-                assert ver == "0003"
+                assert ver == "0004"
                 slots = (
                     await conn.execute(text("SELECT count(*) FROM platform_slots"))
                 ).scalar_one()
@@ -95,3 +97,53 @@ def test_seeds_and_roles_present(pg_url_base):
         asyncio.run(_check())
     finally:
         asyncio.run(_drop_db(pg_url_base, name))
+
+
+async def test_0004_active_entry_unique_index(pg):
+    """0004：活跃条目 (user_id, catalog_id, model_id) 部分唯一索引（裁决 D4）。"""
+    async with pg.engine.begin() as conn:
+        defs = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT indexdef FROM pg_indexes "
+                        "WHERE indexname = 'uq_user_providers_active_entry'"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        # 谓词反解形态随 PG 版本可能为 (status = 'active'::text) 或 ((status)::text = ...)，
+        # 断言放宽到「含 status 与 'active' 字面」避免反解形态耦合
+        assert len(defs) == 1 and "status" in defs[0] and "'active'" in defs[0]
+        user = (
+            await conn.execute(
+                text(
+                    "INSERT INTO users (id, email, password_hash, role, status) "
+                    "VALUES (gen_random_uuid(), 'u4@x.test', 'h', 'user', 'active') RETURNING id"
+                )
+            )
+        ).scalar_one()
+        cat = (await conn.execute(text("SELECT id FROM provider_catalog LIMIT 1"))).scalar_one()
+        for status in ("revoked", "revoked", "active"):
+            await conn.execute(
+                text(
+                    "INSERT INTO user_providers (id, user_id, catalog_id, model_id, "
+                    "key_ciphertext, dek_wrapped, key_last4, key_version, status, is_default) "
+                    "VALUES (gen_random_uuid(), :u, :c, 'm', 'ct', 'dw', '4KEY', 1, :s, false)"
+                ),
+                {"u": user, "c": cat, "s": status},
+            )
+    # 第二条 active 同三元组 → 唯一冲突（独立事务：revoked 行不参与约束故前三条可共存）
+    with pytest.raises(IntegrityError):
+        async with pg.engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO user_providers (id, user_id, catalog_id, model_id, "
+                    "key_ciphertext, dek_wrapped, key_last4, key_version, status, is_default) "
+                    "VALUES (gen_random_uuid(), :u, :c, 'm', 'ct', 'dw', '4KEY', 1, "
+                    "'active', false)"
+                ),
+                {"u": user, "c": cat},
+            )
