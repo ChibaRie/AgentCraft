@@ -97,3 +97,28 @@ class PasswordChangeRequest(V2BaseModel):
     current_password: str = Field(max_length=1024)
     new_password: str = Field(max_length=1024)
     totp_code: str | None = Field(default=None, min_length=6, max_length=8)
+
+
+class DeletionRequestRequest(V2BaseModel):
+    """POST /account/deletion/request 请求体（Task 13）。
+
+    password 资源卫生上限同 PasswordChangeRequest（Argon2id 输入）；totp_code
+    可选——仅 TOTP 已启用用户必填（服务层按 mfa_secret_enc 裁决），6-8 位。
+    """
+
+    # 资源卫生上限（Argon2id 输入）；密码最小长度策略待补遗裁决，本任务不设下限
+    password: str = Field(max_length=1024)
+    totp_code: str | None = Field(default=None, min_length=6, max_length=8)
+
+
+class DeletionCancelRequest(V2BaseModel):
+    """POST /account/deletion/cancel 请求体（Task 13）。
+
+    cancel_token 预认证面资源卫生（同 T9 invitation_token 裁决）：无长度边界会
+    原样流入 SHA-256（hash_token），必须在 schema 层截断——schema 校验短路于幂等
+    依赖与业务，违规请求零 DB 副作用。
+    """
+
+    # 合法 token = token_urlsafe(32) ≈ 43 字符，256 为宽裕上限
+    cancel_token: str = Field(max_length=256)
+    password: str = Field(max_length=1024)
