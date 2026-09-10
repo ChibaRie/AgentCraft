@@ -229,3 +229,211 @@ def test_map_integrity_conflict_by_constraint_name():
     assert provider_service._map_integrity_conflict(entry_err).message == (
         provider_service._DUPLICATE_MESSAGE
     )
+
+
+# ---------- T9 PUT/DELETE ----------
+
+
+async def test_put_rotate_key_bumps_version_and_fails_unstarted(provider_env, pg):
+    """轮换：新 DEK 覆写 + key_version+1 + 同事务联动未开始任务（D2/D3）。"""
+    uid = await seed_active_user(pg, "rot@example.com")
+    pid = await seed_provider(pg, uid)
+    await seed_task_for_provider(pg, uid, pid, status="queued")
+    async with auth_client() as client:
+        await login(client, "rot@example.com", "User-Passw0rd!")
+        resp = await client.put(
+            f"/api/v2/providers/{pid}",
+            json={"api_key": "sk-rotated-key-987654"},
+            headers={"Idempotency-Key": "idem-rot-1"},
+        )
+    assert resp.status_code == 200, resp.text
+    row = resp.json()["data"]
+    # "sk-rotated-key-987654"[-4:]（D7 末 4 位原样）
+    assert row["key_version"] == 2 and row["key_last4"] == "7654"
+    async with pg.engine.connect() as conn:
+        task = (
+            await conn.execute(
+                text("SELECT status, abort_reason FROM tasks WHERE provider_id = :p"),
+                {"p": str(pid)},
+            )
+        ).one()
+        n_ct = (await conn.execute(text("SELECT count(*) FROM user_providers"))).scalar_one()
+    assert task.status == "failed" and task.abort_reason == "provider_key_revoked"
+    assert n_ct == 1  # 覆写非新增
+
+
+async def test_put_null_api_key_rejected(provider_env, pg):
+    """裁决 D2：显式 null → 400 固定文案；无状态变更（不轮换）。"""
+    uid = await seed_active_user(pg, "null@example.com")
+    pid = await seed_provider(pg, uid)
+    async with auth_client() as client:
+        await login(client, "null@example.com", "User-Passw0rd!")
+        resp = await client.put(
+            f"/api/v2/providers/{pid}",
+            json={"api_key": None},
+            headers={"Idempotency-Key": "idem-null-1"},
+        )
+    assert resp.status_code == 400
+    assert "不支持置空" in resp.json()["error"]["message"]
+    async with pg.engine.connect() as conn:
+        v = (
+            await conn.execute(
+                text("SELECT key_version FROM user_providers WHERE id=:i"), {"i": pid}
+            )
+        ).scalar_one()
+    assert v == 1
+
+
+async def test_put_absent_api_key_unchanged(provider_env, pg):
+    """缺席=不变：仅 is_default 变更，key_version 不动。"""
+    uid = await seed_active_user(pg, "keep@example.com")
+    pid = await seed_provider(pg, uid)
+    async with auth_client() as client:
+        await login(client, "keep@example.com", "User-Passw0rd!")
+        resp = await client.put(
+            f"/api/v2/providers/{pid}",
+            json={"is_default": True},
+            headers={"Idempotency-Key": "idem-keep-1"},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["key_version"] == 1
+    del uid
+
+
+async def test_put_model_id_whitelist_enforced(provider_env, pg):
+    uid = await seed_active_user(pg, "mdl@example.com")
+    pid = await seed_provider(pg, uid, catalog_host="api.openai.com")
+    async with auth_client() as client:
+        await login(client, "mdl@example.com", "User-Passw0rd!")
+        ok = await client.put(
+            f"/api/v2/providers/{pid}",
+            json={"model_id": "gpt-4o"},
+            headers={"Idempotency-Key": "idem-m1"},
+        )
+        bad = await client.put(
+            f"/api/v2/providers/{pid}",
+            json={"model_id": "deepseek-chat"},
+            headers={"Idempotency-Key": "idem-m2"},
+        )
+    assert ok.status_code == 200 and ok.json()["data"]["model_id"] == "gpt-4o"
+    assert bad.status_code == 400 and bad.json()["error"]["code"] == "MODEL_NOT_ALLOWED"
+
+
+async def test_put_extra_forbid(provider_env, pg):
+    """PUT 也禁 base_url（D14）。"""
+    uid = await seed_active_user(pg, "putx@example.com")
+    pid = await seed_provider(pg, uid)
+    async with auth_client() as client:
+        await login(client, "putx@example.com", "User-Passw0rd!")
+        resp = await client.put(
+            f"/api/v2/providers/{pid}",
+            json={"base_url": "https://evil.example"},
+            headers={"Idempotency-Key": "idem-px-1"},
+        )
+    assert resp.status_code == 400
+
+
+async def test_put_cross_user_and_revoked_404(provider_env, pg):
+    uid_a = await seed_active_user(pg, "owner@example.com")
+    uid_b = await seed_active_user(pg, "intruder@example.com")
+    pid = await seed_provider(pg, uid_a)
+    pid_revoked = await seed_provider(pg, uid_b, status="revoked")
+    async with auth_client() as client:
+        await login(client, "intruder@example.com", "User-Passw0rd!")
+        cross = await client.put(
+            f"/api/v2/providers/{pid}",
+            json={"is_default": True},
+            headers={"Idempotency-Key": "idem-x1"},
+        )
+        gone = await client.put(
+            f"/api/v2/providers/{pid_revoked}", json={}, headers={"Idempotency-Key": "idem-x2"}
+        )
+    assert cross.status_code == 404 and gone.status_code == 404  # RLS 0 行统一 404；revoked 不可见
+    del uid_a
+
+
+async def test_delete_revokes_clears_default_and_fails_unstarted(provider_env, pg):
+    """D6：默认行撤销 → is_default 同事务清除；联动未开始任务；revoked 后 404。"""
+    uid = await seed_active_user(pg, "del@example.com")
+    pid = await seed_provider(pg, uid, is_default=True)
+    await seed_task_for_provider(pg, uid, pid, status="uploading")
+    async with auth_client() as client:
+        await login(client, "del@example.com", "User-Passw0rd!")
+        resp = await client.delete(
+            f"/api/v2/providers/{pid}", headers={"Idempotency-Key": "idem-del-1"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"] == {"id": str(pid), "status": "revoked"}
+        again = await client.delete(
+            f"/api/v2/providers/{pid}", headers={"Idempotency-Key": "idem-del-2"}
+        )
+    assert again.status_code == 404  # revoked 不可见（新 key 故走 404 门而非重放）
+    async with pg.engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, is_default FROM user_providers WHERE id=:i"), {"i": pid}
+            )
+        ).one()
+        task = (
+            await conn.execute(
+                text("SELECT status FROM tasks WHERE provider_id=:p"), {"p": str(pid)}
+            )
+        ).scalar_one()
+    assert row.status == "revoked" and row.is_default is False and task == "failed"
+
+
+async def test_delete_replay_after_revocation(provider_env, pg):
+    """幂等重放优先于 404 门：同 key 的 DELETE 重放原 200（§7）。"""
+    uid = await seed_active_user(pg, "delrp@example.com")
+    pid = await seed_provider(pg, uid)
+    async with auth_client() as client:
+        await login(client, "delrp@example.com", "User-Passw0rd!")
+        first = await client.delete(
+            f"/api/v2/providers/{pid}", headers={"Idempotency-Key": "idem-dr-1"}
+        )
+        replay = await client.delete(
+            f"/api/v2/providers/{pid}", headers={"Idempotency-Key": "idem-dr-1"}
+        )
+    assert first.status_code == 200 and replay.status_code == 200
+    assert replay.json() == first.json()
+
+
+async def test_put_delete_require_idempotency_key(provider_env, pg):
+    uid = await seed_active_user(pg, "nokey2@example.com")
+    pid = await seed_provider(pg, uid)
+    async with auth_client() as client:
+        await login(client, "nokey2@example.com", "User-Passw0rd!")
+        assert (await client.put(f"/api/v2/providers/{pid}", json={})).status_code == 400
+        assert (await client.delete(f"/api/v2/providers/{pid}")).status_code == 400
+
+
+async def test_put_bad_uuid_400(provider_env, pg):
+    """路径非 UUID → 400 VALIDATION_ERROR（get_provider_row 统一防护，防 500 兜底）。"""
+    await seed_active_user(pg, "badpid@example.com")
+    async with auth_client() as client:
+        await login(client, "badpid@example.com", "User-Passw0rd!")
+        resp = await client.put(
+            "/api/v2/providers/not-a-uuid", json={}, headers={"Idempotency-Key": "idem-bu-1"}
+        )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+async def test_write_without_csrf_403(provider_env, pg):
+    """CSRF 门负例：登录后剔除 X-CSRF-Token → 403 CSRF_INVALID（防门序回归）。"""
+    uid = await seed_active_user(pg, "nocsrf@example.com")
+    async with auth_client() as client:
+        await login(client, "nocsrf@example.com", "User-Passw0rd!")
+        client.headers.pop("X-CSRF-Token", None)
+        resp = await client.post(
+            _CREATE,
+            json={
+                "catalog_id": "0197aaaa-7aaa-7aaa-7aaa-aaaaaaaaaaaa",
+                "model_id": "gpt-4o-mini",
+                "api_key": "sk-test-abcdef123456",
+            },
+            headers={"Idempotency-Key": "idem-nocsrf-1"},
+        )
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "CSRF_INVALID"
+    del uid

@@ -10,7 +10,7 @@
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from backend.api.v2.schemas import ProviderCreateRequest
+from backend.api.v2.schemas import ProviderCreateRequest, ProviderUpdateRequest
 from backend.v2 import idempotency, provider_service
 from backend.v2.idempotency import require_key_header
 from backend.v2.runtime import V2Runtime, get_v2_runtime, owner_session
@@ -55,6 +55,49 @@ async def create_provider(
         updates=payload.model_dump(exclude_unset=True),
         idem_key=idem_key,
         idem_hash=idempotency.request_hash(payload.model_dump(exclude_unset=True)),
+    )
+    if isinstance(outcome, provider_service.Replay):
+        return JSONResponse(status_code=outcome.status_code, content=outcome.response_json)
+    return JSONResponse(status_code=200, content={"data": outcome})
+
+
+@router.put("/providers/{provider_id}")
+async def update_provider(
+    provider_id: str,
+    payload: ProviderUpdateRequest,
+    user_ctx: V2AuthContext = Depends(get_v2_auth),
+    idem_key: str = Depends(require_key_header),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """更新 BYOK Provider（写端点：Idempotency-Key 必带；api_key 两态，D2）。"""
+    updates = payload.model_dump(exclude_unset=True)
+    outcome = await provider_service.update_provider(
+        runtime,
+        user_id=str(user_ctx.user.id),
+        provider_id=provider_id,
+        updates=updates,
+        idem_key=idem_key,
+        idem_hash=idempotency.request_hash(updates),
+    )
+    if isinstance(outcome, provider_service.Replay):
+        return JSONResponse(status_code=outcome.status_code, content=outcome.response_json)
+    return JSONResponse(status_code=200, content={"data": outcome})
+
+
+@router.delete("/providers/{provider_id}")
+async def revoke_provider(
+    provider_id: str,
+    user_ctx: V2AuthContext = Depends(get_v2_auth),
+    idem_key: str = Depends(require_key_header),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """撤销 BYOK Provider（软撤 + 联动；Idempotency-Key 必带；无请求体）。"""
+    outcome = await provider_service.revoke_provider(
+        runtime,
+        user_id=str(user_ctx.user.id),
+        provider_id=provider_id,
+        idem_key=idem_key,
+        idem_hash=idempotency.request_hash(None),
     )
     if isinstance(outcome, provider_service.Replay):
         return JSONResponse(status_code=outcome.status_code, content=outcome.response_json)

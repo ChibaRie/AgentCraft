@@ -158,3 +158,14 @@ class ProviderCreateRequest(V2BaseModel):
     model_id: str = Field(min_length=1, max_length=200)
     api_key: str = Field(min_length=8, max_length=4096)
     is_default: bool = False
+
+
+class ProviderUpdateRequest(V2BaseModel):
+    """PUT /providers/{id} 请求体。裁决 D2/D14：api_key 两态（缺席=不变、字符串=替换、
+    显式 null 服务层 400）；extra=forbid。三态区分依赖端点 model_dump(exclude_unset=True)。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str | None = Field(default=None, min_length=8, max_length=4096)
+    is_default: bool | None = None
+    model_id: str | None = Field(default=None, min_length=1, max_length=200)

@@ -347,3 +347,130 @@ async def fail_unstarted_tasks(
                 )
             )
     return len(rows)
+
+
+_NULL_API_KEY_MESSAGE = "api_key 不支持置空（两态语义：缺席=不变，字符串=替换）"
+
+
+async def update_provider(
+    runtime: V2Runtime,
+    *,
+    user_id: str,
+    provider_id: str,
+    updates: dict,
+    idem_key: str,
+    idem_hash: str,
+) -> "dict | Replay":
+    """更新（裁决 D2/D5/D11/D14）：api_key 两态轮换 / is_default 互斥 / model 白名单。
+
+    门序同 create：幂等 begin（route=具体路径）→ owner 事务（active 行 404 门 →
+    显式 null 400 → model 白名单 → 轮换 seal+version+1+联动 / 默认互斥 → store）。
+    model_id 变更与目录禁用正交（D11：PUT 允许）；白名单按原目录 models 校验。
+    updates 为 ProviderUpdateRequest.model_dump(exclude_unset=True)。
+    """
+    route = f"/api/v2/providers/{provider_id}"
+    async with runtime.app_factory() as db:
+        replay = await begin(
+            db, subject_hash=subject_user(user_id), route=route, key=idem_key, req_hash=idem_hash
+        )
+    if replay is not None:
+        return Replay(replay["status_code"], replay["response_json"])
+
+    async with owner_session(runtime, user_id) as db:
+        row = await get_provider_row(db, provider_id)  # 缺失/revoked → 404（跨用户同形）
+        if "api_key" in updates and updates["api_key"] is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "VALIDATION_ERROR", "message": _NULL_API_KEY_MESSAGE},
+            )
+        if "model_id" in updates and updates["model_id"] != row.model_id:
+            catalog = (
+                await db.execute(
+                    select(ProviderCatalog).where(ProviderCatalog.id == row.catalog_id)
+                )
+            ).scalar_one()
+            if updates["model_id"] not in list(catalog.models):
+                raise AgentCraftError(
+                    ErrorCode.MODEL_NOT_ALLOWED, "模型不在目录白名单", http_status=400
+                )
+            row.model_id = updates["model_id"]
+        if "api_key" in updates and isinstance(updates["api_key"], str):
+            key_ciphertext, dek_wrapped = key_sealer().seal(
+                updates["api_key"], provider_id=str(row.id)
+            )
+            row.key_ciphertext = key_ciphertext
+            row.dek_wrapped = dek_wrapped
+            row.key_last4 = updates["api_key"][-4:]
+            row.key_version += 1
+            await fail_unstarted_tasks(db, provider_id=str(row.id))  # D3 同事务
+        if updates.get("is_default") is True:
+            await db.execute(
+                text(
+                    "UPDATE user_providers SET is_default = false "
+                    "WHERE user_id = :u AND is_default = true AND id <> :e"
+                ),
+                {"u": user_id, "e": row.id},
+            )
+            row.is_default = True
+        elif updates.get("is_default") is False:
+            row.is_default = False
+        try:
+            await db.flush()
+        except IntegrityError as exc:
+            raise _map_integrity_conflict(exc) from exc
+        catalog_name = (
+            await db.execute(
+                select(ProviderCatalog.display_name).where(ProviderCatalog.id == row.catalog_id)
+            )
+        ).scalar_one()
+        detail = _out(row, catalog_name)
+        await store(
+            db,
+            subject_hash=subject_user(user_id),
+            route=route,
+            key=idem_key,
+            req_hash=idem_hash,
+            status_code=200,
+            response_json={"data": detail},
+        )
+    return detail
+
+
+async def revoke_provider(
+    runtime: V2Runtime,
+    *,
+    user_id: str,
+    provider_id: str,
+    idem_key: str,
+    idem_hash: str,
+) -> "dict | Replay":
+    """软撤（裁决 D3/D6）：status→revoked + 默认清除 + 联动，同事务；幂等。
+
+    DELETE 无请求体：request_hash(None)。幂等 begin 先于 404 门——同 key 的
+    DELETE 重放在行已 revoked 后仍原样重放 200（§7 重放优先）。
+    """
+    route = f"/api/v2/providers/{provider_id}"
+    async with runtime.app_factory() as db:
+        replay = await begin(
+            db, subject_hash=subject_user(user_id), route=route, key=idem_key, req_hash=idem_hash
+        )
+    if replay is not None:
+        return Replay(replay["status_code"], replay["response_json"])
+
+    async with owner_session(runtime, user_id) as db:
+        row = await get_provider_row(db, provider_id)  # 404 门（重放之后）
+        row.status = "revoked"
+        row.is_default = False  # D6：唯一索引不含 status 谓词，不清除会阻塞新默认
+        await fail_unstarted_tasks(db, provider_id=str(row.id))
+        await db.flush()
+        body = {"data": {"id": str(row.id), "status": "revoked"}}
+        await store(
+            db,
+            subject_hash=subject_user(user_id),
+            route=route,
+            key=idem_key,
+            req_hash=idem_hash,
+            status_code=200,
+            response_json=body,
+        )
+    return body["data"]
