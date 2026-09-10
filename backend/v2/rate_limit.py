@@ -35,7 +35,7 @@ from backend.config import get_settings
 from backend.v2.models import RateLimitEvent
 
 # scope 名 → (限值, 窗口秒)。Phase 2 全量注册；Phase 3+ 各域注册各自 scope
-# （占位：provider_test / task_create / upload / send_message / report / sse_connect，
+# （占位：task_create / upload / send_message / report / sse_connect，
 # 登记前 enforce 拒绝服务而非静默放行）。
 LIMITS: dict[str, tuple[int, int]] = {
     "login": (10, 900),
@@ -46,6 +46,7 @@ LIMITS: dict[str, tuple[int, int]] = {
     "deletion_cancel_attempt": (10, 3600),  # 合法路径尝试，主体 [user, ip]
     "mfa_failure": (10, 900),  # MFA 失败全局限流，主体 [user]
     "password_change_totp": (5, 900),  # TOTP 码失败，主体 [user]
+    "provider_test": (10, 3600),  # 连通性测试（Sup §7：10 次/小时/用户），主体 [user]
 }
 
 _HMAC_KINDS = frozenset({"email", "ip", "user"})

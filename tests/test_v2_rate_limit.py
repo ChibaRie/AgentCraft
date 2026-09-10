@@ -79,6 +79,7 @@ def test_limits_registry_pins_phase2_scopes():
         "deletion_cancel_attempt": (10, 3600),
         "mfa_failure": (10, 900),
         "password_change_totp": (5, 900),
+        "provider_test": (10, 3600),
     }
 
 
@@ -222,8 +223,8 @@ async def test_enforce_rejects_unregistered_scope(pg: PgDb, v2_runtime):
     """未注册 scope（含 Phase 3+ 占位名）拒绝服务而非静默放行。"""
     async with v2_runtime.app_factory() as db:
         with pytest.raises(ValueError):
-            await enforce(db, scope="provider_test", subjects=[_subject("ph")])
-    assert await _count(pg, "provider_test") == 0
+            await enforce(db, scope="task_create", subjects=[_subject("ph")])
+    assert await _count(pg, "task_create") == 0
 
 
 async def test_enforce_rejects_empty_subjects(pg: PgDb, v2_runtime):
