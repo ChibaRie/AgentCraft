@@ -60,3 +60,40 @@ class MfaActivateRequest(V2BaseModel):
     """POST /auth/mfa/activate 请求体（Task 11）：6-8 位 TOTP 码。"""
 
     totp_code: str = Field(min_length=6, max_length=8)
+
+
+class PasswordResetRequestRequest(V2BaseModel):
+    """POST /auth/password-reset/request 请求体（Task 12）。
+
+    email 经 pydantic EmailStr（email-validator 同源语法门）边界校验；小写规范化
+    在服务层收口（限流 HMAC 主体与账号查找共用同一形态）。
+    """
+
+    email: EmailStr
+
+
+class PasswordResetConfirmRequest(V2BaseModel):
+    """POST /auth/password-reset/confirm 请求体（Task 12）。
+
+    reset_token/new_password 预认证面资源卫生（同 T9 invitation_token 裁决）：
+    无长度边界会原样流入 SHA-256/Argon2id，必须在 schema 层截断——schema 校验
+    短路于幂等依赖与业务，违规请求零 DB 副作用。
+    """
+
+    # 合法 token = token_urlsafe(32) ≈ 43 字符，256 为宽裕上限
+    reset_token: str = Field(max_length=256)
+    # 资源卫生上限（Argon2id 输入）；密码最小长度策略待补遗裁决，本任务不设下限
+    new_password: str = Field(max_length=1024)
+
+
+class PasswordChangeRequest(V2BaseModel):
+    """POST /auth/password-change 请求体（Task 12，A7 契约缺口补端点）。
+
+    password 资源卫生上限同 PasswordResetConfirmRequest；totp_code 可选——
+    仅 TOTP 已启用用户必填（服务层按 mfa_secret_enc 裁决），6-8 位。
+    """
+
+    # 资源卫生上限（Argon2id 输入）；密码最小长度策略待补遗裁决，本任务不设下限
+    current_password: str = Field(max_length=1024)
+    new_password: str = Field(max_length=1024)
+    totp_code: str | None = Field(default=None, min_length=6, max_length=8)

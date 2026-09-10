@@ -7,7 +7,11 @@ Idempotency-Key 必带）；Task 10 增加 ``POST /auth/email-verification/confi
 ``POST /auth/email-verification/resend``（认证端点：get_v2_auth 门序 + 限流）；
 Task 11 增加 ``POST /auth/login`` 与 ``POST /auth/login/mfa``（公开端点：无会话
 无 CSRF，A5 未列入幂等键控）以及 ``POST /auth/mfa/setup`` /
-``POST /auth/mfa/activate`` / ``DELETE /auth/mfa``（认证端点：get_v2_auth 门序）。
+``POST /auth/mfa/activate`` / ``DELETE /auth/mfa``（认证端点：get_v2_auth 门序）；
+Task 12 增加 ``POST /auth/password-reset/request``（公开端点：无 CSRF，A5 未列入
+幂等键控，恒 202）与 ``POST /auth/password-reset/confirm``（公开端点：
+Idempotency-Key 必带）以及 ``POST /auth/password-change``（认证端点：A7 契约缺口
+补端点）。
 依赖统一定义于 backend.v2.runtime / idempotency / session_service，此处仅消费。
 """
 
@@ -20,8 +24,17 @@ from backend.api.v2.schemas import (
     LoginRequest,
     MfaActivateRequest,
     MfaChallengeRequest,
+    PasswordChangeRequest,
+    PasswordResetConfirmRequest,
+    PasswordResetRequestRequest,
 )
-from backend.v2 import idempotency, invitation_service, login_service, verification_service
+from backend.v2 import (
+    idempotency,
+    invitation_service,
+    login_service,
+    password_service,
+    verification_service,
+)
 from backend.v2.idempotency import require_key_header
 from backend.v2.runtime import V2Runtime, client_ip, get_v2_runtime
 from backend.v2.security import device_label_from_ua
@@ -31,6 +44,9 @@ from backend.v2.session_service import (
     set_csrf_cookie,
     set_session_cookie,
 )
+
+# 恒 202 防枚举载荷（request 端点固定出口；服务层不发信形态亦同形）
+_RESET_ACCEPTED_BODY = {"data": {"accepted": True}}
 
 router = APIRouter()
 
@@ -195,5 +211,70 @@ async def disable_mfa(
     """停用 TOTP（认证端点）：admin 不可停用（A9）；其他用户清 mfa_secret_enc。"""
     body = await login_service.disable_mfa(
         runtime, user_id=str(user_ctx.user.id), role=user_ctx.user.role
+    )
+    return JSONResponse(status_code=200, content=body)
+
+
+@router.post("/auth/password-reset/request")
+async def request_password_reset(
+    payload: PasswordResetRequestRequest,
+    request: Request,
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """密码重置请求（公开端点）：无会话无 CSRF，A5 未列入幂等键控。
+
+    恒 202 防枚举（服务层不发信形态对响应不可见）；限流在服务层收口（先于任何
+    用户查询）。令牌仅经邮件投递，不入响应体。
+    """
+    await password_service.request_password_reset(
+        runtime, email=payload.email, ip=client_ip(request)
+    )
+    return JSONResponse(status_code=202, content=_RESET_ACCEPTED_BODY)
+
+
+@router.post("/auth/password-reset/confirm")
+async def confirm_password_reset(
+    payload: PasswordResetConfirmRequest,
+    idem_key: str = Depends(require_key_header),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """密码重置确认（公开端点）：令牌单次消费 + 全部会话失效（重新登录强制）。
+
+    无会话无 CSRF；无限流（服务 docstring 注明滥用面由令牌单次消费约束，A10）。
+    Idempotency-Key 必带（A5）：命中 → 存量响应原样重放，无论令牌当前状态（§7）。
+    """
+    outcome = await password_service.confirm_password_reset(
+        runtime,
+        reset_token=payload.reset_token,
+        new_password=payload.new_password,
+        idem_key=idem_key,
+        idem_hash=idempotency.request_hash(payload.model_dump()),
+    )
+    if isinstance(outcome, password_service.Replay):
+        return JSONResponse(status_code=outcome.status_code, content=outcome.response_json)
+    return JSONResponse(status_code=200, content=outcome)
+
+
+@router.post("/auth/password-change")
+async def change_password(
+    payload: PasswordChangeRequest,
+    user_ctx: V2AuthContext = Depends(get_v2_auth),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """密码修改（认证端点，A7 契约缺口补端点）：TOTP 门（A15 先于 Argon2）→
+    当前密码验证 → 更新哈希 + 撤销其余会话（保留当前）。
+
+    认证走 get_v2_auth 门序（会话 cookie → CSRF → 状态门）；用户凭据列取自
+    认证上下文（同请求内 fresh 解析），业务在服务层收口。
+    """
+    body = await password_service.change_password(
+        runtime,
+        user_id=str(user_ctx.user.id),
+        session_id=str(user_ctx.session.id),
+        current_password_hash=user_ctx.user.password_hash,
+        mfa_secret_enc=user_ctx.user.mfa_secret_enc,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+        totp_code=payload.totp_code,
     )
     return JSONResponse(status_code=200, content=body)
