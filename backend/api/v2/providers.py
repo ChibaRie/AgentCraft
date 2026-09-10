@@ -10,7 +10,9 @@
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from backend.v2 import provider_service
+from backend.api.v2.schemas import ProviderCreateRequest
+from backend.v2 import idempotency, provider_service
+from backend.v2.idempotency import require_key_header
 from backend.v2.runtime import V2Runtime, get_v2_runtime, owner_session
 from backend.v2.session_service import V2AuthContext, get_v2_auth
 
@@ -37,3 +39,23 @@ async def list_providers(
     async with owner_session(runtime, str(user_ctx.user.id)) as db:
         items = await provider_service.list_user_providers(db)
     return JSONResponse(status_code=200, content={"data": items})
+
+
+@router.post("/providers")
+async def create_provider(
+    payload: ProviderCreateRequest,
+    user_ctx: V2AuthContext = Depends(get_v2_auth),
+    idem_key: str = Depends(require_key_header),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """创建 BYOK Provider（写端点：Idempotency-Key 必带，A5；命中重放不携带 Set-Cookie）。"""
+    outcome = await provider_service.create_provider(
+        runtime,
+        user_id=str(user_ctx.user.id),
+        updates=payload.model_dump(exclude_unset=True),
+        idem_key=idem_key,
+        idem_hash=idempotency.request_hash(payload.model_dump(exclude_unset=True)),
+    )
+    if isinstance(outcome, provider_service.Replay):
+        return JSONResponse(status_code=outcome.status_code, content=outcome.response_json)
+    return JSONResponse(status_code=200, content={"data": outcome})

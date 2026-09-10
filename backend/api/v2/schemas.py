@@ -1,6 +1,6 @@
 """V2 API schema。Task 4 先放空基类；各端点模型由后续任务在此补充。"""
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class V2BaseModel(BaseModel):
@@ -145,3 +145,16 @@ class ProviderOut(V2BaseModel):
     status: str
     is_default: bool
     created_at: str  # ISO8601
+
+
+class ProviderCreateRequest(V2BaseModel):
+    """POST /providers 请求体（Sup §3）。裁决 D14：extra=forbid——base_url/endpoint
+    出现即 400（目录化安全边界：用户不可注入端点）。裁决 D7：api_key 8..4096
+    （末 4 位入 key_last4，CHECK length=4 的下限保护）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    catalog_id: str = Field(min_length=32, max_length=64)
+    model_id: str = Field(min_length=1, max_length=200)
+    api_key: str = Field(min_length=8, max_length=4096)
+    is_default: bool = False

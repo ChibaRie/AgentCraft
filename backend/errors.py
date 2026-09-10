@@ -34,6 +34,9 @@ class ErrorCode(str, Enum):
     CATALOG_ITEM_DISABLED = "CATALOG_ITEM_DISABLED"
     MODEL_NOT_ALLOWED = "MODEL_NOT_ALLOWED"
     KEY_VERSION_REVOKED = "KEY_VERSION_REVOKED"
+    # 409；同 (user, catalog, model) active 行已存在（D4）；亦用于并发默认互斥冲突
+    # （uq_user_providers_one_default，D5，文案区分）
+    PROVIDER_DUPLICATE = "PROVIDER_DUPLICATE"
     # —— 治理 ——
     REVISION_NOT_PUBLISHED = "REVISION_NOT_PUBLISHED"
     REVIEW_PENDING = "REVIEW_PENDING"

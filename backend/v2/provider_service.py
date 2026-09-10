@@ -10,12 +10,19 @@
 
 import logging
 import uuid as _uuid
+from dataclasses import dataclass
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.errors import AgentCraftError, ErrorCode
+from backend.v2.idempotency import begin, store, subject_user
+from backend.v2.ids import uuid7
 from backend.v2.models import ProviderCatalog, UserProvider
+from backend.v2.provider_crypto import key_sealer
+from backend.v2.runtime import V2Runtime, owner_session
 
 logger = logging.getLogger("agentcraft.provider")
 
@@ -108,3 +115,134 @@ async def get_provider_detail(db: AsyncSession, provider_id: str) -> dict:
         await db.execute(select(ProviderCatalog).where(ProviderCatalog.id == row.catalog_id))
     ).scalar_one()
     return _out(row, catalog.display_name)
+
+
+ROUTE_CREATE = "/api/v2/providers"
+
+_ACTIVE_ENTRY_UQ = "uq_user_providers_active_entry"
+_ONE_DEFAULT_UQ = "uq_user_providers_one_default"
+
+_DUPLICATE_MESSAGE = "已存在相同目录与模型的 Provider"
+_DEFAULT_CONFLICT_MESSAGE = "默认 Provider 设置冲突，请重试"
+
+
+@dataclass(frozen=True)
+class Replay:
+    """幂等重放载荷（§7 重放优先；端点原样返回，不携带 Set-Cookie）。"""
+
+    status_code: int
+    response_json: dict
+
+
+def _duplicate(message: str) -> AgentCraftError:
+    return AgentCraftError(ErrorCode.PROVIDER_DUPLICATE, message, http_status=409)
+
+
+def _map_integrity_conflict(exc: IntegrityError) -> AgentCraftError:
+    """唯一冲突按约束名分流（D4/D5）：默认互斥 vs 活跃条目重复。"""
+    if _ONE_DEFAULT_UQ in str(exc):
+        return _duplicate(_DEFAULT_CONFLICT_MESSAGE)
+    return _duplicate(_DUPLICATE_MESSAGE)
+
+
+async def create_provider(
+    runtime: V2Runtime,
+    *,
+    user_id: str,
+    updates: dict,
+    idem_key: str,
+    idem_hash: str,
+) -> "dict | Replay":
+    """创建 BYOK Provider（裁决 D4/D5/D7/D11）。
+
+    门序：幂等 begin（app 裸会话，route=ROUTE_CREATE）→ owner_session 单事务
+    （UUID/目录边界 → enabled 门 → 白名单门 → 重复检查 → 默认互斥 → seal 落库
+    → store）。updates 为 ProviderCreateRequest.model_dump(exclude_unset=True)。
+    """
+    async with runtime.app_factory() as db:
+        replay = await begin(
+            db,
+            subject_hash=subject_user(user_id),
+            route=ROUTE_CREATE,
+            key=idem_key,
+            req_hash=idem_hash,
+        )
+    if replay is not None:
+        return Replay(replay["status_code"], replay["response_json"])
+
+    try:
+        cid = _uuid.UUID(updates["catalog_id"])
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "VALIDATION_ERROR", "message": "catalog_id 不是合法 UUID"},
+        ) from exc
+
+    async with owner_session(runtime, user_id) as db:
+        catalog = (
+            await db.execute(select(ProviderCatalog).where(ProviderCatalog.id == cid))
+        ).scalar_one_or_none()
+        if catalog is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "VALIDATION_ERROR", "message": "目录条目不存在"},
+            )
+        if not catalog.enabled:
+            raise AgentCraftError(
+                ErrorCode.CATALOG_ITEM_DISABLED, "目录条目已停用", http_status=400
+            )
+        if updates["model_id"] not in list(catalog.models):
+            raise AgentCraftError(
+                ErrorCode.MODEL_NOT_ALLOWED, "模型不在目录白名单", http_status=400
+            )
+        dup = (
+            await db.execute(
+                select(UserProvider.id).where(
+                    UserProvider.user_id == _uuid.UUID(user_id),
+                    UserProvider.catalog_id == cid,
+                    UserProvider.model_id == updates["model_id"],
+                    UserProvider.status == "active",
+                )
+            )
+        ).scalar_one_or_none()
+        if dup is not None:
+            raise _duplicate(_DUPLICATE_MESSAGE)
+        if updates.get("is_default") is True:
+            await db.execute(
+                text(
+                    "UPDATE user_providers SET is_default = false "
+                    "WHERE user_id = :u AND is_default = true"
+                ),
+                {"u": user_id},
+            )
+        new_id = uuid7()
+        key_ciphertext, dek_wrapped = key_sealer().seal(updates["api_key"], provider_id=str(new_id))
+        db.add(
+            UserProvider(
+                id=new_id,
+                user_id=_uuid.UUID(user_id),
+                catalog_id=cid,
+                model_id=updates["model_id"],
+                key_ciphertext=key_ciphertext,
+                dek_wrapped=dek_wrapped,
+                key_last4=updates["api_key"][-4:],  # D7：末 4 位原样
+                key_version=1,
+                status="active",
+                is_default=bool(updates.get("is_default")),
+            )
+        )
+        try:
+            await db.flush()
+        except IntegrityError as exc:
+            raise _map_integrity_conflict(exc) from exc
+        detail = await get_provider_detail(db, str(new_id))
+        await store(
+            db,
+            subject_hash=subject_user(user_id),
+            route=ROUTE_CREATE,
+            key=idem_key,
+            req_hash=idem_hash,
+            status_code=200,
+            response_json={"data": detail},
+        )
+    return detail

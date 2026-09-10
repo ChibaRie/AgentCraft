@@ -61,12 +61,14 @@ async def seed_active_user(pg, email: str, password: str = "User-Passw0rd!") -> 
 async def catalog_id_by_host(pg, allowed_host: str) -> str:
     """取 0002 种子目录行 id（种子 id 是 gen_random_uuid，不可硬编码）。"""
     async with pg.engine.connect() as conn:
-        return (
-            await conn.execute(
-                text("SELECT id FROM provider_catalog WHERE allowed_host = :h"),
-                {"h": allowed_host},
-            )
-        ).scalar_one()
+        return str(
+            (
+                await conn.execute(
+                    text("SELECT id FROM provider_catalog WHERE allowed_host = :h"),
+                    {"h": allowed_host},
+                )
+            ).scalar_one()
+        )
 
 
 async def seed_provider(
