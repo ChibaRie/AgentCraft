@@ -129,7 +129,12 @@ async def test_replay_regardless_of_state(pg: PgDb, v2_runtime):
     async with v2_runtime.app_factory() as db:
         async with db.begin():
             first = await idempotency.begin(
-                db, subject_hash=subject, route=ROUTE, key="k-replay", req_hash=req
+                db,
+                subject_hash=subject,
+                route=ROUTE,
+                key="k-replay",
+                req_hash=req,
+                own_transaction=False,  # 调用方事务内使用（旧嵌入形态）
             )
             assert first is None
             await idempotency.store(
@@ -145,7 +150,12 @@ async def test_replay_regardless_of_state(pg: PgDb, v2_runtime):
     async with v2_runtime.app_factory() as db:
         async with db.begin():
             replay = await idempotency.begin(
-                db, subject_hash=subject, route=ROUTE, key="k-replay", req_hash=req
+                db,
+                subject_hash=subject,
+                route=ROUTE,
+                key="k-replay",
+                req_hash=req,
+                own_transaction=False,
             )
             assert replay == {"status_code": 201, "response_json": response}
 
@@ -170,6 +180,7 @@ async def test_credential_only_difference_replays(pg: PgDb, v2_runtime):
                 route=ROUTE,
                 key="k-cred",
                 req_hash=request_hash({"email": "x@y.z", "password": "changed"}),
+                own_transaction=False,
             )
             assert replay is not None
             assert replay["response_json"] == {"ok": True}
@@ -196,13 +207,20 @@ async def test_conflict_on_different_body(pg: PgDb, v2_runtime):
                     route=ROUTE,
                     key="k-conflict",
                     req_hash=request_hash({"email": "other@y.z"}),
+                    own_transaction=False,
                 )
     assert exc_info.value.code is ErrorCode.IDEMPOTENCY_CONFLICT
     assert exc_info.value.http_status == 409
 
 
 async def test_expired_row_not_replayed_and_cleaned(pg: PgDb, v2_runtime):
-    """过期行不复用（即使 request_hash 一致）：begin 未命中且同事务清理过期行。"""
+    """过期行不复用（即使 request_hash 一致）：begin 未命中且同事务清理过期行。
+
+    final review 起生产形态的 begin 自持提交式事务（own_transaction=True 默认）；
+    本测试保留显式 ``db.begin()`` 嵌入形态，故传 ``own_transaction=False``——
+    清理 DELETE 留在调用方事务，随该块 commit 收口（清理持久性由
+    test_begin_own_transaction_persists_expired_cleanup 单独钉死）。
+    """
     subject = _subject()
     req = request_hash({"email": "x@y.z"})
     async with v2_runtime.app_factory() as db:
@@ -230,7 +248,12 @@ async def test_expired_row_not_replayed_and_cleaned(pg: PgDb, v2_runtime):
     async with v2_runtime.app_factory() as db:
         async with db.begin():
             replay = await idempotency.begin(
-                db, subject_hash=subject, route=ROUTE, key="k-expired", req_hash=req
+                db,
+                subject_hash=subject,
+                route=ROUTE,
+                key="k-expired",
+                req_hash=req,
+                own_transaction=False,
             )
             assert replay is None  # 未命中 → 重新执行（本测试即断言不重放）
 
@@ -308,6 +331,124 @@ async def test_store_does_not_commit_and_unique_violation_conflicts(pg: PgDb, v2
     async with v2_runtime.app_factory() as db:
         async with db.begin():
             replay = await idempotency.begin(
-                db, subject_hash=subject, route=ROUTE, key="k-tx", req_hash=req
+                db,
+                subject_hash=subject,
+                route=ROUTE,
+                key="k-tx",
+                req_hash=req,
+                own_transaction=False,
             )
             assert replay == {"status_code": 200, "response_json": {"n": 1}}
+
+
+# ---------- final review 修复：清理持久化 + store 过期冲突自愈 ----------
+
+
+async def test_begin_own_transaction_persists_expired_cleanup(pg: PgDb, v2_runtime):
+    """生产形态（专用会话、无显式 begin 块）调用 begin：未命中路径的机会主义清理
+    随 begin 自持的提交式事务落库。
+
+    修复前 begin 的 DELETE 依赖会话关闭时的隐式收口，而专用会话 autobegin 的
+    事务在 ``app_factory`` 上下文退出时被 ROLLBACK——清理从不持久，过期行永久
+    残留。本测试在生产调用形态下断言过期行真的从 DB 消失（修复前此处 n == 1）。
+    """
+    subject = _subject()
+    req = request_hash({"email": "x@y.z"})
+    async with v2_runtime.app_factory() as db:
+        async with db.begin():
+            await idempotency.store(
+                db,
+                subject_hash=subject,
+                route=ROUTE,
+                key="k-prod-cleanup",
+                req_hash=req,
+                status_code=200,
+                response_json={"ok": True},
+            )
+
+    # 人为把 expires_at 拨到过去（独立已提交事务）
+    async with v2_runtime.app_factory() as db:
+        async with db.begin():
+            result = await db.execute(
+                update(IdempotencyRecord)
+                .where(IdempotencyRecord.key == "k-prod-cleanup")
+                .values(expires_at=datetime.now(timezone.utc) - timedelta(seconds=1))
+            )
+            assert result.rowcount == 1
+
+    # 生产形态：专用会话、无显式 begin() 块——begin 自持提交式事务
+    async with v2_runtime.app_factory() as db:
+        replay = await idempotency.begin(
+            db, subject_hash=subject, route=ROUTE, key="k-prod-cleanup", req_hash=req
+        )
+        assert replay is None  # 已过期 → 未命中（不重放）
+
+    # 清理已持久：过期行真的从 DB 消失
+    async with v2_runtime.app_factory() as db:
+        n = (
+            await db.execute(
+                select(func.count())
+                .select_from(IdempotencyRecord)
+                .where(IdempotencyRecord.key == "k-prod-cleanup")
+            )
+        ).scalar_one()
+    assert n == 0
+
+
+async def test_store_self_heals_expired_conflict(pg: PgDb, v2_runtime):
+    """store 的同事务 belt-and-braces：INSERT 前清扫本 (subject, route, key) 的
+    过期残留行——INSERT 成功替换，绝不 409。
+
+    修复前：过期行残留时 store 的 flush 命中唯一索引 ``idempotency_route_key``
+    → 409 IDEMPOTENCY_CONFLICT 永久化（重放窗口过期后同 key 永不可再用）。本
+    流程刻意不先调 begin（覆盖 begin 纪律失效的场景），清扫只能由 store 自己完成。
+    """
+    subject = _subject()
+    req = request_hash({"email": "x@y.z"})
+    async with v2_runtime.app_factory() as db:
+        async with db.begin():
+            await idempotency.store(
+                db,
+                subject_hash=subject,
+                route=ROUTE,
+                key="k-selfheal",
+                req_hash=req,
+                status_code=200,
+                response_json={"old": True},
+            )
+
+    # 人为把 expires_at 拨到过去（独立已提交事务）
+    async with v2_runtime.app_factory() as db:
+        async with db.begin():
+            result = await db.execute(
+                update(IdempotencyRecord)
+                .where(IdempotencyRecord.key == "k-selfheal")
+                .values(expires_at=datetime.now(timezone.utc) - timedelta(seconds=1))
+            )
+            assert result.rowcount == 1
+
+    # 业务形态：全新事务内直接 store 同 (subject, route, key) → 成功（不 409）
+    async with v2_runtime.app_factory() as db:
+        async with db.begin():
+            await idempotency.store(
+                db,
+                subject_hash=subject,
+                route=ROUTE,
+                key="k-selfheal",
+                req_hash=req,
+                status_code=201,
+                response_json={"new": True},
+            )
+
+    # 过期行被替换：仅剩新记录，载荷为新值
+    async with v2_runtime.app_factory() as db:
+        rows = (
+            await db.execute(
+                select(IdempotencyRecord.status_code, IdempotencyRecord.response_json).where(
+                    IdempotencyRecord.key == "k-selfheal"
+                )
+            )
+        ).all()
+    assert len(rows) == 1
+    assert rows[0].status_code == 201
+    assert rows[0].response_json == {"new": True}

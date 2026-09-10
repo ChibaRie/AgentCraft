@@ -41,7 +41,6 @@ from backend.v2.runtime import V2Runtime, owner_session
 from backend.v2.security import generate_token, hash_token
 
 ROUTE_CONFIRM = "/api/v2/auth/email-verification/confirm"
-ROUTE_RESEND = "/api/v2/auth/email-verification/resend"
 _INVALID_MESSAGE = "验证链接无效或已过期"
 # V1 约定形状（VALIDATION_ERROR 不在 ErrorCode 注册表；契约钉死）
 _RESEND_WRONG_STATUS_DETAIL = {

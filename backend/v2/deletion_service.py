@@ -10,7 +10,9 @@
   密码必验，失败 401 INVALID_CREDENTIALS「当前密码不正确」；TOTP 已启用叠加验码，
   A15 排序先于 Argon2，失败计入 ``password_change_totp``——与改密端点同威胁同
   scope，直接复用其校验面避免第三份解密副本）→ 幂等 begin（app 会话，先于 owner
-  事务；重放优先于一切状态检查，§7）→ owner 单事务（GUC=user）：active→deleting
+  事务；**状态门/再认证先于 begin**——§7「重放优先」的偏离不可观测：成功请求
+  revoke_all 后全会话失效，携带同 key 的重放请求无法再通过认证达及本服务，失败
+  请求不写幂等记录亦无可重放）→ owner 单事务（GUC=user）：active→deleting
   跃迁（deletion_deadline_at = now()+14d，rowcount=1 复核，RETURNING 以 DB 时钟
   求剩余天数）→ ``revoke_all``（A10：含当前会话，全会话失效）→
   ``TERMINATE_TASKS_HOOK``（模块级钩子：Phase 2 默认 no-op，任务域 Phase 6 注入
@@ -202,6 +204,11 @@ async def request_deletion(
     返回新成功响应体或 ``Replay``（幂等命中：原样重放）；状态门 409/403、再认证
     失败 401/400。凭据列（password_hash/mfa_secret_enc/email）取自认证上下文
     （get_v2_auth 同请求内 fresh 解析）。
+
+    实际顺序为状态门 → TOTP → 验密 → begin（§7「重放优先于一切状态检查」在此
+    刻意偏离）——偏离不可观测：成功请求 revoke_all 后全会话失效，携带同 key 的
+    重放请求无法再通过认证达及本函数（get_v2_auth 先 401）；失败请求不写幂等
+    记录，无可重放。
     """
     # 1. 状态门：仅 active 可发起注销
     _gate_active(status)
@@ -216,7 +223,8 @@ async def request_deletion(
     if not verify_password(password, password_hash):
         raise _invalid_current()
 
-    # 4. 幂等 begin（app 会话，先于 owner 事务）：命中 → 原样重放，无论当前状态
+    # 4. 幂等 begin（app 会话，先于 owner 事务）：命中 → 原样重放（状态门/再认证
+    #    已先行——偏离不可观测，见 docstring）
     subject = subject_user(user_id)
     async with runtime.app_factory() as db:
         replay = await begin(

@@ -4,10 +4,19 @@
 - ``begin`` 命中且 request_hash 一致 → 返回 ``{"status_code", "response_json"}``，
   调用方**原样重放，无论当前业务状态**（幂等命中优先于一切状态检查）；
 - ``begin`` 命中但 request_hash 不一致 → ``AgentCraftError(IDEMPOTENCY_CONFLICT,
-  409)``；未命中或已过期 → None（并在同事务机会主义 DELETE 全部过期行）；
-- ``store`` 必须在调用方业务事务内调用，本函数**不 commit**；并发同
-  (subject_hash, route, key) 的失败方在 flush 时命中唯一索引
-  ``idempotency_route_key``，此处将 IntegrityError 转为
+  409)``；未命中或已过期 → None；
+- ``begin`` 事务纪律（``own_transaction``，默认 True）：生产调用形态一律用**专用
+  会话**（``async with runtime.app_factory() as db:`` 无显式 begin）调用——此时
+  ``begin`` 内部自持一个**提交式**事务跑 SELECT 与未命中路径的机会主义 DELETE
+  （全部过期行），清理随该事务 COMMIT 落库；若依赖会话关闭时的隐式收口，autobegin
+  事务将被 ROLLBACK，过期行永久残留（无其他删除面）并使 store 的唯一索引在重放
+  窗口过期后仍 409。``own_transaction=False`` 供调用方既有事务内使用（单测/嵌入
+  形态）：行为与旧版一致，DELETE 留在调用方事务随其 commit 收口（调用方须提交）；
+- ``store`` 必须在调用方业务事务内调用，本函数**不 commit**；INSERT 前先在**同一
+  事务**内机会主义 DELETE 本 (subject_hash, route, key) 的过期行（belt-and-braces：
+  无论 begin 的清理纪律如何，过期残留行绝不阻塞本次写入——不回滚、不影响调用方
+  任何业务写入）；并发同 (subject_hash, route, key) 且**未过期**的失败方在 flush
+  时命中唯一索引 ``idempotency_route_key``，此处将 IntegrityError 转为
   ``AgentCraftError(IDEMPOTENCY_CONFLICT, 409)`` 抛出——**回滚是调用方的职责**
   （典型形态：owner_session 的 begin() 块随异常自动回滚；调用方捕获后重查重放）；
 - ``expires_at`` 以应用时钟（UTC）+24h 写入，过期判定与数据库 ``now()`` 比较
@@ -73,9 +82,33 @@ def subject_token(token: str) -> str:
 
 
 async def begin(
+    db: AsyncSession,
+    *,
+    subject_hash: str,
+    route: str,
+    key: str,
+    req_hash: str,
+    own_transaction: bool = True,
+) -> dict | None:
+    """查询幂等记录：命中一致 → 重放载荷；命中冲突 → 409；未命中/过期 → None。
+
+    ``own_transaction=True``（默认；全部生产调用形态）：会话须无活动事务（专用
+    会话即满足），本函数自持**提交式**事务——未命中路径的机会主义过期行清理在
+    此 COMMIT 落库。``own_transaction=False``：在调用方既有事务内执行（单测/
+    嵌入形态），清理随调用方事务收口。
+    """
+    if own_transaction:
+        async with db.begin():
+            return await _lookup(
+                db, subject_hash=subject_hash, route=route, key=key, req_hash=req_hash
+            )
+    return await _lookup(db, subject_hash=subject_hash, route=route, key=key, req_hash=req_hash)
+
+
+async def _lookup(
     db: AsyncSession, *, subject_hash: str, route: str, key: str, req_hash: str
 ) -> dict | None:
-    """查询幂等记录：命中一致 → 重放载荷；命中冲突 → 409；未命中/过期 → None。"""
+    """begin 的查体：在当前（自持或调用方的）事务内 SELECT + 机会主义清理。"""
     row = (
         await db.execute(
             select(
@@ -91,8 +124,10 @@ async def begin(
         )
     ).first()
     if row is None:
-        # 机会主义清理：同事务删除全部过期行（含本次未命中的那条，若有），
-        # 使调用方随后的 store 不会撞上残留过期行的唯一索引
+        # 机会主义清理：DELETE 全部过期行（含本次未命中的那条，若有）。
+        # own_transaction=True 时随 begin 自持事务 COMMIT 落库（持久）；False 时
+        # 随调用方事务收口。过期行是本表唯一删除面，不落库则永久残留并令 store
+        # 的唯一索引在重放窗口过期后仍 409——store 的 INSERT 前同事务清扫为第二道保险
         await db.execute(
             delete(IdempotencyRecord).where(IdempotencyRecord.expires_at <= func.now())
         )
@@ -117,6 +152,17 @@ async def store(
     response_json: dict,
 ) -> None:
     """在调用方业务事务内写入幂等记录（expires_at = now() + 24h；不 commit）。"""
+    # belt-and-braces：同事务清扫本 (subject, route, key) 的过期残留行——即使
+    # begin 的清理未持久/未执行，过期行也绝不阻塞本次写入（不回滚调用方事务、
+    # 不触碰业务写入）；未过期的并发同 key 行不受影响，照旧走 flush → 409
+    await db.execute(
+        delete(IdempotencyRecord).where(
+            IdempotencyRecord.subject_hash == subject_hash,
+            IdempotencyRecord.route == route,
+            IdempotencyRecord.key == key,
+            IdempotencyRecord.expires_at <= func.now(),
+        )
+    )
     record = IdempotencyRecord(
         subject_hash=subject_hash,
         route=route,
