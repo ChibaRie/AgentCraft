@@ -407,6 +407,65 @@ async def test_mfa_five_wrong_codes_destroy_challenge_and_write_events(pg, flow_
     assert n == 5
 
 
+# ---------- login/mfa：mfa_failure 第 11 次失败 → 429 替换 401 ----------
+
+
+async def test_mfa_failure_11th_returns_429_replacing_401(pg, flow_env):
+    """mfa_failure 上限（10/900s）三项契约（brief Step 1 点名）：
+
+    (a) 同用户第 11 次失败 → 429 TOO_MANY_REQUESTS（**替换**统一 401——429 wins）；
+    (b) 429 带 Retry-After；
+    (c) enforce 先于 attempts 递增——429 那次的挑战 attempts 不含该次（未推进），
+        且拒绝路径不写限流事件（mfa_failure 恰 10 行）。
+
+    构造（无睡眠）：3 次登录各取挑战（每挑战至多 4 次错码防 5 次销毁；login 主体
+    3 事件低于 10 上限）→ 4+4+2 次错码均 401（事件 1-10）→ 第 11 次错码 429。
+    """
+    secret = pyotp.random_base32()
+    uid = await _seed_user(pg, "mfa-rl@example.com", password="pw-rl", totp_secret=secret)
+    wrong = _wrong_code(secret)
+    cid1 = await _login_challenge("mfa-rl@example.com", "pw-rl")
+    cid2 = await _login_challenge("mfa-rl@example.com", "pw-rl")
+    cid3 = await _login_challenge("mfa-rl@example.com", "pw-rl")
+
+    async with http_client("10.0.31.12") as client:
+
+        async def _fail(challenge_id: str) -> httpx.Response:
+            return await client.post(
+                _ROUTE_LOGIN_MFA, json={"mfa_challenge_id": challenge_id, "totp_code": wrong}
+            )
+
+        first = [await _fail(cid1) for _ in range(4)]  # 事件 1-4
+        second = [await _fail(cid2) for _ in range(4)]  # 事件 5-8
+        third = [await _fail(cid3) for _ in range(3)]  # 事件 9-10 + 第 11 次 429
+
+    for resp in (*first, *second, *third[:2]):
+        assert resp.status_code == 401
+        assert resp.json() == _MFA_INVALID_401
+
+    eleventh = third[2]
+    assert eleventh.status_code == 429  # (a) 429 替换 401
+    assert eleventh.json()["error"]["code"] == "TOO_MANY_REQUESTS"
+    assert 1 <= int(eleventh.headers["Retry-After"]) <= 900  # (b)
+
+    assert login_service.challenge_store._entries[cid3].attempts == 2  # (c) 429 未推进
+    n = await _count(
+        pg,
+        "rate_limit_events",
+        "scope = 'mfa_failure' AND subject_hash = :h",
+        {"h": hmac_subject("user", uid)},
+    )
+    assert n == 10  # 拒绝路径不写事件
+    # 3 次登录各写一行（email 主体），低于 login 10/900 上限未触发
+    n_login = await _count(
+        pg,
+        "rate_limit_events",
+        "scope = 'login' AND subject_hash = :h",
+        {"h": hmac_subject("email", "mfa-rl@example.com")},
+    )
+    assert n_login == 3
+
+
 # ---------- login/mfa：正确码 → 会话（mfa_verified_at 非空）----------
 
 
