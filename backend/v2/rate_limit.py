@@ -11,6 +11,11 @@ owner/业务事务——限流提交独立于业务事务，业务回滚不回�
 组合维度（如 login = [HMAC(email), HMAC(ip)]）一次调用逐 subject 各写一行；
 窗口内任一 subject 达限即整组 429（``= ANY`` 语义），拒绝路径不写事件行。
 
+并发串行化（Eng §1.4）：count-then-insert 不得作为限额机制——enforce 在计数前
+对同一事务取**单把**事务级咨询锁 ``pg_advisory_xact_lock``（锁键 = scope + 排序后
+主体集），同主体并发请求串行进出「计数 → 写入」临界区，消除并发首请求双计突刺；
+锁随事务提交/回滚自动释放，不同 scope/主体集互不阻塞，单事务单锁无死锁面。
+
 密钥说明：HMAC 密钥每次调用现读 ``Settings.RATE_LIMIT_HMAC_KEY``（不缓存）——
 轮换即时生效、测试可经环境变量注入；未配置/非法材料抛干净 ValueError。
 """
@@ -92,15 +97,28 @@ def hmac_subject(kind: str, value: str) -> str:
 async def enforce(db: AsyncSession, *, scope: str, subjects: list[str]) -> None:
     """滑动窗口限流裁决：窗口内计数 ≥ 限值 → 429；否则逐 subject 记事件并提交。
 
-    单事务流：SELECT count（任一 subject 达限即拒）→ INSERT 每 subject 一行 →
-    机会主义 DELETE 本 scope 窗口外旧行 → commit。剩余秒数
-    = max(1, ceil(window - (now - 最老相关事件)))，经 ``Retry-After`` 头下发。
+    单事务流：咨询锁串行化（见下）→ SELECT count（任一 subject 达限即拒）→
+    INSERT 每 subject 一行 → 机会主义 DELETE 本 scope 窗口外旧行 → commit。
+    剩余秒数 = max(1, ceil(window - (now - 最老相关事件)))，经 ``Retry-After``
+    头下发。
+
+    串行化（Eng §1.4）：计数前先取事务级咨询锁 ``pg_advisory_xact_lock``，锁键
+    = scope + 排序后主体集——同主体并发在锁上排队，后进者在先进者提交后计数
+    （READ COMMITTED 每语句新快照），必然看见其事件行；锁随本事务自动释放。
     """
     if scope not in LIMITS:
         raise ValueError(f"未注册的限流 scope: {scope}（须先在 LIMITS 登记）")
     if not subjects:
         raise ValueError("subjects 不能为空（至少一个限流主体）")
     limit, window = LIMITS[scope]
+
+    # Eng §1.4：先检查后写不得作为限额机制——同主体并发经咨询锁串行化，
+    # 锁键 = scope + 排序后主体集（单事务单锁，无死锁面；不同 scope/主体集互不阻塞）
+    lock_key = f"{scope}:{':'.join(sorted(subjects))}"
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+        {"lock_key": lock_key},
+    )
 
     row = (
         await db.execute(_EVENT_COUNT_SQL, {"scope": scope, "subjects": subjects, "window": window})

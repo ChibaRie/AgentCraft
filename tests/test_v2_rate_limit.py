@@ -13,6 +13,7 @@
   （pydantic-settings 语义），Settings() 每次现读，注入即时生效且用例间互不污染。
 """
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -22,10 +23,12 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import func, select, text
 
+from backend.v2 import rate_limit
+from backend.v2.db import build_engine, session_factory
 from backend.v2.models import RateLimitEvent
 from backend.v2.rate_limit import LIMITS, enforce, hmac_subject
 from backend.v2.security import hash_token
-from tests.conftest import PgDb
+from tests.conftest import APP_ROLE, PgDb
 from tests.test_v2_runtime import make_v2_runtime
 
 # 32 字节确定性密钥材料（b64url 43 字符）；仅测试注入，非任何真实密钥
@@ -229,3 +232,38 @@ async def test_enforce_rejects_empty_subjects(pg: PgDb, v2_runtime):
         with pytest.raises(ValueError):
             await enforce(db, scope="login", subjects=[])
     assert await _count(pg, "login") == 0
+
+
+# ---------- 并发串行化（review round 1 回归点）----------
+
+
+async def test_concurrent_same_subject_exactly_one_pass(pg: PgDb, monkeypatch):
+    """同主体并发 enforce 恰好一胜一 429，且该主体只落 1 行。
+
+    修复前 count-then-insert 竞态可令并发首请求双胜（两连接共享 0 行计数，
+    Eng §1.4 违例）；修复后咨询锁串行化使后进者必然看见先进者已提交的事件行。
+    两会话各自建引擎/建连（独立 TCP 连接，无池内复用干扰）。
+    """
+    monkeypatch.setitem(rate_limit.LIMITS, "login", (1, 900))
+    subject = _subject("concurrent")
+
+    engines = [build_engine(pg.role_url(*APP_ROLE)) for _ in range(2)]
+    factories = [session_factory(eng) for eng in engines]
+
+    async def _attempt(factory) -> str:
+        async with factory() as db:
+            try:
+                await enforce(db, scope="login", subjects=[subject])
+            except HTTPException as exc:
+                return "rejected" if exc.status_code == 429 else f"unexpected-{exc.status_code}"
+            else:
+                return "ok"
+
+    try:
+        outcomes = list(await asyncio.gather(_attempt(factories[0]), _attempt(factories[1])))
+    finally:
+        for eng in engines:
+            await eng.dispose()
+
+    assert sorted(outcomes) == ["ok", "rejected"]
+    assert await _count(pg, "login", subject) == 1
