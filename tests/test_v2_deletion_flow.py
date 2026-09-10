@@ -18,7 +18,8 @@
   用户因全会话失效 401（A10 语义）；视图函数 deleting 形状直接钉死。
 - sweep：到期 deleting → deleted + 匿名化（email 换 deleted+<id>@users.invalid、
   mfa 清空、密码不可验）+ deadline/deleted_at 收口 + 全会话失效 + 审计引用保留
-  （users 行不删除）；未到期 deleting 不处理。
+  （users 行不删除）+ user_providers 密文行显式删除（D15，CASCADE 永不触发）；
+  未到期 deleting 不处理。
 
 HTTP 层沿用 T10-T12 house pattern（ASGITransport 于测试自身循环驱动真实 app）。
 种子/复核助手复用 T12（真实 Argon2 哈希 + TOTP 信封种子——T10 authenticated_client
@@ -63,6 +64,7 @@ from tests.test_v2_password_flows import (
     http_client,
 )
 from tests.test_v2_runtime import make_v2_runtime
+from tests.v2_provider_helpers import seed_active_user, seed_provider
 
 _ROUTE_REQUEST = "/api/v2/account/deletion/request"
 _ROUTE_CANCEL = "/api/v2/account/deletion/cancel"
@@ -711,6 +713,34 @@ async def test_sweep_expired_anonymizes_and_preserves_audit(pg, flow_env):
 
     audit = await _one(pg, "SELECT actor_id FROM audit_logs WHERE id = :i", {"i": audit_id})
     assert str(audit["actor_id"]) == expired_uid  # 审计引用保留
+
+
+async def test_sweep_deletes_user_provider_rows(pg, flow_env):
+    """D15：sweep 显式删 user_providers 行（users 行不删 → CASCADE 永不触发，
+    DB Design §157「删除 user_providers 密文」）。"""
+    uid = await seed_active_user(pg, "sweep-uprov@example.com")
+    await seed_provider(pg, uid)
+    await seed_provider(pg, uid, model_id="gpt-4o")
+    async with pg.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE users SET status='deleting', "
+                "deletion_deadline_at = now() - interval '1 hour' WHERE id = :u"
+            ),
+            {"u": uid},
+        )
+    swept = await deletion_service.sweep_expired(flow_env)
+    assert swept == 1
+    async with pg.engine.connect() as conn:
+        n = (
+            await conn.execute(
+                text("SELECT count(*) FROM user_providers WHERE user_id = :u"), {"u": uid}
+            )
+        ).scalar_one()
+        status = (
+            await conn.execute(text("SELECT status FROM users WHERE id = :u"), {"u": uid})
+        ).scalar_one()
+    assert n == 0 and status == "deleted"
 
 
 # ---------- A5：Idempotency-Key 必带 + schema 边界 ----------
