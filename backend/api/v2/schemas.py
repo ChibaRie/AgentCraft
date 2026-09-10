@@ -22,3 +22,15 @@ class InvitationAcceptRequest(V2BaseModel):
     email: EmailStr
     # 资源卫生上限（Argon2id 输入）；密码最小长度策略待补遗裁决，本任务不设下限
     password: str = Field(max_length=1024)
+
+
+class EmailVerificationConfirmRequest(V2BaseModel):
+    """POST /auth/email-verification/confirm 请求体（Task 10）。
+
+    verify_token 预认证面资源卫生（同 invitation_token 裁决）：无长度边界会原样
+    流入 SHA-256（hash_token），必须在 schema 层截断——schema 校验短路于幂等依赖
+    与业务，违规请求零 DB 副作用。resend 无请求体（用户上下文来自会话）。
+    """
+
+    # 合法 token = token_urlsafe(32) ≈ 43 字符，256 为宽裕上限
+    verify_token: str = Field(max_length=256)
