@@ -11,8 +11,11 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from backend.api.v2.schemas import ProviderCreateRequest, ProviderUpdateRequest
+from backend.errors import AgentCraftError, ErrorCode
+from backend.utils.crypto import EncryptionError
 from backend.v2 import idempotency, provider_service
 from backend.v2.idempotency import require_key_header
+from backend.v2.rate_limit import enforce, hmac_subject
 from backend.v2.runtime import V2Runtime, get_v2_runtime, owner_session
 from backend.v2.session_service import V2AuthContext, get_v2_auth
 
@@ -82,6 +85,31 @@ async def update_provider(
     if isinstance(outcome, provider_service.Replay):
         return JSONResponse(status_code=outcome.status_code, content=outcome.response_json)
     return JSONResponse(status_code=200, content={"data": outcome})
+
+
+@router.post("/providers/{provider_id}/test")
+async def test_provider(
+    provider_id: str,
+    user_ctx: V2AuthContext = Depends(get_v2_auth),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """连通性测试（认证 + CSRF + 限流 provider_test 10/h；不幂等——D10）。
+
+    EncryptionError → 400 KEY_VERSION_REVOKED（干净文案，不泄材料）。
+    """
+    async with runtime.app_factory() as db:
+        await enforce(
+            db, scope="provider_test", subjects=[hmac_subject("user", str(user_ctx.user.id))]
+        )
+    try:
+        result = await provider_service.test_provider_connectivity(
+            runtime, user_id=str(user_ctx.user.id), provider_id=provider_id
+        )
+    except EncryptionError:
+        raise AgentCraftError(
+            ErrorCode.KEY_VERSION_REVOKED, "Provider Key 不可用或已失效", http_status=400
+        ) from None
+    return JSONResponse(status_code=200, content={"data": result})
 
 
 @router.delete("/providers/{provider_id}")

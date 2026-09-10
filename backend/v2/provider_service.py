@@ -8,10 +8,13 @@
 - Key 材料红线：明文/密文/DEK 不进日志、错误消息、幂等记录。
 """
 
+import json
 import logging
+import time
 import uuid as _uuid
 from dataclasses import dataclass
 
+import httpx
 from fastapi import HTTPException
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -474,3 +477,83 @@ async def revoke_provider(
             response_json=body,
         )
     return body["data"]
+
+
+_TEST_TIMEOUT = httpx.Timeout(90.0, connect=5.0)  # D10：连接 5s / 总 90s
+_MAX_TEST_RESPONSE_BYTES = 2 * 1024 * 1024  # D10：2MB 流式硬上限
+_TEST_URL_TEMPLATE = "https://{host}{path}"  # D10：不叠 path_prefix
+
+
+def _count_models(body: bytes) -> int:
+    """models_visible：顶层 data/models 数组长度；顶层为数组取其长度；解析失败 → 0。"""
+    try:
+        parsed = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return 0
+    if isinstance(parsed, list):
+        return len(parsed)
+    if isinstance(parsed, dict):
+        for key in ("data", "models"):
+            value = parsed.get(key)
+            if isinstance(value, list):
+                return len(value)
+    return 0
+
+
+async def test_provider_connectivity(
+    runtime: V2Runtime,
+    *,
+    user_id: str,
+    provider_id: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> dict:
+    """连通性测试（Sup §3；裁决 D10/D11）。
+
+    open() 是 Phase 3 内明文 Key 的唯一解密消费点（control grant 属 Phase 6）：
+    明文仅存活于本协程内存，禁缓存/禁日志/禁入错误消息。URL 仅由 catalog 行拼装；
+    httpx follow_redirects=False + trust_env=False；流式 2MB 上限；响应恰
+    {ok, latency_ms, models_visible}，不回传上游任何内容（Eng §6 红线）。
+    """
+    async with owner_session(runtime, user_id) as db:
+        row = await get_provider_row(db, provider_id)  # 缺失/revoked → 404
+        catalog = (
+            await db.execute(select(ProviderCatalog).where(ProviderCatalog.id == row.catalog_id))
+        ).scalar_one()
+        if not catalog.enabled:
+            raise AgentCraftError(
+                ErrorCode.CATALOG_ITEM_DISABLED, "目录条目已停用", http_status=400
+            )
+        key_ciphertext, dek_wrapped, aad_pid = row.key_ciphertext, row.dek_wrapped, str(row.id)
+        method = catalog.healthcheck_method
+        url = _TEST_URL_TEMPLATE.format(host=catalog.allowed_host, path=catalog.healthcheck_path)
+
+    plaintext_key = key_sealer().open(key_ciphertext, dek_wrapped, provider_id=aad_pid)
+    started = time.perf_counter()
+    ok = False
+    models_visible = 0
+    try:
+        async with httpx.AsyncClient(
+            transport=transport, follow_redirects=False, trust_env=False, timeout=_TEST_TIMEOUT
+        ) as client:
+            async with client.stream(
+                method,
+                url,
+                headers={"authorization": f"Bearer {plaintext_key}", "accept": "application/json"},
+            ) as resp:
+                total = 0
+                chunks: list[bytes] = []
+                oversized = False
+                async for chunk in resp.aiter_bytes():
+                    total += len(chunk)
+                    if total > _MAX_TEST_RESPONSE_BYTES:
+                        oversized = True
+                        break
+                    chunks.append(chunk)
+                if not oversized:
+                    ok = 200 <= resp.status_code < 300
+                    if ok:
+                        models_visible = _count_models(b"".join(chunks))
+    except httpx.HTTPError:
+        ok = False  # 超时/连接失败/流错误 → 统一失败形态；异常不外传不落日志
+    latency_ms = max(0, int((time.perf_counter() - started) * 1000))
+    return {"ok": ok, "latency_ms": latency_ms, "models_visible": models_visible}
