@@ -11,11 +11,16 @@ Task 11 增加 ``POST /auth/login`` 与 ``POST /auth/login/mfa``（公开端点�
 Task 12 增加 ``POST /auth/password-reset/request``（公开端点：无 CSRF，A5 未列入
 幂等键控，恒 202）与 ``POST /auth/password-reset/confirm``（公开端点：
 Idempotency-Key 必带）以及 ``POST /auth/password-change``（认证端点：A7 契约缺口
-补端点）。
+补端点）；Task 14 增加 ``POST /auth/logout``（认证端点：豁免幂等 A5，撤销当前
+会话 + 清双 cookie）、``GET /auth/sessions``（认证端点：设备会话列表信封）与
+``DELETE /auth/sessions/{session_id}``（认证端点：Idempotency-Key 必带 A5，
+subject=user、route=含资源 ID 的具体路径；rowcount 0 统一 404，绝不 403）。
 依赖统一定义于 backend.v2.runtime / idempotency / session_service，此处仅消费。
 """
 
-from fastapi import APIRouter, Depends, Request
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from backend.api.v2.schemas import (
@@ -36,17 +41,23 @@ from backend.v2 import (
     verification_service,
 )
 from backend.v2.idempotency import require_key_header
-from backend.v2.runtime import V2Runtime, client_ip, get_v2_runtime
+from backend.v2.runtime import V2Runtime, client_ip, get_v2_runtime, owner_session
 from backend.v2.security import device_label_from_ua
 from backend.v2.session_service import (
     V2AuthContext,
+    clear_session_cookie,
     get_v2_auth,
+    list_sessions,
+    revoke,
     set_csrf_cookie,
     set_session_cookie,
 )
 
 # 恒 202 防枚举载荷（request 端点固定出口；服务层不发信形态亦同形）
 _RESET_ACCEPTED_BODY = {"data": {"accepted": True}}
+
+# 统一 404 文案（契约钉死；V1 惯例 HTTPException——NOT_FOUND 非注册表错误码）
+_NOT_FOUND_DETAIL = {"code": "NOT_FOUND", "message": "资源不存在"}
 
 router = APIRouter()
 
@@ -175,6 +186,97 @@ async def login_mfa(
         device_label=device_label_from_ua(request.headers.get("user-agent")),
     )
     return _session_response(outcome.body, outcome.session_token)
+
+
+@router.post("/auth/logout")
+async def logout(
+    user_ctx: V2AuthContext = Depends(get_v2_auth),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """登出（认证端点，豁免幂等 A5）：撤销当前会话 + 双 cookie 清除。
+
+    认证走 get_v2_auth 门序（会话 cookie → CSRF → 状态门）；owner 事务内软撤销
+    （行保留供设备列表展示）。重放同一死 cookie 自然 401 SESSION_EXPIRED（会话
+    已撤销，无特殊处理）。
+    """
+    async with owner_session(runtime, str(user_ctx.user.id)) as db:
+        await revoke(db, user_ctx.session.id)
+    response = JSONResponse(status_code=200, content={"data": {"ok": True}})
+    clear_session_cookie(response)
+    return response
+
+
+@router.get("/auth/sessions")
+async def list_device_sessions(
+    user_ctx: V2AuthContext = Depends(get_v2_auth),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """设备会话列表（认证端点，GET 免 CSRF）：{data, total, page, size} 列表信封。
+
+    owner 事务内 list_sessions（RLS 限本行）：{id, device_label, created_at,
+    expires_at, current}；时间戳 ISO 序列化；current = 当前请求会话标志。
+    """
+    async with owner_session(runtime, str(user_ctx.user.id)) as db:
+        rows = await list_sessions(db, user_ctx.session.id)
+    items = [
+        {
+            "id": str(row["id"]),
+            "device_label": row["device_label"],
+            "created_at": row["created_at"].isoformat(),
+            "expires_at": row["expires_at"].isoformat(),
+            "current": row["current"],
+        }
+        for row in rows
+    ]
+    return JSONResponse(
+        status_code=200,
+        content={"data": items, "total": len(items), "page": 1, "size": len(items)},
+    )
+
+
+@router.delete("/auth/sessions/{session_id}")
+async def delete_device_session(
+    session_id: uuid.UUID,
+    request: Request,
+    user_ctx: V2AuthContext = Depends(get_v2_auth),
+    idem_key: str = Depends(require_key_header),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """删除设备会话（认证端点，A5：Idempotency-Key 必带，subject=user）。
+
+    幂等 begin 最先（§7 重放优先：同 key 已成功删除的重放返回原 200，无论会话
+    当前状态；route = 含资源 ID 的具体路径，重放不携带 Set-Cookie）→ owner 事务
+    revoke：rowcount 0 → 统一 404「资源不存在」（他人会话/不存在/已撤销一律 404，
+    owner-RLS 保证绝不 403 泄漏存在性，随事务回滚分文不写）；rowcount 1 → 幂等
+    store 同事务；撤销当前会话时同时清双 cookie。
+    """
+    subject = idempotency.subject_user(str(user_ctx.user.id))
+    route = request.url.path
+    req_hash = idempotency.request_hash(None)  # DELETE 无请求体
+    async with runtime.app_factory() as db:
+        replay = await idempotency.begin(
+            db, subject_hash=subject, route=route, key=idem_key, req_hash=req_hash
+        )
+    if replay is not None:
+        return JSONResponse(status_code=replay["status_code"], content=replay["response_json"])
+
+    async with owner_session(runtime, str(user_ctx.user.id)) as db:
+        if await revoke(db, session_id) == 0:
+            raise HTTPException(status_code=404, detail=_NOT_FOUND_DETAIL)
+        body = {"data": {"ok": True}}
+        await idempotency.store(
+            db,
+            subject_hash=subject,
+            route=route,
+            key=idem_key,
+            req_hash=req_hash,
+            status_code=200,
+            response_json=body,
+        )
+    response = JSONResponse(status_code=200, content=body)
+    if session_id == user_ctx.session.id:
+        clear_session_cookie(response)
+    return response
 
 
 @router.post("/auth/mfa/setup")

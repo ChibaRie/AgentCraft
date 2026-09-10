@@ -3,17 +3,19 @@
 Task 4 空壳；Task 13 增加 ``POST /account/deletion/request``（认证端点：
 get_v2_auth 门序 + CSRF + Idempotency-Key 必带）、``POST /account/deletion/cancel``
 （公开端点：无会话无 CSRF，Idempotency-Key 必带）与 ``GET /account/deletion/status``
-（认证端点）。``/api/v2/users/me`` 由 T14 移入。
+（认证端点）；Task 14 增加 ``GET /users/me``（认证端点：本人资料 + 生效
+entitlements + mfa_enabled，不返回 csrf_token——A14 交付信道钉死）。
 依赖统一定义于 backend.v2.runtime / idempotency / session_service，此处仅消费。
 """
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from backend.api.v2.schemas import DeletionCancelRequest, DeletionRequestRequest
 from backend.v2 import deletion_service, idempotency
 from backend.v2.idempotency import require_key_header
-from backend.v2.runtime import V2Runtime, client_ip, get_v2_runtime
+from backend.v2.runtime import V2Runtime, client_ip, get_v2_runtime, owner_session
 from backend.v2.security import device_label_from_ua
 from backend.v2.session_service import (
     V2AuthContext,
@@ -99,3 +101,50 @@ async def get_account_deletion_status(
         status=user_ctx.user.status, deadline_at=user_ctx.user.deletion_deadline_at
     )
     return JSONResponse(status_code=200, content={"data": body})
+
+
+@router.get("/users/me")
+async def get_users_me(
+    user_ctx: V2AuthContext = Depends(get_v2_auth),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """当前用户资料（认证端点，GET 免 CSRF）：owner 事务读本人行 + 生效 entitlements。
+
+    entitlements = user_entitlements WHERE revoked_at IS NULL（0003 后 app 可读本人
+    行）；mfa_enabled = mfa_secret_enc IS NOT NULL。**不返回 csrf_token**（A14：
+    服务端仅存 csrf_hash，明文交付信道 = 会话创建类响应 body + ac_csrf 镜像 cookie）。
+    """
+    user_id = str(user_ctx.user.id)
+    async with owner_session(runtime, user_id) as db:
+        row = (
+            await db.execute(
+                text("SELECT email, role, status, mfa_secret_enc FROM users WHERE id = :u"),
+                {"u": user_id},
+            )
+        ).one()
+        entitlements = (
+            (
+                await db.execute(
+                    text(
+                        "SELECT entitlement FROM user_entitlements "
+                        "WHERE user_id = :u AND revoked_at IS NULL ORDER BY entitlement"
+                    ),
+                    {"u": user_id},
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "data": {
+                "id": user_id,
+                "email": row.email,
+                "role": row.role,
+                "status": row.status,
+                "entitlements": list(entitlements),
+                "mfa_enabled": row.mfa_secret_enc is not None,
+            }
+        },
+    )
