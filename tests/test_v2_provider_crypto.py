@@ -49,6 +49,20 @@ def test_open_tampered_ciphertext_fails():
         _sealer().open(json.dumps(bad), dw, provider_id=_PID_A)
 
 
+def test_open_malformed_json_ciphertext_fails():
+    """Text 列内容损坏（非 JSON）→ 统一 EncryptionError（不逃逸 JSONDecodeError）。"""
+    _, dw = _sealer().seal(_KEY, provider_id=_PID_A)
+    with pytest.raises(EncryptionError, match="信封不是合法 JSON"):
+        _sealer().open("{not-json", dw, provider_id=_PID_A)
+
+
+def test_open_malformed_json_dek_wrapped_fails():
+    """对称路径：dek_wrapped 非 JSON → 统一 EncryptionError。"""
+    ct, _ = _sealer().seal(_KEY, provider_id=_PID_A)
+    with pytest.raises(EncryptionError, match="信封不是合法 JSON"):
+        _sealer().open(ct, "{not-json", provider_id=_PID_A)
+
+
 def test_key_sealer_requires_configured_kek(monkeypatch):
     monkeypatch.setenv("PROVIDER_KEY_ENCRYPTION_KEY", "")
     with pytest.raises(ValueError, match="PROVIDER_KEY_ENCRYPTION_KEY"):

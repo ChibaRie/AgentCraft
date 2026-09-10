@@ -18,7 +18,12 @@ import os
 from collections.abc import Callable
 
 from backend.config import get_settings
-from backend.utils.crypto import decrypt_text, encrypt_text, make_keyring
+from backend.utils.crypto import (
+    EncryptionError,
+    decrypt_text,
+    encrypt_text,
+    make_keyring,
+)
 
 _AAD_BASE = "agentcraft:user_providers"
 
@@ -55,6 +60,19 @@ def _dumps(envelope: dict) -> str:
     return json.dumps(envelope, sort_keys=True, separators=(",", ":"))
 
 
+def _loads(envelope_json: str) -> dict:
+    """Text 列 JSON 串 → 信封 dict；列内容损坏/异构统一 EncryptionError。
+
+    畸形 JSON 抛 JSONDecodeError（ValueError 子类）、非 str 入参抛 TypeError，
+    均不得逃逸本模块契约（下游 except EncryptionError → 400）；消息固定文案，
+    不含任何材料内容；``from exc`` 保留链路供服务端排查。
+    """
+    try:
+        return json.loads(envelope_json)
+    except (ValueError, TypeError) as exc:
+        raise EncryptionError("信封不是合法 JSON") from exc
+
+
 class KeySealer:
     """KeySealer 抽象（app-layer design §4.2）：seal/open 双层信封。
 
@@ -84,11 +102,11 @@ class KeySealer:
         """双层解封：KEK 解 DEK → DEK 解明文。任一层失败统一 EncryptionError。"""
         _, kek_keyring = self._kek_source()
         dek = decrypt_text(
-            json.loads(dek_wrapped), aad=provider_dek_aad(provider_id), keyring=kek_keyring
+            _loads(dek_wrapped), aad=provider_dek_aad(provider_id), keyring=kek_keyring
         )
         _, dek_keyring = make_keyring(f"primary:{dek}")
         return decrypt_text(
-            json.loads(key_ciphertext), aad=provider_key_aad(provider_id), keyring=dek_keyring
+            _loads(key_ciphertext), aad=provider_key_aad(provider_id), keyring=dek_keyring
         )
 
 
