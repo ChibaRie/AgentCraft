@@ -321,25 +321,28 @@ async def test_rate_limit_event_index_exists(pg_fresh):
 
 async def test_user_provider_one_default_per_user(pg_fresh):
     """部分唯一索引 uq_user_providers_one_default：同 user 至多一行 is_default=true；
-    原默认行置 False 后新默认行可再建（用户内互斥不变的 DB 事实源）。"""
+    原默认行置 False 后新默认行可再建（用户内互斥不变的 DB 事实源）。
+    各默认行 model_id 必须互异：迁移 0004 另加部分唯一索引 uq_user_providers_active_entry
+    (user_id, catalog_id, model_id) WHERE status='active'（D4 裁决），同 catalog+model
+    的多行 active 种子会先撞该约束而非本测试针对的 one_default。"""
     maker = async_sessionmaker(pg_fresh.engine, expire_on_commit=False)
     user_id = await _seed_user(maker, "default@example.com")
     async with maker() as s:
         catalog = ProviderCatalog(
             display_name="OpenAI",
             allowed_host="api.openai.com",
-            models=["gpt-4o"],
+            models=["gpt-4o", "gpt-4o-mini", "gpt-4o-nano"],
             healthcheck_path="/v1/models",
         )
         s.add(catalog)
         await s.commit()
         catalog_id = catalog.id
 
-    def _provider(last4: str, is_default: bool) -> UserProvider:
+    def _provider(last4: str, is_default: bool, model_id: str) -> UserProvider:
         return UserProvider(
             user_id=user_id,
             catalog_id=catalog_id,
-            model_id="gpt-4o",
+            model_id=model_id,
             key_ciphertext=f"ct-{last4}",
             dek_wrapped=f"dek-{last4}",
             key_last4=last4,
@@ -347,11 +350,11 @@ async def test_user_provider_one_default_per_user(pg_fresh):
         )
 
     async with maker() as s:
-        s.add(_provider("Ab1!", True))
+        s.add(_provider("Ab1!", True, "gpt-4o"))
         await s.commit()
     async with maker() as s:
-        s.add(_provider("Xy2@", True))
-        with pytest.raises(IntegrityError):  # 第二个默认行被拒
+        s.add(_provider("Xy2@", True, "gpt-4o-mini"))
+        with pytest.raises(IntegrityError):  # 第二个默认行被拒（one_default，非 active_entry）
             await s.commit()
     async with maker() as s:
         row = (
@@ -360,7 +363,7 @@ async def test_user_provider_one_default_per_user(pg_fresh):
         row.is_default = False
         await s.commit()
     async with maker() as s:
-        s.add(_provider("Qw3#", True))
+        s.add(_provider("Qw3#", True, "gpt-4o-nano"))
         await s.commit()  # 原默认行已退位 → 新默认行可建
         defaults = (
             (await s.execute(select(UserProvider).where(UserProvider.is_default.is_(True))))
