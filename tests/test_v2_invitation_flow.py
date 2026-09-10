@@ -392,6 +392,43 @@ async def test_malformed_email_body_rejected_400(pg, flow_env):
     assert await _count(pg, "users") == 0
 
 
+# ---------- schema 字段边界（review round 1）：超长输入 schema 层截断 ----------
+
+
+async def test_oversized_password_rejected_400_no_db_side_effects(pg, flow_env):
+    """超长 password（2000 > 1024）→ 400；schema 校验短路于限流与业务，零 DB 副作用。"""
+    token, _ = await _seed_invitation(pg, "big-pw@example.com")
+    async with http_client("10.0.9.1") as client:
+        resp = await _accept(
+            client, token, key="big-pw", email="big-pw@example.com", password="p" * 2000
+        )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert await _count(pg, "rate_limit_events") == 0  # 连限流都未发生
+    assert await _count(pg, "users") == 0
+    assert await _count(pg, "invitations", "consumed_at IS NOT NULL") == 0
+
+
+async def test_oversized_invitation_token_rejected_400_no_db_side_effects(pg, flow_env):
+    """超长 invitation_token（257 > 256）→ 400 零副作用；256 字符边界过门落入业务 409。"""
+    token, _ = await _seed_invitation(pg, "big-tok@example.com")
+    async with http_client("10.0.10.1") as client:
+        resp = await _accept(client, "t" * 257, key="big-tok", email="big-tok@example.com")
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert await _count(pg, "rate_limit_events") == 0
+        assert await _count(pg, "users") == 0
+        assert await _count(pg, "invitations", "consumed_at IS NOT NULL") == 0
+
+        # 边界钉死：256 字符（合法 token 43 字符的宽裕上限）通过 schema 门，进入业务判 409
+        edge = await _accept(client, "t" * 256, key="big-tok-edge", email="big-tok@example.com")
+
+    assert edge.status_code == 409
+    assert edge.json()["error"]["code"] == "INVITATION_INVALID"
+    assert await _count(pg, "rate_limit_events") == 1  # 仅边界请求计入限流窗口
+
+
 # ---------- email 规范化纯函数 ----------
 
 

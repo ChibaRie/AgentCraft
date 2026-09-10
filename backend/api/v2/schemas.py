@@ -1,6 +1,6 @@
 """V2 API schema。Task 4 先放空基类；各端点模型由后续任务在此补充。"""
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class V2BaseModel(BaseModel):
@@ -8,12 +8,17 @@ class V2BaseModel(BaseModel):
 
 
 class InvitationAcceptRequest(V2BaseModel):
-    """POST /invitations/accept 请求体（Task 9）。
+    """POST /auth/invitations/accept 请求体（Task 9）。
 
     email 经 pydantic EmailStr（email-validator 同源语法门）边界校验；小写规范化
     在服务层收口（invitation_service.normalize_email），此处不变形。
+    预认证面资源卫生（review round 1）：无长度边界的 invitation_token/password 会
+    原样流入 SHA-256/Argon2id，唯一闸门是按 IP 限流（挡不住 IP 轮换）——必须在
+    schema 层截断（schema 校验短路于限流依赖与业务，违规请求零 DB 副作用）。
     """
 
-    invitation_token: str
+    # 合法 token = token_urlsafe(32) ≈ 43 字符，256 为宽裕上限
+    invitation_token: str = Field(max_length=256)
     email: EmailStr
-    password: str
+    # 资源卫生上限（Argon2id 输入）；密码最小长度策略待补遗裁决，本任务不设下限
+    password: str = Field(max_length=1024)
