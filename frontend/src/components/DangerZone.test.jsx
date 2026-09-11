@@ -1,7 +1,9 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { V2ApiError, requestV2 } from "../api/v2/client.js";
+import AccountDeletingPage from "../pages/AccountDeletingPage.jsx";
 import DangerZone from "./DangerZone.jsx";
 
 // 卡片级行为测试：mock useAuth（clearV2Session 观察点）+ requestV2 网络入口
@@ -34,13 +36,22 @@ const V2_USER_OFF = {
 };
 const V2_USER_ON = { ...V2_USER_OFF, mfaEnabled: true };
 
-function renderZone(onDeletionRequested) {
-  return render(<DangerZone onDeletionRequested={onDeletionRequested} />);
+/** 挂在 /profile 路由下渲染（useNavigate 消费真实 Router；/account/deleting
+ *  接真实冻结页——注销成功后可断言 location 终态）。 */
+function renderZone() {
+  return render(
+    <MemoryRouter initialEntries={["/profile"]}>
+      <Routes>
+        <Route path="/profile" element={<DangerZone />} />
+        <Route path="/account/deleting" element={<AccountDeletingPage />} />
+      </Routes>
+    </MemoryRouter>
+  );
 }
 
 /** 打开二次确认弹层 */
 async function openConfirm() {
-  renderZone(vi.fn());
+  renderZone();
   fireEvent.click(screen.getByRole("button", { name: "申请注销账户" }));
   await flush();
 }
@@ -87,14 +98,14 @@ describe("危险面板与二次确认弹层", () => {
   });
 
   it("mfaEnabled 用户弹层内出现两步验证码输入；未启用用户无", async () => {
-    const off = renderZone(vi.fn());
+    const off = renderZone();
     fireEvent.click(screen.getByRole("button", { name: "申请注销账户" }));
     await flush();
     expect(screen.queryByLabelText("两步验证码")).toBeNull();
     off.unmount();
 
     useAuth.mockReturnValue({ v2User: V2_USER_ON, clearV2Session: vi.fn() });
-    renderZone(vi.fn());
+    renderZone();
     fireEvent.click(screen.getByRole("button", { name: "申请注销账户" }));
     await flush();
     expect(screen.getByLabelText("两步验证码")).toBeTruthy();
@@ -156,10 +167,9 @@ describe("提交门与请求形状", () => {
   });
 });
 
-describe("注销受理流（200 → 本地 V2 态清理 + 回调）", () => {
-  it("200 → clearV2Session + onDeletionRequested(days_remaining) + 弹层关闭", async () => {
-    const onDeletionRequested = vi.fn();
-    renderZone(onDeletionRequested);
+describe("注销受理流（200 → 本地 V2 态清理 + 导航冻结页路由）", () => {
+  it("200 → clearV2Session + 落在 /account/deleting（days 透传冻结页）", async () => {
+    renderZone();
     fireEvent.click(screen.getByRole("button", { name: "申请注销账户" }));
     await flush();
     fireEvent.change(screen.getByLabelText("登录密码"), {
@@ -170,13 +180,14 @@ describe("注销受理流（200 → 本地 V2 态清理 + 回调）", () => {
     await flush();
 
     expect(useAuth().clearV2Session).toHaveBeenCalledTimes(1);
-    expect(onDeletionRequested).toHaveBeenCalledWith(14);
+    // location 终态 = 独立冻结页路由（不再经页面回调渲染）
+    expect(screen.getByText("账户注销中")).toBeTruthy();
+    expect(screen.getByText(/14 天后生效/)).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("409 ACCOUNT_DELETING（宽限期内重复申请）→ 后端文案内联，不触发清理与回调", async () => {
-    const onDeletionRequested = vi.fn();
-    renderZone(onDeletionRequested);
+  it("409 ACCOUNT_DELETING（宽限期内重复申请）→ 后端文案内联，不清理不导航", async () => {
+    renderZone();
     fireEvent.click(screen.getByRole("button", { name: "申请注销账户" }));
     await flush();
     fireEvent.change(screen.getByLabelText("登录密码"), {
@@ -191,7 +202,9 @@ describe("注销受理流（200 → 本地 V2 态清理 + 回调）", () => {
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toBe("注销处理中");
     expect(useAuth().clearV2Session).not.toHaveBeenCalled();
-    expect(onDeletionRequested).not.toHaveBeenCalled();
+    // 未导航：仍在 /profile（危险卡片入口在、冻结页不在）
+    expect(screen.getByRole("button", { name: "申请注销账户" })).toBeTruthy();
+    expect(screen.queryByText("账户注销中")).toBeNull();
   });
 
   it("401 INVALID_CREDENTIALS（密码错误）→ 内联后端文案，留在表单", async () => {

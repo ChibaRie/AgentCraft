@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ShieldWarning } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { V2ApiError, newIdempotencyKey, requestV2 } from "../api/v2/client.js";
@@ -21,14 +22,17 @@ const FALLBACK_MESSAGE = "操作失败，请稍后重试";
  * 交互流：红色语义面板（14 天宽限期说明 + V1/V2 账户域区分）→ 二次确认
  * 弹层（再认证表单：密码 + 条件 TOTP）→ 提交 → 200 后本地 V2 态清理
  * （clearV2Session：csrf 清空 + v2User 置空——后端已清双 cookie，不显式清
- * 会让陈旧态在后续请求触发 401 事件打断「注销中」页）→ onDeletionRequested
- * 回调交页面渲染全页冻结展示态。v1Token 不动（V1 账户是独立域）。
+ * 会让陈旧态在后续请求触发 401 事件打断「注销中」页）→ navigate 独立路由
+ * /account/deleting 渲染全页冻结展示态（终审修复：冻结页不挂 RequireAuth——
+ * V2-only 用户清会话后匿名，挂守卫会被同批弹回 /login；days_remaining 经
+ * location.state 传入）。v1Token 不动（V1 账户是独立域）。
  *
  * 幂等键：useRef 初始化器（StrictMode 双渲染仅首把键保留，T5
  * DeletionCancelPage 同源裁决）+ in-flight 提交闸门；失败重试复用同一把键。
  */
-export default function DangerZone({ onDeletionRequested }) {
+export default function DangerZone() {
   const { v2User, clearV2Session } = useAuth();
+  const navigate = useNavigate();
   const isMfaEnabled = v2User?.mfaEnabled === true;
 
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -118,10 +122,11 @@ export default function DangerZone({ onDeletionRequested }) {
         idempotencyKey: idempotencyKeyRef.current,
       });
       const daysRemaining = result.data?.days_remaining;
-      // 本地 V2 态清理先于回调：上下文翻转（v2User=null）与全页冻结态
-      // 同批渲染，卡片区随之卸载，无中间态 V2 请求
+      // 本地 V2 态清理先于导航：上下文翻转（v2User=null）与路由切换同批提交，
+      // 原页面（含本卡片）随之卸载，无中间态 V2 请求；冻结页不挂守卫，
+      // 匿名到达 /account/deleting 不会被弹回
       clearV2Session();
-      onDeletionRequested?.(daysRemaining);
+      navigate("/account/deleting", { state: { daysRemaining }, replace: true });
       setConfirmOpen(false);
     } catch (caught) {
       if (caught.status === 429) {

@@ -5,7 +5,6 @@ import {
   CheckCircle,
   ListChecks,
   SealCheck,
-  ShieldWarning,
   UserCircle,
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
@@ -26,8 +25,8 @@ const TASK_STATUS_LABELS = {
 
 export default function ProfilePage() {
   const { user, v2User, isExpert, applyExpert } = useAuth();
-  // 双轨身份源（E12）：V1 会话优先，V2-only 用户回退
-  const displayUser = user ?? v2User;
+  // 身份源统一（终审修复）：V2 权威会话优先（NavBar 同向），V1-only 用户回退
+  const displayUser = v2User ?? user;
   const name = displayName(displayUser);
   // 角色渲染源 = displayUser 实际 role（T2 账本 minor 顺手修：V2 admin 曾显示 "user"）
   const displayRole = displayUser?.role;
@@ -39,8 +38,6 @@ export default function ProfilePage() {
   const [justApplied, setJustApplied] = useState(false);
   const [tasks, setTasks] = useState(null);
   const [taskError, setTaskError] = useState("");
-  // 注销受理后的剩余天数（null = 未受理）：非空时接管整页渲染（FE-T7）
-  const [deletionDaysRemaining, setDeletionDaysRemaining] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,31 +59,6 @@ export default function ProfilePage() {
       cancelled = true;
     };
   }, []);
-
-  // 注销受理后的全页冻结展示态（FE-T7）：接管整页渲染，冻结后续 V2 请求
-  // （V2 本地态已由 DangerZone 清理：csrf 清空 + v2User 置空；V1 工作区会话
-  // 是独立域不受影响——此处须先于一切 displayUser 消费，防 V2-only 用户
-  // v2User=null 后解引用空对象）
-  if (deletionDaysRemaining !== null) {
-    return (
-      <main className="app-main">
-        <section className="v2-deleting-page rise" role="status">
-          <ShieldWarning size={28} weight="fill" aria-hidden="true" />
-          <h1 className="v2-deleting-title">账户注销中</h1>
-          <p className="v2-deleting-lead">
-            账户注销申请已受理，<strong>{deletionDaysRemaining} 天后生效</strong>。
-          </p>
-          <p className="v2-deleting-note">
-            恢复链接已发送至邮箱，宽限期内可凭邮件中的恢复链接撤销注销、
-            恢复账户的正常使用。
-          </p>
-          <p className="v2-deleting-domain">
-            本次注销仅针对新账户体系（V2 账户域）；旧版工作区账户的登录不受影响。
-          </p>
-        </section>
-      </main>
-    );
-  }
 
   async function handleApplyExpert() {
     setIsApplying(true);
@@ -160,7 +132,9 @@ export default function ProfilePage() {
               <SessionsCard />
               <PasswordChangeCard />
               <MfaCard />
-              <DangerZone onDeletionRequested={setDeletionDaysRemaining} />
+              {/* 受理成功由 DangerZone 自行导航 /account/deleting（冻结页
+                  独立路由、不挂守卫——V2-only 用户注销后匿名仍可达） */}
+              <DangerZone />
             </>
           ) : null}
 

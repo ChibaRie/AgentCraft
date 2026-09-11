@@ -4,10 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { request } from "../api/client.js";
 import { requestV2 } from "../api/v2/client.js";
+import AccountDeletingPage from "./AccountDeletingPage.jsx";
 import ProfilePage from "./ProfilePage.jsx";
 
-// 页面装配冒烟：身份/角色渲染源、安全区块 gating 与注销受理全页态
-// （卡片行为在各自组件测试覆盖）
+// 页面装配冒烟：身份/角色渲染源、安全区块 gating 与注销受理导航终态
+// （卡片行为在各自组件测试覆盖；冻结页本体在 AccountDeletingPage.test）
 vi.mock("../auth/AuthContext.jsx", () => ({ useAuth: vi.fn() }));
 vi.mock("../api/client.js", () => ({ request: vi.fn() }));
 vi.mock("../api/v2/client.js", async (importOriginal) => {
@@ -106,16 +107,26 @@ describe("安全区块 gating（端点均为 V2 会话语义）", () => {
   });
 });
 
-describe("注销受理全页冻结态（T7）", () => {
-  it("危险区 200 → 清 V2 本地会话态 → 全页「账户注销中」展示态接管", async () => {
-    useAuth.mockReturnValue({
-      ...BASE_AUTH,
-      v2User: { id: "u-2", email: "v2@example.com", role: "user", mfaEnabled: false },
-    });
-    requestV2.mockResolvedValueOnce(ok([])); // 挂载会话列表
-    await renderProfile();
+describe("注销受理导航终态（T7 终审：冻结页独立路由 /account/deleting）", () => {
+  const V2_ONLY_AUTH = {
+    ...BASE_AUTH,
+    v2User: { id: "u-2", email: "v2@example.com", role: "user", mfaEnabled: false },
+  };
 
-    // 走真实 DangerZone 二次确认流
+  /** 挂三路由（/profile + 冻结页 + /login 哨兵）渲染后走真实 DangerZone 受理流 */
+  async function renderAndWalkDeletionFlow() {
+    requestV2.mockResolvedValueOnce(ok([])); // 挂载会话列表
+    render(
+      <MemoryRouter initialEntries={["/profile"]}>
+        <Routes>
+          <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/account/deleting" element={<AccountDeletingPage />} />
+          <Route path="/login" element={<div>登录页哨兵</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await act(async () => {});
+
     fireEvent.click(screen.getByRole("button", { name: "申请注销账户" }));
     await act(async () => {});
     fireEvent.change(screen.getByLabelText("登录密码"), {
@@ -124,34 +135,26 @@ describe("注销受理全页冻结态（T7）", () => {
     requestV2.mockResolvedValueOnce(ok({ status: "deleting", days_remaining: 14 }));
     fireEvent.click(screen.getByRole("button", { name: "确认注销" }));
     await act(async () => {});
+  }
 
-    // 本地 V2 态清理 + 冻结展示态接管整页
+  it("危险区 200 → 清 V2 本地会话态 → 落在 /account/deleting，不被弹回 /login", async () => {
+    useAuth.mockReturnValue(V2_ONLY_AUTH);
+    await renderAndWalkDeletionFlow();
+
+    // 本地 V2 态清理 + location 终态 = 冻结页路由（V2-only 用户匿名后
+    // 仍可达——冻结页不挂 RequireAuth，「/login 哨兵」未被渲染）
     expect(useAuth().clearV2Session).toHaveBeenCalledTimes(1);
     expect(screen.getByText("账户注销中")).toBeTruthy();
     expect(screen.getByText(/14 天后生效/)).toBeTruthy();
-    expect(screen.getByText(/恢复链接已发送至邮箱/)).toBeTruthy();
-    expect(screen.getByText(/邮件中的恢复链接/)).toBeTruthy();
-    // 冻结：原页面卡片全部卸载
+    expect(screen.queryByText("登录页哨兵")).toBeNull();
+    // 原页面卡片全部卸载（路由已切走）
     expect(screen.queryByText("设备与登录")).toBeNull();
     expect(screen.queryByText("专家身份")).toBeNull();
   });
 
-  it("冻结态文案区分两个账户域（V1 工作区会话不受影响）", async () => {
-    useAuth.mockReturnValue({
-      ...BASE_AUTH,
-      v2User: { id: "u-2", email: "v2@example.com", role: "user", mfaEnabled: false },
-    });
-    requestV2.mockResolvedValueOnce(ok([]));
-    await renderProfile();
-
-    fireEvent.click(screen.getByRole("button", { name: "申请注销账户" }));
-    await act(async () => {});
-    fireEvent.change(screen.getByLabelText("登录密码"), {
-      target: { value: "pw-123456" },
-    });
-    requestV2.mockResolvedValueOnce(ok({ status: "deleting", days_remaining: 14 }));
-    fireEvent.click(screen.getByRole("button", { name: "确认注销" }));
-    await act(async () => {});
+  it("冻结页文案区分两个账户域（V1 工作区会话不受影响）", async () => {
+    useAuth.mockReturnValue(V2_ONLY_AUTH);
+    await renderAndWalkDeletionFlow();
 
     expect(screen.getByText(/旧版工作区账户/)).toBeTruthy();
     expect(screen.getByText(/不受影响/)).toBeTruthy();

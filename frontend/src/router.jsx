@@ -2,6 +2,7 @@ import { Navigate, Outlet, Route, Routes, useParams } from "react-router-dom";
 import NavBar from "./components/NavBar.jsx";
 import PendingVerificationBanner from "./components/PendingVerificationBanner.jsx";
 import RequireAuth from "./components/RequireAuth.jsx";
+import AccountDeletingPage from "./pages/AccountDeletingPage.jsx";
 import DeletionCancelPage from "./pages/DeletionCancelPage.jsx";
 import EmailVerificationPage from "./pages/EmailVerificationPage.jsx";
 import ExpertCenterPage from "./pages/ExpertCenterPage.jsx";
@@ -62,6 +63,11 @@ export default function AppRoutes() {
       <Route path="/password-reset/confirm" element={<PasswordResetConfirmPage />} />
       <Route path="/account/deletion/cancel" element={<DeletionCancelPage />} />
       <Route element={<AppShell />}>
+        {/* 注销受理冻结页（FE-T7 终审）：不挂守卫——DangerZone 受理成功路径
+            clearV2Session()（v2User→null）后导航至此，V2-only 用户此时匿名，
+            挂 RequireAuth 会在同批渲染被弹回 /login，冻结页永不可达；
+            days_remaining 经 location.state 传入（缺失显示 14）。 */}
+        <Route path="/account/deleting" element={<AccountDeletingPage />} />
         <Route
           path="/"
           element={

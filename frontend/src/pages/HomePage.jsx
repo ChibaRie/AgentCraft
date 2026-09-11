@@ -92,8 +92,8 @@ function ExpertCard({ expert, index }) {
  *  精选专家（分类筛选）。数据全部来自既有公开/本人接口。 */
 export default function HomePage() {
   const { user, v2User, isExpert } = useAuth();
-  // 双轨身份源（E12）：V1 会话优先，V2-only 用户回退
-  const displayUser = user ?? v2User;
+  // 身份源统一（终审修复）：V2 权威会话优先（NavBar 同向），V1-only 用户回退
+  const displayUser = v2User ?? user;
   const [recentTasks, setRecentTasks] = useState(null);
   const [stats, setStats] = useState({ runningTasks: "—", publishedExperts: "—", mySkills: "—" });
   const [experts, setExperts] = useState([]);

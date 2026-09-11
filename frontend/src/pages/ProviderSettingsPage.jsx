@@ -468,7 +468,7 @@ export default function ProviderSettingsPage() {
       }));
     } catch (cause) {
       if (cause instanceof V2ApiError && cause.status === 429) {
-        startRetryAfter(cause.retryAfter); // 全局倒计时：限额按用户计，禁用全部测试按钮
+        startRetryAfter(cause.retryAfter); // 全局限额倒计时（按用户计）：当前卡按钮禁用；其它卡在 handleTest 入口静默早退
         setRateLimitedTestId(provider.id);
         setTestStates((current) => ({ ...current, [provider.id]: { kind: "idle" } }));
         return;
@@ -622,7 +622,10 @@ export default function ProviderSettingsPage() {
             isSubmitting={isCreating}
             error={addError}
             onSubmit={handleCreate}
-            onCancel={() => setIsAddOpen(false)}
+            onCancel={() => {
+              setAddError(null); // 关闭即清残留错误，重开时表单干净
+              setIsAddOpen(false);
+            }}
           />
         )}
 
