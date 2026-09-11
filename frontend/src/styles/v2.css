@@ -442,3 +442,126 @@
   font-size: 12.5px;
   color: var(--text-3);
 }
+
+/* ---------- Provider 目录化管理页（FE-T8）。卡片壳沿用 global.css
+   .provider-card/.provider-list/.provider-form/.badge-default/.field-note，
+   此处只补目录化增量：模型徽标 / Key 等宽元信息行 / 测试结果行 /
+   轮换行内表单 / 测试 loading 旋转点。令牌全取 global.css（墨色单色体系，
+   成功/失败语义色按系统惯例以墨色层级表达）。 ---------- */
+
+/* 卡片根改纵向：主行（标题+操作）与展开的轮换表单上下排布 */
+.provider-card-v2 {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
+.provider-card-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+/* 模型徽标：与 v2-session-badge 同构的全圆角小徽（surface-2 底 + 发丝线） */
+.provider-model-badge {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+.provider-v2-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+/* user-select: all 点击即整段选中（便于人工核对尾 4 位） */
+.provider-key-mask {
+  user-select: all;
+}
+
+/* 测试连通性结果行：成功/失败语义按系统既有惯例以墨色层级表达
+   （ok = 常规墨色；fail/错误 = ink-strong 加重，同 .status-chip.is-failed） */
+.provider-test-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-strong);
+  overflow-wrap: anywhere;
+}
+
+.provider-test-result.is-ok {
+  color: var(--ink);
+}
+
+.provider-test-result.is-limited {
+  font-weight: 400;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 测试 loading 旋转点：单属性 transform 运动；reduced-motion 静止 */
+.provider-test-spinner {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--hairline-strong);
+  border-top-color: var(--ink-strong);
+  border-radius: 50%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .provider-test-spinner {
+    animation: provider-spin 0.8s linear infinite;
+  }
+}
+
+@keyframes provider-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+/* 更换 Key 行内表单：surface-2 底嵌片，与 v2-danger-panel 同层级语言 */
+.provider-rotate-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+}
+
+.provider-key-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-key-input .field-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.provider-rotate-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
