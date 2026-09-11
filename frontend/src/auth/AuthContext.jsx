@@ -242,6 +242,17 @@ export function AuthProvider({ children }) {
   }, []);
 
   /**
+   * V2 本地会话态清理（FE-T7）：清内存 csrf + 置空 v2User。
+   * 零网络请求、零事件派发——注销受理（DangerZone）与撤销本机会话
+   * （SessionsCard）后的静默收尾：不显式清会让陈旧 csrf/死 cookie 在后续
+   * 请求触发 401 事件，打断「注销中」/登录跳转。V1 会话（token/user）不动。
+   */
+  const clearV2Session = useCallback(() => {
+    setCsrfToken(null);
+    setV2User(null);
+  }, []);
+
+  /**
    * V2 会话刷新（FE-T4）：silent 探测 users/me 并置位/清除 v2User。
    * 邮箱验证成功后 pending→active 的状态翻转依赖此刷新；探测失败（401 会话
    * 失效、网络异常）与启动探测 catch-all 同语义——降级未登录。
@@ -275,6 +286,7 @@ export function AuthProvider({ children }) {
       loginV2,
       loginV2Mfa,
       logoutV2,
+      clearV2Session,
       acceptInvitation,
       refreshV2User,
     }),
@@ -290,6 +302,7 @@ export function AuthProvider({ children }) {
       loginV2,
       loginV2Mfa,
       logoutV2,
+      clearV2Session,
       acceptInvitation,
       refreshV2User,
     ]

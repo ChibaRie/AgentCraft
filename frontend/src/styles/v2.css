@@ -283,3 +283,162 @@
 .v2-secret-copy:hover {
   background: var(--surface-2);
 }
+
+/* ---------- 个人中心安全区块（T7）：设备与登录卡片 ---------- */
+
+.v2-session-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+
+.v2-session-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.v2-session-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.v2-session-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.v2-session-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-strong);
+  overflow-wrap: anywhere;
+}
+
+/* 「本机」徽标：与 status-chip 同构的全圆角小徽（surface-2 底 + 发丝线） */
+.v2-session-badge {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+.v2-session-times {
+  font-size: 12.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-session-revoke {
+  flex: none;
+}
+
+/* ---------- 危险区（T7）：危险语义面板 + 二次确认弹层。
+   设计系统为纯墨单色（墨色是唯一强调），红色缺席——危险语义按系统既有
+   惯例（.status-chip.is-failed / .btn-ghost.is-danger）以墨色加重表达：
+   全强度墨边 + surface-2 底 + ink 文字，与常规卡片形成层级差。
+   弹层壳复用 global.css .modal-overlay/.modal，此处只补窄幅与内距。 ---------- */
+
+.v2-danger-panel {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+}
+
+.v2-danger-text {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--ink);
+}
+
+.v2-danger-text strong {
+  color: var(--ink-strong);
+}
+
+.v2-danger-dialog {
+  width: min(420px, 100%);
+  padding: 24px;
+}
+
+.v2-danger-dialog-title {
+  margin: 0 0 6px;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink-strong);
+}
+
+.v2-danger-dialog-sub {
+  margin: 0 0 14px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+
+.v2-danger-dialog-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+/* ---------- 注销受理全页冻结展示态（T7） ---------- */
+
+.v2-deleting-page {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 10px;
+  min-height: 56vh;
+  padding: 96px 24px;
+  text-align: center;
+}
+
+.v2-deleting-title {
+  margin: 4px 0 0;
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--ink-strong);
+}
+
+.v2-deleting-lead {
+  margin: 0;
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.v2-deleting-lead strong {
+  color: var(--ink-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-deleting-note {
+  margin: 0;
+  max-width: 46ch;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+
+.v2-deleting-domain {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+}

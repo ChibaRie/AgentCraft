@@ -5,6 +5,7 @@ import {
   CheckCircle,
   ListChecks,
   SealCheck,
+  ShieldWarning,
   UserCircle,
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
@@ -13,6 +14,8 @@ import { request } from "../api/client.js";
 import { formatDateTime } from "../lib/datetime.js";
 import PasswordChangeCard from "../components/PasswordChangeCard.jsx";
 import MfaCard from "../components/MfaCard.jsx";
+import SessionsCard from "../components/SessionsCard.jsx";
+import DangerZone from "../components/DangerZone.jsx";
 
 const TASK_STATUS_LABELS = {
   created: "待开始",
@@ -36,6 +39,8 @@ export default function ProfilePage() {
   const [justApplied, setJustApplied] = useState(false);
   const [tasks, setTasks] = useState(null);
   const [taskError, setTaskError] = useState("");
+  // 注销受理后的剩余天数（null = 未受理）：非空时接管整页渲染（FE-T7）
+  const [deletionDaysRemaining, setDeletionDaysRemaining] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,6 +62,31 @@ export default function ProfilePage() {
       cancelled = true;
     };
   }, []);
+
+  // 注销受理后的全页冻结展示态（FE-T7）：接管整页渲染，冻结后续 V2 请求
+  // （V2 本地态已由 DangerZone 清理：csrf 清空 + v2User 置空；V1 工作区会话
+  // 是独立域不受影响——此处须先于一切 displayUser 消费，防 V2-only 用户
+  // v2User=null 后解引用空对象）
+  if (deletionDaysRemaining !== null) {
+    return (
+      <main className="app-main">
+        <section className="v2-deleting-page rise" role="status">
+          <ShieldWarning size={28} weight="fill" aria-hidden="true" />
+          <h1 className="v2-deleting-title">账户注销中</h1>
+          <p className="v2-deleting-lead">
+            账户注销申请已受理，<strong>{deletionDaysRemaining} 天后生效</strong>。
+          </p>
+          <p className="v2-deleting-note">
+            恢复链接已发送至邮箱，宽限期内可凭邮件中的恢复链接撤销注销、
+            恢复账户的正常使用。
+          </p>
+          <p className="v2-deleting-domain">
+            本次注销仅针对新账户体系（V2 账户域）；旧版工作区账户的登录不受影响。
+          </p>
+        </section>
+      </main>
+    );
+  }
 
   async function handleApplyExpert() {
     setIsApplying(true);
@@ -127,12 +157,14 @@ export default function ProfilePage() {
 
           {hasV2Session ? (
             <>
+              <SessionsCard />
               <PasswordChangeCard />
               <MfaCard />
+              <DangerZone onDeletionRequested={setDeletionDaysRemaining} />
             </>
           ) : null}
 
-          <div className="profile-card rise" style={{ "--rise-index": 5 }}>
+          <div className="profile-card rise" style={{ "--rise-index": 6 }}>
             <h2 className="profile-card-title">
               <Briefcase size={16} aria-hidden="true" />
               专家身份
@@ -170,7 +202,7 @@ export default function ProfilePage() {
         </section>
 
         <section aria-label="我的任务">
-          <div className="profile-card rise" style={{ "--rise-index": 6 }}>
+          <div className="profile-card rise" style={{ "--rise-index": 7 }}>
             <h2 className="profile-card-title">
               <ListChecks size={16} aria-hidden="true" />
               我的任务

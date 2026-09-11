@@ -316,6 +316,33 @@ describe("logoutV2 收敛", () => {
   });
 });
 
+describe("clearV2Session 本地清理（FE-T7）", () => {
+  it("零网络请求、零事件派发：清内存 csrf + 置空 v2User，V1 会话不动", async () => {
+    const location = stubLocation("/");
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
+    requestV2.mockResolvedValueOnce(loginOk());
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await act(async () => {
+      await result.current.loginV2("v2@example.com", "secret");
+    });
+    expect(result.current.v2User).toEqual(V2_USER_MAPPED);
+    setCsrfToken.mockClear();
+
+    act(() => {
+      result.current.clearV2Session();
+    });
+
+    expect(result.current.v2User).toBeNull();
+    expect(setCsrfToken).toHaveBeenCalledTimes(1);
+    expect(setCsrfToken).toHaveBeenCalledWith(null);
+    // 清理本身零请求（探测 + 登录共 2 次）；注销受理后的冻结页不被 401 事件打断
+    expect(requestV2).toHaveBeenCalledTimes(2);
+    expect(location.assign).not.toHaveBeenCalled();
+  });
+});
+
 describe("acceptInvitation / refreshV2User（FE-T4）", () => {
   // invitations/accept 信封：{csrf_token}（会话种入）；users/me 信封：user 原始形状
   const PENDING_RAW = { id: "u-9", email: "new@example.com", role: "user", status: "pending" };

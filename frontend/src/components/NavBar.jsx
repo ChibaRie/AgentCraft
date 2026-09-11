@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import {
   CaretDown,
+  DoorOpen,
   Moon,
   Plug,
   SignOut,
@@ -12,6 +13,7 @@ import {
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { displayName } from "../auth/displayName.js";
+import { V2_SESSION_EXPIRED_EVENT } from "../api/v2/client.js";
 import { getEffectiveTheme, toggleTheme } from "../lib/theme.js";
 
 /** 右上角日间/夜间切换：选择持久化（localStorage），未选择时跟随系统。 */
@@ -46,7 +48,7 @@ const TASK_DOMAIN_LINKS = [
 const TASK_DOMAIN_DISABLED_HINT = "任务域尚未接入新登录体系";
 
 function UserMenu() {
-  const { user, v2User, isExpert, logout } = useAuth();
+  const { user, v2User, isExpert, logout, logoutV2 } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef(null);
   const navigate = useNavigate();
@@ -77,6 +79,30 @@ function UserMenu() {
     setIsOpen(false);
     logout();
     navigate("/login");
+  }
+
+  /**
+   * 退出账户会话（FE-T7，V2 轨登出；logout 导航收敛规则）：
+   * - 200 路径：logoutV2 已清 csrf + v2User → 本处理器跳 /login；
+   * - 401 路径（死 cookie 重放）：requestV2 已派发会话过期事件，AuthProvider
+   *   订阅已跳 /login?v2=1——本处理器不再二次跳转、不展示错误（等价收敛）。
+   * 以「await 窗口内事件监听」区分两条路径：窗口内命中事件即让位给事件收口。
+   */
+  async function handleV2Logout() {
+    setIsOpen(false);
+    let sessionExpired = false;
+    const markExpired = () => {
+      sessionExpired = true;
+    };
+    window.addEventListener(V2_SESSION_EXPIRED_EVENT, markExpired, { once: true });
+    try {
+      await logoutV2();
+    } finally {
+      window.removeEventListener(V2_SESSION_EXPIRED_EVENT, markExpired);
+    }
+    if (!sessionExpired) {
+      navigate("/login");
+    }
   }
 
   // 双轨渲染源（E12）：V2 会话优先展示；无 username 时 displayName 取 email 前缀
@@ -154,6 +180,17 @@ function UserMenu() {
             <Plug size={16} aria-hidden="true" />
             Provider 设置
           </Link>
+        )}
+        {v2User && (
+          <button
+            type="button"
+            role="menuitem"
+            className="usermenu-item"
+            onClick={handleV2Logout}
+          >
+            <DoorOpen size={16} aria-hidden="true" />
+            退出账户会话
+          </button>
         )}
         <button type="button" role="menuitem" className="usermenu-item" onClick={handleLogout}>
           <SignOut size={16} aria-hidden="true" />
