@@ -11,6 +11,7 @@ import {
   Wrench,
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
+import { displayName } from "../auth/displayName.js";
 import { getEffectiveTheme, toggleTheme } from "../lib/theme.js";
 
 /** 右上角日间/夜间切换：选择持久化（localStorage），未选择时跟随系统。 */
@@ -35,8 +36,17 @@ function ThemeToggle() {
   );
 }
 
+/** V1 任务域入口（E1 降级可见）：无 V1 会话时禁用（V2 会话不解锁任务域）。 */
+const TASK_DOMAIN_LINKS = [
+  { to: "/discover", label: "专家中心" },
+  { to: "/tasks", label: "任务" },
+  { to: "/skills", label: "Skill / MCP 管理" },
+];
+
+const TASK_DOMAIN_DISABLED_HINT = "任务域尚未接入新登录体系";
+
 function UserMenu() {
-  const { user, isExpert, logout } = useAuth();
+  const { user, v2User, isExpert, logout } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef(null);
   const navigate = useNavigate();
@@ -69,6 +79,11 @@ function UserMenu() {
     navigate("/login");
   }
 
+  // 双轨渲染源（E12）：V2 会话优先展示；无 username 时 displayName 取 email 前缀
+  const displayUser = v2User ?? user;
+  const name = displayName(displayUser);
+  const isDisplayExpert = displayUser?.role === "expert";
+
   return (
     <div className="usermenu" ref={menuRef}>
       <button
@@ -79,9 +94,9 @@ function UserMenu() {
         onClick={() => setIsOpen((open) => !open)}
       >
         <span className="usermenu-avatar" aria-hidden="true">
-          {user.username.slice(0, 1).toUpperCase()}
+          {name.slice(0, 1).toUpperCase()}
         </span>
-        <span className="usermenu-name-text">{user.username}</span>
+        <span className="usermenu-name-text">{name}</span>
         <CaretDown
           size={12}
           weight="bold"
@@ -93,10 +108,10 @@ function UserMenu() {
       <div className="usermenu-panel" role="menu" hidden={!isOpen}>
         <div className="usermenu-header">
           <div className="usermenu-name">
-            {user.username}
-            {isExpert && <span className="role-badge is-expert">专家</span>}
+            {name}
+            {isDisplayExpert && <span className="role-badge is-expert">专家</span>}
           </div>
-          <div className="usermenu-email">{user.email}</div>
+          <div className="usermenu-email">{displayUser.email}</div>
         </div>
         <Link
           role="menuitem"
@@ -127,16 +142,18 @@ function UserMenu() {
               <Wrench size={16} aria-hidden="true" />
               Skill 管理
             </Link>
-            <Link
-              role="menuitem"
-              className="usermenu-item"
-              to="/settings/providers"
-              onClick={() => setIsOpen(false)}
-            >
-              <Plug size={16} aria-hidden="true" />
-              Provider 设置
-            </Link>
           </>
+        )}
+        {v2User && (
+          <Link
+            role="menuitem"
+            className="usermenu-item"
+            to="/settings/providers"
+            onClick={() => setIsOpen(false)}
+          >
+            <Plug size={16} aria-hidden="true" />
+            Provider 设置
+          </Link>
         )}
         <button type="button" role="menuitem" className="usermenu-item" onClick={handleLogout}>
           <SignOut size={16} aria-hidden="true" />
@@ -148,7 +165,15 @@ function UserMenu() {
 }
 
 export default function NavBar() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user, v2User } = useAuth();
+  const hasAnySession = isAuthenticated || Boolean(v2User);
+  const hasV1Session = Boolean(user);
+
+  // E12 任务域入口降级：无 V1 会话时禁用（aria-disabled + 提示 + pointer-events:none），
+  // onClick 兜底拦截键盘激活
+  function handleBlockedNav(event) {
+    event.preventDefault();
+  }
 
   return (
     <header className="navbar">
@@ -161,19 +186,23 @@ export default function NavBar() {
           <NavLink to="/" end className="navbar-link">
             首页
           </NavLink>
-          <NavLink to="/discover" className="navbar-link">
-            专家中心
-          </NavLink>
-          <NavLink to="/tasks" className="navbar-link">
-            任务
-          </NavLink>
-          <NavLink to="/skills" className="navbar-link">
-            Skill / MCP 管理
-          </NavLink>
+          {TASK_DOMAIN_LINKS.map(({ to, label }) => (
+            <NavLink
+              key={to}
+              to={to}
+              className="navbar-link"
+              aria-disabled={hasV1Session ? undefined : true}
+              title={hasV1Session ? undefined : TASK_DOMAIN_DISABLED_HINT}
+              style={hasV1Session ? undefined : { pointerEvents: "none" }}
+              onClick={hasV1Session ? undefined : handleBlockedNav}
+            >
+              {label}
+            </NavLink>
+          ))}
         </nav>
         <div className="navbar-actions">
           <ThemeToggle />
-          {isAuthenticated ? (
+          {hasAnySession ? (
             <UserMenu />
           ) : (
             <Link to="/login" className="btn btn-primary navbar-login">

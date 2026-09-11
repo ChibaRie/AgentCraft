@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, ChatCenteredDots, Plus, Wrench } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
+import { displayName } from "../auth/displayName.js";
 import { request } from "../api/client.js";
 import { CATEGORY_LABELS, CATEGORY_OPTIONS } from "../lib/categories.js";
 
@@ -90,7 +91,9 @@ function ExpertCard({ expert, index }) {
 /** P02 首页（仿智能体中心的信息架构）：问候 + 工作台速览 + 最近任务 +
  *  精选专家（分类筛选）。数据全部来自既有公开/本人接口。 */
 export default function HomePage() {
-  const { user, isExpert } = useAuth();
+  const { user, v2User, isExpert } = useAuth();
+  // 双轨身份源（E12）：V1 会话优先，V2-only 用户回退
+  const displayUser = user ?? v2User;
   const [recentTasks, setRecentTasks] = useState(null);
   const [stats, setStats] = useState({ runningTasks: "—", publishedExperts: "—", mySkills: "—" });
   const [experts, setExperts] = useState([]);
@@ -168,7 +171,7 @@ export default function HomePage() {
         <div className="home-hero-copy">
           <p className="home-hero-eyebrow">AgentCraft 工作台</p>
           <h1 className="home-hero-title">
-            {greeting()}，{user.username}。
+            {greeting()}，{displayName(displayUser)}。
           </h1>
           <p className="home-hero-sub">
             把领域的经验交给一位可靠的专家——人设与 Skill 由你装配，

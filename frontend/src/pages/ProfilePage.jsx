@@ -8,6 +8,7 @@ import {
   UserCircle,
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
+import { displayName } from "../auth/displayName.js";
 import { request } from "../api/client.js";
 import { formatDateTime } from "../lib/datetime.js";
 
@@ -19,7 +20,10 @@ const TASK_STATUS_LABELS = {
 };
 
 export default function ProfilePage() {
-  const { user, isExpert, applyExpert } = useAuth();
+  const { user, v2User, isExpert, applyExpert } = useAuth();
+  // 双轨身份源（E12）：V1 会话优先，V2-only 用户回退
+  const displayUser = user ?? v2User;
+  const name = displayName(displayUser);
   const [isApplying, setIsApplying] = useState(false);
   const [applyError, setApplyError] = useState("");
   const [justApplied, setJustApplied] = useState(false);
@@ -76,11 +80,11 @@ export default function ProfilePage() {
             </h2>
             <div className="profile-identity">
               <span className="profile-avatar" aria-hidden="true">
-                {user.username.slice(0, 1).toUpperCase()}
+                {name.slice(0, 1).toUpperCase()}
               </span>
               <div>
                 <div className="profile-name-row">
-                  <span className="profile-name">{user.username}</span>
+                  <span className="profile-name">{name}</span>
                   {isExpert ? (
                     <span className="role-badge is-expert">
                       <SealCheck size={12} weight="fill" aria-hidden="true" />
@@ -90,13 +94,13 @@ export default function ProfilePage() {
                     <span className="role-badge">普通用户</span>
                   )}
                 </div>
-                <div className="profile-email">{user.email}</div>
+                <div className="profile-email">{displayUser.email}</div>
               </div>
             </div>
             <div className="profile-meta">
               <div className="profile-meta-row">
                 <span className="profile-meta-key">用户 ID</span>
-                <span className="profile-meta-value">{user.id}</span>
+                <span className="profile-meta-value">{displayUser.id}</span>
               </div>
               <div className="profile-meta-row">
                 <span className="profile-meta-key">角色</span>
@@ -104,7 +108,10 @@ export default function ProfilePage() {
               </div>
               <div className="profile-meta-row">
                 <span className="profile-meta-key">注册时间</span>
-                <span className="profile-meta-value">{formatDateTime(user.created_at)}</span>
+                {/* V2 user 形状无 created_at——显示「—」（形状缺陷兜底） */}
+                <span className="profile-meta-value">
+                  {displayUser.created_at ? formatDateTime(displayUser.created_at) : "—"}
+                </span>
               </div>
             </div>
           </div>
