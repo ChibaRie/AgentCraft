@@ -316,6 +316,116 @@ describe("logoutV2 收敛", () => {
   });
 });
 
+describe("acceptInvitation / refreshV2User（FE-T4）", () => {
+  // invitations/accept 信封：{csrf_token}（会话种入）；users/me 信封：user 原始形状
+  const PENDING_RAW = { id: "u-9", email: "new@example.com", role: "user", status: "pending" };
+
+  function acceptOk(data = { csrf_token: "csrf-tok" }) {
+    return { status: 200, data, headers: new Headers() };
+  }
+
+  it("accept 200 + 探测 200：带 Idempotency-Key 提交、存 csrf、探测置位 v2User(pending)", async () => {
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 启动探测：匿名
+    requestV2.mockResolvedValueOnce(acceptOk());
+    requestV2.mockResolvedValueOnce({ status: 200, data: PENDING_RAW, headers: new Headers() });
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+
+    let outcome;
+    await act(async () => {
+      outcome = await result.current.acceptInvitation("new@example.com", "secret", "tok-1");
+    });
+
+    const [acceptPath, acceptOptions] = requestV2.mock.calls[1];
+    expect(acceptPath).toBe(`${V2_AUTH}/invitations/accept`);
+    expect(acceptOptions.method).toBe("POST");
+    expect(acceptOptions.body).toEqual({
+      invitation_token: "tok-1",
+      email: "new@example.com",
+      password: "secret",
+    });
+    expect(acceptOptions.idempotencyKey).toBeTruthy();
+    expect(acceptOptions.idempotencyKey.length).toBeLessThanOrEqual(100);
+    expect(setCsrfToken).toHaveBeenCalledWith("csrf-tok");
+    expect(requestV2).toHaveBeenLastCalledWith(`${V2_USERS}/me`, { silent: true });
+    expect(outcome).toEqual({ sessionConfirmed: true });
+    expect(result.current.v2User).toEqual(PENDING_RAW);
+  });
+
+  it("accept 200 + 探测 401（重放/竞态会话未落）→ sessionConfirmed=false、不置 v2User、csrf 已存", async () => {
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
+    requestV2.mockResolvedValueOnce(acceptOk());
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+
+    let outcome;
+    await act(async () => {
+      outcome = await result.current.acceptInvitation("new@example.com", "secret", "tok-1");
+    });
+
+    expect(outcome).toEqual({ sessionConfirmed: false });
+    expect(result.current.v2User).toBeNull();
+    expect(setCsrfToken).toHaveBeenCalledWith("csrf-tok");
+  });
+
+  it("accept 409 INVITATION_INVALID → 原样抛 V2ApiError、不发探测、不存 csrf", async () => {
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
+    requestV2.mockRejectedValueOnce(
+      new V2ApiError("INVITATION_INVALID", "邀请链接无效或已失效", 409)
+    );
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+
+    let caught;
+    await act(async () => {
+      try {
+        await result.current.acceptInvitation("new@example.com", "secret", "tok-1");
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(caught).toBeInstanceOf(V2ApiError);
+    expect(caught.code).toBe("INVITATION_INVALID");
+    expect(caught.status).toBe(409);
+    expect(setCsrfToken).not.toHaveBeenCalled();
+    // 仅启动探测 + accept 两次调用，无第三个 users/me
+    expect(requestV2).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshV2User：探测 200 → 置位（pending→active）；探测失败 → 清空并返回 null", async () => {
+    requestV2.mockResolvedValueOnce({ status: 200, data: PENDING_RAW, headers: new Headers() }); // 启动探测：pending 会话
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    expect(result.current.v2User.status).toBe("pending");
+
+    requestV2.mockResolvedValueOnce({
+      status: 200,
+      data: { ...PENDING_RAW, status: "active" },
+      headers: new Headers(),
+    });
+    let refreshed;
+    await act(async () => {
+      refreshed = await result.current.refreshV2User();
+    });
+    expect(refreshed).toEqual({ ...PENDING_RAW, status: "active" });
+    expect(result.current.v2User.status).toBe("active");
+
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
+    let second;
+    await act(async () => {
+      second = await result.current.refreshV2User();
+    });
+    expect(second).toBeNull();
+    expect(result.current.v2User).toBeNull();
+  });
+});
+
 describe("displayName", () => {
   // 用例 ⑦（四例）
   it("V1 user：username 优先", () => {

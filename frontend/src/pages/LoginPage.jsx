@@ -1,86 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { Check, Globe, UploadSimple } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
+import AuthBrandPanel from "../components/AuthBrandPanel.jsx";
+import FormField from "../components/FormField.jsx";
 import OtpInput from "../components/OtpInput.jsx";
-
-const BRAND_POINTS = [
-  { icon: Globe, label: "发布专家，沉淀可复用的人设与方法论" },
-  { icon: UploadSimple, label: "召唤专家，挂载项目目录与任务文件" },
-  { icon: Check, label: "Skill 注入上下文，任务能力随建随用" },
-];
-
-function Field({ label, error, children }) {
-  return (
-    <div className="field">
-      <label className="field-label">
-        {label}
-        {children}
-      </label>
-      {/* 仅在有错时渲染 role=alert：空告警对读屏器是噪音（原 :empty 仅靠 CSS 兜底） */}
-      {error ? (
-        <div className="field-error" role="alert">
-          {error}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/** 品牌侧（V1/V2/提示态三态共用，纯展示） */
-function BrandPanel() {
-  return (
-    <section className="auth-brand rise" aria-label="AgentCraft 产品介绍">
-      <div className="auth-brand-eyebrow rise" style={{ "--rise-index": 0 }}>
-        <span className="navbar-mark" aria-hidden="true" />
-        AgentCraft
-      </div>
-      <div className="auth-brand-body rise" style={{ "--rise-index": 1 }}>
-        <h1 className="auth-brand-title">
-          把领域的经验，
-          <br />
-          交给一个可靠的专家。
-        </h1>
-        <p className="auth-brand-sub">
-          AgentCraft 是运行在你本机的 AI 专家工作台：专家由你定义，Skill 与工具由你装配，
-          任务在你授权的项目目录里完成。
-        </p>
-      </div>
-      <div className="auth-brand-points rise" style={{ "--rise-index": 2 }}>
-        {BRAND_POINTS.map((point) => (
-          <div className="auth-brand-point" key={point.label}>
-            <point.icon size={15} aria-hidden="true" />
-            <span>
-              <strong>{point.label.split("，")[0]}</strong>，{point.label.split("，")[1]}
-            </span>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-/** 429 Retry-After 倒计时（秒）：start(seconds) 置初值，每秒递减，归零自动解除禁用。 */
-function useRetryAfter() {
-  const [secondsLeft, setSecondsLeft] = useState(0);
-
-  useEffect(() => {
-    if (secondsLeft <= 0) {
-      return undefined;
-    }
-    const timer = window.setInterval(() => {
-      setSecondsLeft((current) => Math.max(0, current - 1));
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [secondsLeft]);
-
-  const start = useCallback((seconds) => {
-    const parsed = Number(seconds);
-    setSecondsLeft(Number.isFinite(parsed) && parsed > 0 ? Math.ceil(parsed) : 0);
-  }, []);
-
-  return { retryAfter: secondsLeft, start };
-}
+import { useRetryAfter } from "../hooks/useRetryAfter.js";
 
 function RetryHint({ retryAfter }) {
   if (retryAfter <= 0) {
@@ -281,7 +205,7 @@ export default function LoginPage() {
   if (v2Stage === "blocked") {
     return (
       <main className="auth-page">
-        <BrandPanel />
+        <AuthBrandPanel />
         <section className="auth-panel">
           <div className="auth-card rise" style={{ "--rise-index": 1 }} role="alert">
             <h2 className="auth-card-title">账户当前不可用</h2>
@@ -303,7 +227,7 @@ export default function LoginPage() {
 
   return (
     <main className="auth-page">
-      <BrandPanel />
+      <AuthBrandPanel />
 
       <section className="auth-panel">
         <div className="auth-card rise" style={{ "--rise-index": 1 }}>
@@ -339,7 +263,7 @@ export default function LoginPage() {
                   <div className="form-alert" role="alert" hidden={!v1Alert}>
                     {v1Alert}
                   </div>
-                  <Field label="用户名或邮箱" error={v1Errors.login}>
+                  <FormField label="用户名或邮箱" error={v1Errors.login}>
                     <input
                       className="field-input"
                       name="login"
@@ -348,8 +272,8 @@ export default function LoginPage() {
                       value={v1Fields.login}
                       onChange={(event) => setV1Field("login", event.target.value)}
                     />
-                  </Field>
-                  <Field label="密码" error={v1Errors.password}>
+                  </FormField>
+                  <FormField label="密码" error={v1Errors.password}>
                     <input
                       className="field-input"
                       name="password"
@@ -359,7 +283,7 @@ export default function LoginPage() {
                       value={v1Fields.password}
                       onChange={(event) => setV1Field("password", event.target.value)}
                     />
-                  </Field>
+                  </FormField>
                   <div className="auth-form-footer">
                     <button
                       type="submit"
@@ -412,7 +336,7 @@ export default function LoginPage() {
                   <div className="form-alert" role="alert" hidden={!v2Alert}>
                     {v2Alert}
                   </div>
-                  <Field label="邮箱" error={v2Errors.email}>
+                  <FormField label="邮箱" error={v2Errors.email}>
                     <input
                       className="field-input"
                       name="email"
@@ -422,8 +346,8 @@ export default function LoginPage() {
                       value={v2Fields.email}
                       onChange={(event) => setV2Field("email", event.target.value)}
                     />
-                  </Field>
-                  <Field label="密码" error={v2Errors.password}>
+                  </FormField>
+                  <FormField label="密码" error={v2Errors.password}>
                     <input
                       className="field-input"
                       name="password"
@@ -433,7 +357,7 @@ export default function LoginPage() {
                       value={v2Fields.password}
                       onChange={(event) => setV2Field("password", event.target.value)}
                     />
-                  </Field>
+                  </FormField>
                   <div className="auth-form-footer">
                     <button
                       type="submit"

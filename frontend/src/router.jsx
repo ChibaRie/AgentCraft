@@ -1,11 +1,14 @@
 import { Navigate, Outlet, Route, Routes, useParams } from "react-router-dom";
 import NavBar from "./components/NavBar.jsx";
+import PendingVerificationBanner from "./components/PendingVerificationBanner.jsx";
 import RequireAuth from "./components/RequireAuth.jsx";
+import EmailVerificationPage from "./pages/EmailVerificationPage.jsx";
 import ExpertCenterPage from "./pages/ExpertCenterPage.jsx";
 import ExpertDetailPage from "./pages/ExpertDetailPage.jsx";
 import ExpertEditPage from "./pages/ExpertEditPage.jsx";
 import HomePage from "./pages/HomePage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
+import InvitationAcceptPage from "./pages/InvitationAcceptPage.jsx";
 import MyExpertsPage from "./pages/MyExpertsPage.jsx";
 import ProfilePage from "./pages/ProfilePage.jsx";
 import SkillManagePage from "./pages/SkillManagePage.jsx";
@@ -29,11 +32,12 @@ function TaskChatRoute() {
   return <TaskChatPage key={id} />;
 }
 
-/** 应用壳：导航栏 + 页面容器。/login 独立于壳外（P01 全屏构图）。 */
+/** 应用壳：导航栏 + pending 横幅 + 页面容器。/login 等认证面独立于壳外（P01 全屏构图）。 */
 function AppShell() {
   return (
     <>
       <NavBar />
+      <PendingVerificationBanner />
       <Outlet />
     </>
   );
@@ -43,6 +47,11 @@ export default function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      {/* 令牌驱动公开流（E11，FE-T4）：一律不挂守卫——邀请接受会种新 V2 会话
+          （存量 V1 用户点邀请链接是合法路径）、pending 用户会话有效（挂 guest 门
+          会令验证链接永远弹回）；独立于壳外，同 /login 全屏构图。 */}
+      <Route path="/invitations/accept" element={<InvitationAcceptPage />} />
+      <Route path="/email-verification" element={<EmailVerificationPage />} />
       <Route element={<AppShell />}>
         <Route
           path="/"

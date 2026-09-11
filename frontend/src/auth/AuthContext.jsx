@@ -1,6 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { getToken, request, setToken } from "../api/client.js";
-import { V2_SESSION_EXPIRED_EVENT, requestV2, setCsrfToken } from "../api/v2/client.js";
+import {
+  V2_SESSION_EXPIRED_EVENT,
+  newIdempotencyKey,
+  requestV2,
+  setCsrfToken,
+} from "../api/v2/client.js";
 import { V2_AUTH, V2_USERS } from "../api/v2/routes.js";
 
 const AuthContext = createContext(null);
@@ -209,6 +214,50 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  /**
+   * V2 邀请接受（FE-T4）：提交 accept（幂等键内部生成，义务端点）→ 存 csrf
+   * （响应体 data.csrf_token）→ silent 探测 users/me 确认会话落定（重放请求
+   * 无 Set-Cookie 的陷阱靠探测识别）。探测 200 → 置位 v2User（pending，pending
+   * 横幅依赖）并返回 {sessionConfirmed: true}；探测任何失败（401 重放/竞态、
+   * 网络）→ 返回 {sessionConfirmed: false}——调用方渲染引导文案但不得渲染任何
+   * 调用认证端点的按钮。accept 本身失败（409/429 等）原样抛 V2ApiError 由页面分流。
+   */
+  const acceptInvitation = useCallback(async (email, password, invitationToken) => {
+    const result = await requestV2(`${V2_AUTH}/invitations/accept`, {
+      method: "POST",
+      body: { invitation_token: invitationToken, email, password },
+      idempotencyKey: newIdempotencyKey(),
+    });
+    if (result.data?.csrf_token) {
+      setCsrfToken(result.data.csrf_token);
+    }
+    try {
+      const probe = await requestV2(`${V2_USERS}/me`, { silent: true });
+      const user = mapV2User(probe.data);
+      setV2User(user);
+      return { sessionConfirmed: Boolean(user) };
+    } catch {
+      return { sessionConfirmed: false };
+    }
+  }, []);
+
+  /**
+   * V2 会话刷新（FE-T4）：silent 探测 users/me 并置位/清除 v2User。
+   * 邮箱验证成功后 pending→active 的状态翻转依赖此刷新；探测失败（401 会话
+   * 失效、网络异常）与启动探测 catch-all 同语义——降级未登录。
+   */
+  const refreshV2User = useCallback(async () => {
+    try {
+      const probe = await requestV2(`${V2_USERS}/me`, { silent: true });
+      const user = mapV2User(probe.data);
+      setV2User(user);
+      return user;
+    } catch {
+      setV2User(null);
+      return null;
+    }
+  }, []);
+
   const value = useMemo(
     () => ({
       user,
@@ -226,6 +275,8 @@ export function AuthProvider({ children }) {
       loginV2,
       loginV2Mfa,
       logoutV2,
+      acceptInvitation,
+      refreshV2User,
     }),
     [
       user,
@@ -239,6 +290,8 @@ export function AuthProvider({ children }) {
       loginV2,
       loginV2Mfa,
       logoutV2,
+      acceptInvitation,
+      refreshV2User,
     ]
   );
 

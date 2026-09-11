@@ -40,6 +40,19 @@ export const V2_IDEMPOTENCY_REQUIRED = [
   /^\/api\/v2\/account\/deletion\/cancel$/,
 ];
 
+/**
+ * 生成幂等键（UUID）。crypto.randomUUID 不可用时降级时间戳+双随机串，
+ * 满足后端 ≤100 字符约束。义务端点（V2_IDEMPOTENCY_REQUIRED）调用方按
+ * 语义取用：用户触发的提交在提交时生成；挂载自动提交在 useRef 初始化器
+ * 生成（StrictMode 双执行下保持同键）。
+ */
+export function newIdempotencyKey() {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `idem-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 let memoryCsrfToken = null;
 
 /** 设置内存态 CSRF 令牌；null/空 = 清除（登录后种入、401 后清除） */

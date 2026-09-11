@@ -1,8 +1,7 @@
 /* ============================================================
-   V2 认证面增量样式（FE-T3）
-   仅登录页双轨新增原语：.v2-tabs 双 Tab / .otp-cell OTP 分格 /
-   .v2-retry-hint 429 倒计时提示。设计令牌全部沿用 global.css
-   （灰阶/圆角/阴影/运动节奏零新取值）。
+   V2 认证面增量样式（FE-T3 双 Tab / OTP / 429 提示；FE-T4 pending 横幅 /
+   落地页补充原语）。设计令牌全部沿用 global.css（灰阶/圆角/阴影/运动
+   节奏零新取值）。
    ============================================================ */
 
 /* ---------- 双 Tab（沿用 .auth-tabs 的滑动墨块语言，键位 v1|v2） ---------- */
@@ -121,4 +120,78 @@
   color: var(--text-2);
   text-align: center;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---------- pending 全局横幅（AppShell：NavBar 之下） ---------- */
+
+.v2-pending-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 9px 24px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface-2);
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+
+.v2-pending-banner-title {
+  color: var(--ink-strong);
+  font-weight: 600;
+}
+
+.v2-pending-banner-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-strong);
+}
+
+/* 呼吸点：opacity 单属性运动；reduced-motion 静止（与 global.css 动效纪律一致） */
+@media (prefers-reduced-motion: no-preference) {
+  .v2-pending-banner-dot {
+    animation: v2-pending-pulse 2.4s var(--ease-out) infinite;
+  }
+}
+
+@keyframes v2-pending-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-pending-banner-dot {
+    animation: none;
+  }
+}
+
+.v2-pending-banner-resend {
+  margin-left: auto;
+  padding: 4px 12px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.v2-pending-banner-note {
+  color: var(--ink-strong);
+}
+
+.v2-pending-banner-error {
+  color: var(--ink-strong);
+  font-weight: 600;
+}
+
+/* ---------- 邀请接受页：只读令牌展示 ---------- */
+
+.v2-readonly-input {
+  color: var(--text-2);
+  background: var(--surface-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
