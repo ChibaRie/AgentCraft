@@ -2,6 +2,7 @@ import { Navigate, Outlet, Route, Routes, useParams } from "react-router-dom";
 import NavBar from "./components/NavBar.jsx";
 import PendingVerificationBanner from "./components/PendingVerificationBanner.jsx";
 import RequireAuth from "./components/RequireAuth.jsx";
+import DeletionCancelPage from "./pages/DeletionCancelPage.jsx";
 import EmailVerificationPage from "./pages/EmailVerificationPage.jsx";
 import ExpertCenterPage from "./pages/ExpertCenterPage.jsx";
 import ExpertDetailPage from "./pages/ExpertDetailPage.jsx";
@@ -10,6 +11,8 @@ import HomePage from "./pages/HomePage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import InvitationAcceptPage from "./pages/InvitationAcceptPage.jsx";
 import MyExpertsPage from "./pages/MyExpertsPage.jsx";
+import PasswordResetConfirmPage from "./pages/PasswordResetConfirmPage.jsx";
+import PasswordResetRequestPage from "./pages/PasswordResetRequestPage.jsx";
 import ProfilePage from "./pages/ProfilePage.jsx";
 import SkillManagePage from "./pages/SkillManagePage.jsx";
 // 注意：此 import 用 ./ 形式——../ 形式在当前 rollup 解析器上对（且仅对）此文件失败
@@ -52,6 +55,12 @@ export default function AppRoutes() {
           会令验证链接永远弹回）；独立于壳外，同 /login 全屏构图。 */}
       <Route path="/invitations/accept" element={<InvitationAcceptPage />} />
       <Route path="/email-verification" element={<EmailVerificationPage />} />
+      {/* 令牌驱动公开流（E11，FE-T5）：一律不挂守卫——重置/撤销用户此时匿名或
+          会话已失效（重置 confirm 后全会话失效、注销 deleting 全会话失效），挂门
+          必弹回；独立于壳外，同 /login 全屏构图。 */}
+      <Route path="/password-reset" element={<PasswordResetRequestPage />} />
+      <Route path="/password-reset/confirm" element={<PasswordResetConfirmPage />} />
+      <Route path="/account/deletion/cancel" element={<DeletionCancelPage />} />
       <Route element={<AppShell />}>
         <Route
           path="/"

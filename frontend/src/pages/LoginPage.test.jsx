@@ -109,6 +109,15 @@ describe("双 Tab 与默认激活", () => {
     expect(screen.getByLabelText("用户名或邮箱").value).toBe("");
     expect(screen.getByLabelText("密码").value).toBe("");
   });
+
+  it("忘记密码链接：仅账户登录（V2）Tab 展示，指向 /password-reset（V1 工作区无重置流）", () => {
+    renderLogin("/login?v2=1");
+    const link = screen.getByRole("link", { name: "忘记密码？" });
+    expect(link.getAttribute("href")).toBe("/password-reset");
+
+    fireEvent.click(screen.getByRole("button", { name: "工作区登录" }));
+    expect(screen.queryByRole("link", { name: "忘记密码？" })).toBeNull();
+  });
 });
 
 describe("V1 工作区登录（逻辑原样搬入）", () => {

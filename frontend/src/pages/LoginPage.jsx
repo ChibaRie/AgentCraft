@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext.jsx";
 import AuthBrandPanel from "../components/AuthBrandPanel.jsx";
 import FormField from "../components/FormField.jsx";
@@ -367,6 +367,13 @@ export default function LoginPage() {
                       {v2Submitting ? "登录中…" : "登录"}
                     </button>
                     <RetryHint retryAfter={retryAfter} />
+                    {/* 忘记密码走 V2 重置流（FE-T5）；仅 V2 Tab——V1 工作区账户
+                        为独立双库账户，无重置端点，放 V1 Tab 会误导 */}
+                    <p className="auth-switch-hint">
+                      <Link className="auth-switch-link" to="/password-reset">
+                        忘记密码？
+                      </Link>
+                    </p>
                   </div>
                 </form>
               </>

@@ -68,6 +68,22 @@ describe("令牌驱动公开流不挂守卫（E11）", () => {
     await waitFor(() => expect(screen.getByText("邮箱验证成功")).toBeTruthy());
     expect(screen.queryByLabelText("邀请令牌")).toBeNull();
   });
+
+  it("匿名访问 /password-reset → 重置请求表单渲染，不弹回", () => {
+    renderAt("/password-reset");
+    expect(screen.getByLabelText("邮箱")).toBeTruthy();
+    expect(screen.queryByLabelText("用户名或邮箱")).toBeNull();
+  });
+
+  it("匿名访问 /password-reset/confirm?token= → 重置表单渲染，不弹回", () => {
+    renderAt("/password-reset/confirm?token=tok-1");
+    expect(screen.getByLabelText("新密码")).toBeTruthy();
+  });
+
+  it("匿名访问 /account/deletion/cancel?token= → 撤销注销表单渲染，不弹回", () => {
+    renderAt("/account/deletion/cancel?token=tok-1");
+    expect(screen.getByLabelText("登录密码")).toBeTruthy();
+  });
 });
 
 describe("pending 横幅挂载于应用壳（NavBar 之下）", () => {
