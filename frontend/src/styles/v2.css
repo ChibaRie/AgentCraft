@@ -195,3 +195,91 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ---------- 个人中心安全区块（T6）：两步验证密钥复制块 ---------- */
+
+.profile-security-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.profile-security-actions {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+
+/* 已启用状态行（与描述文案分开：exact 文本节点供状态辨认） */
+.profile-security-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-strong);
+}
+
+/* 卡内纵向节奏：状态行→描述、描述→操作区（setup 视图由 form grid 统一走 gap） */
+.profile-security-status + .profile-expert-desc {
+  margin-top: 6px;
+}
+
+.profile-expert-desc + .profile-security-actions {
+  margin-top: 16px;
+}
+
+.v2-secret-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+}
+
+.v2-secret-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.v2-secret-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+/* base32 全文 / otpauth 链接等宽展示：break-all 允许长串换行；
+   user-select: all 点击即整段选中（配合复制按钮的人工兜底路径） */
+.v2-secret-text {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+  word-break: break-all;
+  white-space: pre-wrap;
+  user-select: all;
+}
+
+.v2-secret-copy {
+  flex: none;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-strong);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.v2-secret-copy:hover {
+  background: var(--surface-2);
+}

@@ -11,6 +11,8 @@ import { useAuth } from "../auth/AuthContext.jsx";
 import { displayName } from "../auth/displayName.js";
 import { request } from "../api/client.js";
 import { formatDateTime } from "../lib/datetime.js";
+import PasswordChangeCard from "../components/PasswordChangeCard.jsx";
+import MfaCard from "../components/MfaCard.jsx";
 
 const TASK_STATUS_LABELS = {
   created: "待开始",
@@ -24,6 +26,11 @@ export default function ProfilePage() {
   // 双轨身份源（E12）：V1 会话优先，V2-only 用户回退
   const displayUser = user ?? v2User;
   const name = displayName(displayUser);
+  // 角色渲染源 = displayUser 实际 role（T2 账本 minor 顺手修：V2 admin 曾显示 "user"）
+  const displayRole = displayUser?.role;
+  // 安全区块为 V2 会话语义（password-change / mfa/* 均走 cookie 会话）：
+  // 仅在存在 V2 会话时渲染，V1-only 用户不暴露必 401 的操作面
+  const hasV2Session = Boolean(v2User);
   const [isApplying, setIsApplying] = useState(false);
   const [applyError, setApplyError] = useState("");
   const [justApplied, setJustApplied] = useState(false);
@@ -72,7 +79,7 @@ export default function ProfilePage() {
       </header>
 
       <div className="profile-grid">
-        <section aria-label="账号信息">
+        <section aria-label="账号与安全">
           <div className="profile-card rise" style={{ "--rise-index": 1 }}>
             <h2 className="profile-card-title">
               <UserCircle size={16} aria-hidden="true" />
@@ -85,11 +92,13 @@ export default function ProfilePage() {
               <div>
                 <div className="profile-name-row">
                   <span className="profile-name">{name}</span>
-                  {isExpert ? (
+                  {displayRole === "expert" ? (
                     <span className="role-badge is-expert">
                       <SealCheck size={12} weight="fill" aria-hidden="true" />
                       专家
                     </span>
+                  ) : displayRole === "admin" ? (
+                    <span className="role-badge">管理员</span>
                   ) : (
                     <span className="role-badge">普通用户</span>
                   )}
@@ -104,7 +113,7 @@ export default function ProfilePage() {
               </div>
               <div className="profile-meta-row">
                 <span className="profile-meta-key">角色</span>
-                <span className="profile-meta-value">{isExpert ? "expert" : "user"}</span>
+                <span className="profile-meta-value">{displayRole ?? "user"}</span>
               </div>
               <div className="profile-meta-row">
                 <span className="profile-meta-key">注册时间</span>
@@ -116,7 +125,14 @@ export default function ProfilePage() {
             </div>
           </div>
 
-          <div className="profile-card rise" style={{ "--rise-index": 2 }}>
+          {hasV2Session ? (
+            <>
+              <PasswordChangeCard />
+              <MfaCard />
+            </>
+          ) : null}
+
+          <div className="profile-card rise" style={{ "--rise-index": 5 }}>
             <h2 className="profile-card-title">
               <Briefcase size={16} aria-hidden="true" />
               专家身份
@@ -154,7 +170,7 @@ export default function ProfilePage() {
         </section>
 
         <section aria-label="我的任务">
-          <div className="profile-card rise" style={{ "--rise-index": 3 }}>
+          <div className="profile-card rise" style={{ "--rise-index": 6 }}>
             <h2 className="profile-card-title">
               <ListChecks size={16} aria-hidden="true" />
               我的任务
