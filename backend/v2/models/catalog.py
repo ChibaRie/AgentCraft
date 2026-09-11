@@ -83,6 +83,15 @@ class UserProvider(TimestampMixin, Base):
             unique=True,
             postgresql_where=text("is_default = true"),
         ),
+        # 0004：活跃条目部分唯一索引（裁决 D4）——模型/迁移双保险
+        Index(
+            "uq_user_providers_active_entry",
+            "user_id",
+            "catalog_id",
+            "model_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
     )
     id: Mapped[_uuid.UUID] = pk_uuid()
     user_id: Mapped[_uuid.UUID] = mapped_column(
