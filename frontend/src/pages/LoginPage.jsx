@@ -1,41 +1,14 @@
-import { useState } from "react";
-import { Navigate, useLocation, useNavigate } from "react-router-dom";
-import { Check, Eye, Globe, UploadSimple } from "@phosphor-icons/react";
+import { useCallback, useEffect, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Check, Globe, UploadSimple } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
-
-const USERNAME_MIN = 2;
-const USERNAME_MAX = 30;
-const PASSWORD_MIN = 6;
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import OtpInput from "../components/OtpInput.jsx";
 
 const BRAND_POINTS = [
   { icon: Globe, label: "发布专家，沉淀可复用的人设与方法论" },
   { icon: UploadSimple, label: "召唤专家，挂载项目目录与任务文件" },
   { icon: Check, label: "Skill 注入上下文，任务能力随建随用" },
 ];
-
-function validateUsername(value) {
-  const trimmed = value.trim();
-  if (trimmed.length < USERNAME_MIN || trimmed.length > USERNAME_MAX) {
-    return `用户名需为 ${USERNAME_MIN}-${USERNAME_MAX} 个字符`;
-  }
-  return "";
-}
-
-function validateEmail(value) {
-  const trimmed = value.trim();
-  if (!EMAIL_PATTERN.test(trimmed)) {
-    return "邮箱格式不正确";
-  }
-  return "";
-}
-
-function validatePassword(value) {
-  if (value.length < PASSWORD_MIN) {
-    return "密码至少 6 位";
-  }
-  return "";
-}
 
 function Field({ label, error, children }) {
   return (
@@ -44,201 +17,388 @@ function Field({ label, error, children }) {
         {label}
         {children}
       </label>
-      <div className="field-error" role="alert">
-        {error}
-      </div>
+      {/* 仅在有错时渲染 role=alert：空告警对读屏器是噪音（原 :empty 仅靠 CSS 兜底） */}
+      {error ? (
+        <div className="field-error" role="alert">
+          {error}
+        </div>
+      ) : null}
     </div>
   );
 }
 
+/** 品牌侧（V1/V2/提示态三态共用，纯展示） */
+function BrandPanel() {
+  return (
+    <section className="auth-brand rise" aria-label="AgentCraft 产品介绍">
+      <div className="auth-brand-eyebrow rise" style={{ "--rise-index": 0 }}>
+        <span className="navbar-mark" aria-hidden="true" />
+        AgentCraft
+      </div>
+      <div className="auth-brand-body rise" style={{ "--rise-index": 1 }}>
+        <h1 className="auth-brand-title">
+          把领域的经验，
+          <br />
+          交给一个可靠的专家。
+        </h1>
+        <p className="auth-brand-sub">
+          AgentCraft 是运行在你本机的 AI 专家工作台：专家由你定义，Skill 与工具由你装配，
+          任务在你授权的项目目录里完成。
+        </p>
+      </div>
+      <div className="auth-brand-points rise" style={{ "--rise-index": 2 }}>
+        {BRAND_POINTS.map((point) => (
+          <div className="auth-brand-point" key={point.label}>
+            <point.icon size={15} aria-hidden="true" />
+            <span>
+              <strong>{point.label.split("，")[0]}</strong>，{point.label.split("，")[1]}
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** 429 Retry-After 倒计时（秒）：start(seconds) 置初值，每秒递减，归零自动解除禁用。 */
+function useRetryAfter() {
+  const [secondsLeft, setSecondsLeft] = useState(0);
+
+  useEffect(() => {
+    if (secondsLeft <= 0) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      setSecondsLeft((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [secondsLeft]);
+
+  const start = useCallback((seconds) => {
+    const parsed = Number(seconds);
+    setSecondsLeft(Number.isFinite(parsed) && parsed > 0 ? Math.ceil(parsed) : 0);
+  }, []);
+
+  return { retryAfter: secondsLeft, start };
+}
+
+function RetryHint({ retryAfter }) {
+  if (retryAfter <= 0) {
+    return null;
+  }
+  return (
+    <p className="v2-retry-hint" role="status">
+      操作过于频繁，请等待 {retryAfter} 秒后再试
+    </p>
+  );
+}
+
+/**
+ * 登录页双轨重写（FE-T3）：
+ * - 双 Tab：「工作区登录」= V1 既有登录逻辑原样（token 存 localStorage + login()）；
+ *   「账户登录」= V2（loginV2 → mfa_required 就地切换挑战卡片 → loginV2Mfa）。
+ * - URL ?v2=1（V2 会话过期 401 事件跳转落点）默认激活 V2 Tab。
+ * - E5：注册 Tab 删除（V2 注册走邀请制，不在登录页）。
+ * - E11：/login 不设路由守卫——双轨 R1 下任一单侧会话用户都可能经 /login
+ *   补建另一轨会话，已登录访问不弹回。
+ * - 简单性裁决：双 Tab 切换不保留另一 Tab 的表单态（两侧瞬时态全部复位）。
+ */
 export default function LoginPage() {
-  const { user, login, register } = useAuth();
-  const [mode, setMode] = useState("login");
-  const [fields, setFields] = useState({
-    login: "",
-    password: "",
-    username: "",
-    email: "",
-    confirmPassword: "",
-  });
-  const [errors, setErrors] = useState({});
-  const [formAlert, setFormAlert] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const { login, loginV2, loginV2Mfa } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
 
-  if (user) {
-    return <Navigate to={location.state?.from || "/"} replace />;
+  const [activeTab, setActiveTab] = useState(() =>
+    searchParams.get("v2") === "1" ? "v2" : "v1"
+  );
+
+  // V1 表单态（原 LoginPage 登录分支原样搬入）
+  const [v1Fields, setV1Fields] = useState({ login: "", password: "" });
+  const [v1Errors, setV1Errors] = useState({});
+  const [v1Alert, setV1Alert] = useState("");
+  const [v1Submitting, setV1Submitting] = useState(false);
+
+  // V2 态机：form（表单）→ challenge（MFA 挑战）| blocked（403 全页提示）
+  const [v2Stage, setV2Stage] = useState("form");
+  const [v2Fields, setV2Fields] = useState({ email: "", password: "" });
+  const [v2Errors, setV2Errors] = useState({});
+  const [v2Alert, setV2Alert] = useState("");
+  const [v2Submitting, setV2Submitting] = useState(false);
+  const [challengeId, setChallengeId] = useState(null);
+  const [otp, setOtp] = useState("");
+  const [blockedMessage, setBlockedMessage] = useState("");
+
+  const { retryAfter, start: startRetryAfter } = useRetryAfter();
+
+  function setV1Field(name, value) {
+    setV1Fields((current) => ({ ...current, [name]: value }));
+    setV1Errors((current) => ({ ...current, [name]: "" }));
+    setV1Alert("");
   }
 
-  function setField(name, value) {
-    setFields((current) => ({ ...current, [name]: value }));
-    setErrors((current) => ({ ...current, [name]: "" }));
-    setFormAlert("");
+  function setV2Field(name, value) {
+    setV2Fields((current) => ({ ...current, [name]: value }));
+    setV2Errors((current) => ({ ...current, [name]: "" }));
+    setV2Alert("");
   }
 
-  function switchMode(nextMode) {
-    // 切换登录/注册时清空两种表单的瞬时错误，避免串场
-    setMode(nextMode);
-    setErrors({});
-    setFormAlert("");
+  function handleOtpChange(next) {
+    setOtp(next);
+    setV2Alert("");
   }
 
-  function applyServerError(error) {
-    if (error.code === "USERNAME_EXISTS" || error.code === "EMAIL_EXISTS") {
-      // 服务端消息已含 PRD 提示文案（"用户名 [x] 已被使用" / "邮箱 [x] 已被注册"）
-      const field = error.code === "USERNAME_EXISTS" ? "username" : "email";
-      setErrors((current) => ({ ...current, [field]: error.message }));
+  function switchTab(nextTab) {
+    if (nextTab === activeTab) {
       return;
     }
-    setFormAlert(error.message || "请求失败，请稍后重试");
+    // 切换不保留另一 Tab 的表单态：两侧瞬时态全部复位（测试钉死）
+    setActiveTab(nextTab);
+    setV1Fields({ login: "", password: "" });
+    setV1Errors({});
+    setV1Alert("");
+    setV2Stage("form");
+    setV2Fields({ email: "", password: "" });
+    setV2Errors({});
+    setV2Alert("");
+    setChallengeId(null);
+    setOtp("");
+    setBlockedMessage("");
   }
 
-  async function handleLogin(event) {
+  /** 「返回重新登录」：仅重置 MFA 挑战态机，保留已输入凭据 */
+  function resetV2Challenge() {
+    setV2Stage("form");
+    setChallengeId(null);
+    setOtp("");
+    setV2Alert("");
+  }
+
+  /** 403 全页提示态的返回：V2 态机整体复位（含表单字段） */
+  function resetBlockedState() {
+    setV2Stage("form");
+    setBlockedMessage("");
+    setChallengeId(null);
+    setOtp("");
+    setV2Alert("");
+    setV2Errors({});
+    setV2Fields({ email: "", password: "" });
+  }
+
+  async function handleV1Login(event) {
     event.preventDefault();
     const nextErrors = {
-      login: fields.login.trim() ? "" : "请输入用户名或邮箱",
-      password: fields.password ? "" : "请输入密码",
+      login: v1Fields.login.trim() ? "" : "请输入用户名或邮箱",
+      password: v1Fields.password ? "" : "请输入密码",
     };
-    setErrors(nextErrors);
+    setV1Errors(nextErrors);
     if (nextErrors.login || nextErrors.password) {
       return;
     }
-    setIsSubmitting(true);
+    setV1Submitting(true);
     try {
-      await login(fields.login, fields.password);
+      await login(v1Fields.login, v1Fields.password);
       navigate(location.state?.from || "/", { replace: true });
     } catch (error) {
-      applyServerError(error);
+      setV1Alert(error.message || "请求失败，请稍后重试");
     } finally {
-      setIsSubmitting(false);
+      setV1Submitting(false);
     }
   }
 
-  async function handleRegister(event) {
-    event.preventDefault();
-    const nextErrors = {
-      username: validateUsername(fields.username),
-      email: validateEmail(fields.email),
-      password: validatePassword(fields.password),
-      confirmPassword:
-        fields.confirmPassword === fields.password ? "" : "两次输入的密码不一致",
-    };
-    setErrors(nextErrors);
-    if (Object.values(nextErrors).some(Boolean)) {
+  /**
+   * V2 错误分流（契约：401 内联 + 清空对应输入 / 429 倒计时禁用 / 403 全页提示）。
+   * login 与 loginV2Mfa 共用。
+   */
+  function applyV2Error(error) {
+    if (error.code === "ACCOUNT_SUSPENDED" || error.code === "ACCOUNT_DELETING") {
+      setBlockedMessage(error.message || "账户当前不可用");
+      setV2Stage("blocked");
       return;
     }
-    setIsSubmitting(true);
+    if (error.status === 429) {
+      startRetryAfter(error.retryAfter);
+      setV2Alert(error.message || "请求过于频繁，请稍后重试");
+      return;
+    }
+    if (error.status === 401) {
+      // 清空对应输入：凭据错清密码（保留邮箱便于改重试），挑战码错清验证码
+      if (error.code === "INVALID_CREDENTIALS") {
+        setV2Fields((current) => ({ ...current, password: "" }));
+      } else if (error.code === "MFA_INVALID") {
+        setOtp("");
+      }
+    }
+    setV2Alert(error.message || "请求失败，请稍后重试");
+  }
+
+  async function handleV2Login(event) {
+    event.preventDefault();
+    const email = v2Fields.email.trim();
+    const nextErrors = {
+      email: email ? "" : "请输入邮箱",
+      password: v2Fields.password ? "" : "请输入密码",
+    };
+    setV2Errors(nextErrors);
+    if (nextErrors.email || nextErrors.password) {
+      return;
+    }
+    setV2Submitting(true);
     try {
-      await register(fields.username.trim(), fields.email.trim(), fields.password);
+      const result = await loginV2(email, v2Fields.password);
+      if (result.mfaRequired) {
+        // 就地切换挑战卡片（不离开 /login）
+        setChallengeId(result.challengeId);
+        setOtp("");
+        setV2Alert("");
+        setV2Stage("challenge");
+        return;
+      }
       navigate(location.state?.from || "/", { replace: true });
     } catch (error) {
-      applyServerError(error);
+      applyV2Error(error);
     } finally {
-      setIsSubmitting(false);
+      setV2Submitting(false);
     }
   }
 
-  const isLogin = mode === "login";
+  async function handleV2Mfa(event) {
+    event.preventDefault();
+    if (!challengeId) {
+      return;
+    }
+    setV2Submitting(true);
+    try {
+      await loginV2Mfa(challengeId, otp);
+      navigate(location.state?.from || "/", { replace: true });
+    } catch (error) {
+      applyV2Error(error);
+    } finally {
+      setV2Submitting(false);
+    }
+  }
+
+  if (v2Stage === "blocked") {
+    return (
+      <main className="auth-page">
+        <BrandPanel />
+        <section className="auth-panel">
+          <div className="auth-card rise" style={{ "--rise-index": 1 }} role="alert">
+            <h2 className="auth-card-title">账户当前不可用</h2>
+            <p className="auth-card-sub">{blockedMessage}</p>
+            <button
+              type="button"
+              className="btn btn-ghost btn-block"
+              onClick={resetBlockedState}
+            >
+              返回登录
+            </button>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  const isV1Tab = activeTab === "v1";
 
   return (
     <main className="auth-page">
-      <section className="auth-brand rise" aria-label="AgentCraft 产品介绍">
-        <div className="auth-brand-eyebrow rise" style={{ "--rise-index": 0 }}>
-          <span className="navbar-mark" aria-hidden="true" />
-          AgentCraft
-        </div>
-        <div className="auth-brand-body rise" style={{ "--rise-index": 1 }}>
-          <h1 className="auth-brand-title">
-            把领域的经验，
-            <br />
-            交给一个可靠的专家。
-          </h1>
-          <p className="auth-brand-sub">
-            AgentCraft 是运行在你本机的 AI 专家工作台：专家由你定义，Skill 与工具由你装配，
-            任务在你授权的项目目录里完成。
-          </p>
-        </div>
-        <div className="auth-brand-points rise" style={{ "--rise-index": 2 }}>
-          {BRAND_POINTS.map((point) => (
-            <div className="auth-brand-point" key={point.label}>
-              <point.icon size={15} aria-hidden="true" />
-              <span>
-                <strong>{point.label.split("，")[0]}</strong>，{point.label.split("，")[1]}
-              </span>
-            </div>
-          ))}
-        </div>
-      </section>
+      <BrandPanel />
 
       <section className="auth-panel">
         <div className="auth-card rise" style={{ "--rise-index": 1 }}>
-          <div className="auth-tabs" data-mode={mode} role="group" aria-label="登录或注册">
-            <span className="auth-tabs-thumb" aria-hidden="true" />
+          <div className="v2-tabs" data-active={activeTab} role="group" aria-label="登录方式">
+            <span className="v2-tabs-thumb" aria-hidden="true" />
             <button
               type="button"
-              className="auth-tab"
-              aria-pressed={isLogin}
-              onClick={() => switchMode("login")}
+              className="v2-tab"
+              aria-pressed={isV1Tab}
+              onClick={() => switchTab("v1")}
             >
-              登录
+              工作区登录
             </button>
             <button
               type="button"
-              className="auth-tab"
-              aria-pressed={!isLogin}
-              onClick={() => switchMode("register")}
+              className="v2-tab"
+              aria-pressed={!isV1Tab}
+              onClick={() => switchTab("v2")}
             >
-              注册
+              账户登录
             </button>
           </div>
 
-          <div className="auth-mode-content" key={mode}>
-            {isLogin ? (
+          <div
+            className="auth-mode-content"
+            key={isV1Tab ? "v1" : `v2-${v2Stage}`}
+          >
+            {isV1Tab ? (
               <>
                 <h2 className="auth-card-title">欢迎回来</h2>
                 <p className="auth-card-sub">使用用户名或邮箱登录你的工作台。</p>
-                <form className="auth-form" onSubmit={handleLogin} noValidate>
-                  <div className="form-alert" role="alert" hidden={!formAlert}>
-                    {formAlert}
+                <form className="auth-form" onSubmit={handleV1Login} noValidate>
+                  <div className="form-alert" role="alert" hidden={!v1Alert}>
+                    {v1Alert}
                   </div>
-                  <Field label="用户名或邮箱" error={errors.login}>
+                  <Field label="用户名或邮箱" error={v1Errors.login}>
                     <input
                       className="field-input"
                       name="login"
                       autoComplete="username"
                       placeholder="username 或 name@example.com"
-                      value={fields.login}
-                      onChange={(event) => setField("login", event.target.value)}
+                      value={v1Fields.login}
+                      onChange={(event) => setV1Field("login", event.target.value)}
                     />
                   </Field>
-                  <Field label="密码" error={errors.password}>
+                  <Field label="密码" error={v1Errors.password}>
                     <input
                       className="field-input"
                       name="password"
                       type="password"
                       autoComplete="current-password"
                       placeholder="请输入密码"
-                      value={fields.password}
-                      onChange={(event) => setField("password", event.target.value)}
+                      value={v1Fields.password}
+                      onChange={(event) => setV1Field("password", event.target.value)}
                     />
                   </Field>
                   <div className="auth-form-footer">
                     <button
                       type="submit"
                       className="btn btn-primary btn-block"
-                      disabled={isSubmitting}
+                      disabled={v1Submitting}
                     >
-                      {isSubmitting ? "登录中…" : "登录"}
+                      {v1Submitting ? "登录中…" : "登录"}
                     </button>
+                  </div>
+                </form>
+              </>
+            ) : v2Stage === "challenge" ? (
+              <>
+                <h2 className="auth-card-title">两步验证</h2>
+                <p className="auth-card-sub">输入认证器 App 生成的 6-8 位动态验证码。</p>
+                <form className="auth-form" onSubmit={handleV2Mfa} noValidate>
+                  <div className="form-alert" role="alert" hidden={!v2Alert}>
+                    {v2Alert}
+                  </div>
+                  <div className="field">
+                    <span className="field-label">动态验证码</span>
+                    <OtpInput value={otp} onChange={handleOtpChange} />
+                  </div>
+                  <div className="auth-form-footer">
+                    <button
+                      type="submit"
+                      className="btn btn-primary btn-block"
+                      disabled={v2Submitting || retryAfter > 0 || otp.length < 6}
+                    >
+                      {v2Submitting ? "验证中…" : "验证并登录"}
+                    </button>
+                    <RetryHint retryAfter={retryAfter} />
                     <p className="auth-switch-hint">
-                      还没有账号？
                       <button
                         type="button"
                         className="auth-switch-link"
-                        onClick={() => switchMode("register")}
+                        onClick={resetV2Challenge}
                       >
-                        创建账号
+                        返回重新登录
                       </button>
                     </p>
                   </div>
@@ -246,73 +406,43 @@ export default function LoginPage() {
               </>
             ) : (
               <>
-                <h2 className="auth-card-title">创建你的工作台</h2>
-                <p className="auth-card-sub">注册即可浏览与召唤专家，随时可申请成为专家用户。</p>
-                <form className="auth-form" onSubmit={handleRegister} noValidate>
-                  <div className="form-alert" role="alert" hidden={!formAlert}>
-                    {formAlert}
+                <h2 className="auth-card-title">账户登录</h2>
+                <p className="auth-card-sub">使用你的 AgentCraft 账户（邮箱）登录。</p>
+                <form className="auth-form" onSubmit={handleV2Login} noValidate>
+                  <div className="form-alert" role="alert" hidden={!v2Alert}>
+                    {v2Alert}
                   </div>
-                  <Field label="用户名" error={errors.username}>
-                    <input
-                      className="field-input"
-                      name="username"
-                      autoComplete="username"
-                      placeholder="2-30 个字符"
-                      value={fields.username}
-                      onChange={(event) => setField("username", event.target.value)}
-                    />
-                  </Field>
-                  <Field label="邮箱" error={errors.email}>
+                  <Field label="邮箱" error={v2Errors.email}>
                     <input
                       className="field-input"
                       name="email"
                       type="email"
                       autoComplete="email"
                       placeholder="name@example.com"
-                      value={fields.email}
-                      onChange={(event) => setField("email", event.target.value)}
+                      value={v2Fields.email}
+                      onChange={(event) => setV2Field("email", event.target.value)}
                     />
                   </Field>
-                  <Field label="密码" error={errors.password}>
+                  <Field label="密码" error={v2Errors.password}>
                     <input
                       className="field-input"
                       name="password"
                       type="password"
-                      autoComplete="new-password"
-                      placeholder="至少 6 位"
-                      value={fields.password}
-                      onChange={(event) => setField("password", event.target.value)}
-                    />
-                  </Field>
-                  <Field label="确认密码" error={errors.confirmPassword}>
-                    <input
-                      className="field-input"
-                      name="confirmPassword"
-                      type="password"
-                      autoComplete="new-password"
-                      placeholder="请再次输入密码"
-                      value={fields.confirmPassword}
-                      onChange={(event) => setField("confirmPassword", event.target.value)}
+                      autoComplete="current-password"
+                      placeholder="请输入密码"
+                      value={v2Fields.password}
+                      onChange={(event) => setV2Field("password", event.target.value)}
                     />
                   </Field>
                   <div className="auth-form-footer">
                     <button
                       type="submit"
                       className="btn btn-primary btn-block"
-                      disabled={isSubmitting}
+                      disabled={v2Submitting || retryAfter > 0}
                     >
-                      {isSubmitting ? "注册中…" : "注册并登录"}
+                      {v2Submitting ? "登录中…" : "登录"}
                     </button>
-                    <p className="auth-switch-hint">
-                      已有账号？
-                      <button
-                        type="button"
-                        className="auth-switch-link"
-                        onClick={() => switchMode("login")}
-                      >
-                        直接登录
-                      </button>
-                    </p>
+                    <RetryHint retryAfter={retryAfter} />
                   </div>
                 </form>
               </>

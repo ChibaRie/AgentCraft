@@ -1,0 +1,124 @@
+/* ============================================================
+   V2 认证面增量样式（FE-T3）
+   仅登录页双轨新增原语：.v2-tabs 双 Tab / .otp-cell OTP 分格 /
+   .v2-retry-hint 429 倒计时提示。设计令牌全部沿用 global.css
+   （灰阶/圆角/阴影/运动节奏零新取值）。
+   ============================================================ */
+
+/* ---------- 双 Tab（沿用 .auth-tabs 的滑动墨块语言，键位 v1|v2） ---------- */
+
+.v2-tabs {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  padding: 3px;
+  margin-bottom: 24px;
+}
+
+.v2-tabs-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+
+.v2-tabs[data-active="v2"] .v2-tabs-thumb {
+  transform: translateX(100%);
+}
+
+.v2-tab {
+  position: relative;
+  z-index: 1;
+  border: 0;
+  background: none;
+  padding: 8px 0;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.v2-tab[aria-pressed="true"] {
+  color: var(--ink-strong);
+}
+
+/* ---------- OTP 分格（8 等宽格 + 透明覆盖输入） ---------- */
+
+.v2-otp {
+  position: relative;
+}
+
+.v2-otp-cells {
+  display: flex;
+  gap: 8px;
+}
+
+.otp-cell {
+  flex: 1 1 0; /* 分格等宽 */
+  min-width: 0;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-strong);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.otp-cell.is-filled {
+  border-color: var(--text-2);
+}
+
+/* 焦点高亮当前输入格（is-active 由组件按 value.length 计算） */
+.v2-otp:focus-within .otp-cell.is-active {
+  border-color: var(--ink-strong);
+  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.08);
+}
+
+/* 透明输入覆盖分格接收键入/粘贴；字符由分格呈现（避免双写）。
+   font-size ≥16px 防移动端聚焦缩放；光标隐藏（焦点态由分格高亮承担）。 */
+.v2-otp-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font-size: 16px;
+  text-align: center;
+  cursor: text;
+}
+
+.v2-otp-input:focus {
+  outline: none;
+}
+
+/* ---------- 429 倒计时提示 ---------- */
+
+.v2-retry-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-2);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
