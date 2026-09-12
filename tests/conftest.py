@@ -52,6 +52,15 @@ def neutralize_v2_env(monkeypatch):
     MFA_ENCRYPTION_KEY / EMAIL_OUTBOX_ENCRYPTION_KEY / RATE_LIMIT_HMAC_KEY /
     PROVIDER_KEY_ENCRYPTION_KEY 同样透读测试进程（打破 outbox、models_catalog
     等用例的「未配置」语义），一并 setenv("") 钉空。
+
+    SESSION_COOKIE_SECURE 同理（Phase 4 T10 收口补）：dev .env 为前端手测
+    临时置 false（手动浏览器联调 http://127.0.0.1 需要），该手测值不入测试
+    进程——钉回 config 默认 true，否则 login/session/config 安检等用例
+    （test_v2_login_mfa / test_v2_session_service / test_config_security /
+    test_v2_auth_api）按 false 断言失败。dev .env 的 false 保留勿动。
+    注意：bool 字段 setenv("") 无法通过 pydantic bool 解析（Input should be
+    a valid boolean），故 setenv("true") 显式钉默认值——与 DSN setenv("")
+    同理，OS env 优先于 .env 透读。
     """
     monkeypatch.setenv("V2_DATABASE_URL", "")
     monkeypatch.setenv("V2_ADMIN_DATABASE_URL", "")
@@ -59,6 +68,7 @@ def neutralize_v2_env(monkeypatch):
     monkeypatch.setenv("EMAIL_OUTBOX_ENCRYPTION_KEY", "")
     monkeypatch.setenv("RATE_LIMIT_HMAC_KEY", "")
     monkeypatch.setenv("PROVIDER_KEY_ENCRYPTION_KEY", "")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
 
 
 class FakePiTransport:
