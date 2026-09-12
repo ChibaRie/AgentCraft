@@ -70,7 +70,7 @@ def test_seeds_and_roles_present(pg_url_base):
                 ver = (
                     await conn.execute(text("SELECT version_num FROM alembic_version"))
                 ).scalar_one()
-                assert ver == "0005"
+                assert ver == "0006"
                 slots = (
                     await conn.execute(text("SELECT count(*) FROM platform_slots"))
                 ).scalar_one()

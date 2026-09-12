@@ -675,3 +675,256 @@ async def test_boundary_set_current_owner_performs_no_authorization(pg: PgDb) ->
             assert n == 1
     finally:
         await app.dispose()
+
+
+# ---- Phase 4（0006）：admin 写路径 / revision_tools 隔离 / owner 护栏 ----
+
+
+async def _seed_revision_tools(pg: PgDb, owner: _uuid.UUID) -> _uuid.UUID:
+    """superuser 造独立链：draft expert（无 published 指针）→ revision_no=1
+    （pending_review）→ revision_tools 一行，返回 revision id。
+
+    刻意不挂 published_revision_id 指针：stranger 对 revision_tools 的 0 行断言
+    不得被 revision_tools_app_published_read（0006 的指针读通路）命中；也避开
+    _seed_user_with_task 已占用的 revision_no=1（UNIQUE(expert_id, revision_no)）。
+    """
+    async with pg.engine.begin() as conn:
+        expert_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO experts (id, owner_id, status) "
+                    "VALUES (gen_random_uuid(), :u, 'draft') RETURNING id"
+                ),
+                {"u": owner},
+            )
+        ).scalar_one()
+        revision_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO expert_revisions (id, expert_id, owner_id, revision_no, "
+                    "content_json, content_sha256, status) VALUES (gen_random_uuid(), :x, "
+                    ":u, 1, '{}', :h, 'pending_review') RETURNING id"
+                ),
+                {"x": expert_id, "u": owner, "h": "d" * 64},
+            )
+        ).scalar_one()
+        await conn.execute(
+            text(
+                "INSERT INTO revision_tools (id, expert_revision_id, tool_id, version) "
+                "VALUES (gen_random_uuid(), :r, 'check_code_style', '1')"
+            ),
+            {"r": revision_id},
+        )
+    return revision_id
+
+
+async def test_admin_role_updates_governance_rows_after_0006(pg: PgDb) -> None:
+    """0006 admin UPDATE policy 生效：admin role 可翻转 experts.status 与
+    expert_revisions.status（此前无适用 policy → 静默 0 行——T5 approve 的前提）。"""
+    await _seed_user_with_task(pg, "admin-writer@x.com")
+    expert_id = await _superuser_one(pg, "SELECT id FROM experts LIMIT 1")
+    revision_id = await _superuser_one(pg, "SELECT id FROM expert_revisions LIMIT 1")
+    admin = _role_engine(pg, ADMIN_ROLE)
+    try:
+        async with admin.connect() as conn:
+            updated = await conn.execute(
+                text("UPDATE experts SET status = 'published' WHERE id = :x"),
+                {"x": expert_id},
+            )
+            assert updated.rowcount == 1
+            updated = await conn.execute(
+                text("UPDATE expert_revisions SET status = 'archived' WHERE id = :r"),
+                {"r": revision_id},
+            )
+            assert updated.rowcount == 1
+    finally:
+        await admin.dispose()
+
+
+async def _superuser_one(pg: PgDb, sql: str) -> _uuid.UUID:  # 模块内小助手，放文件底部工具区
+    async with pg.engine.begin() as conn:
+        return (await conn.execute(text(sql))).scalar_one()
+
+
+async def test_revision_tools_cross_owner_isolation(pg: PgDb) -> None:
+    """0006 revision_tools RLS：owner 上下文可见自己的行、可对自己 revision 插行
+    （submit 落行的正向通路）；陌生 owner 上下文 0 行（published 指针通路不命中）、
+    对他人 revision 插行被 WITH CHECK 拒绝（42501）；admin 全量可读。
+    每个上下文独立连接块：同连接的 autobegin 事务共享且 GUC 事务本地，一条语句
+    失败会 abort 该事务内全部后续语句（InFailedSqlTransaction 25P02）。"""
+    owner = await _seed_bare_user(pg, "tools-owner@x.com")
+    revision_id = await _seed_revision_tools(pg, owner)
+    stranger = await _seed_bare_user(pg, "tools-stranger@x.com")
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with app.begin() as conn:  # owner 正向：可见 + 可对自己 revision 插行（begin 持久化）
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": owner})
+            n = (await conn.execute(text("SELECT count(*) FROM revision_tools"))).scalar_one()
+            assert n == 1
+            await conn.execute(
+                text(
+                    "INSERT INTO revision_tools (id, expert_revision_id, tool_id, version) "
+                    "VALUES (gen_random_uuid(), :r, 'read_task_file', '1')"
+                ),
+                {"r": revision_id},
+            )
+        async with app.connect() as conn:  # stranger：0 行（owner 隔离 + 指针通路不命中）
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": stranger})
+            n = (await conn.execute(text("SELECT count(*) FROM revision_tools"))).scalar_one()
+            assert n == 0
+        async with app.connect() as conn:  # stranger 越权 INSERT：WITH CHECK 拒绝（单块单失败）
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": stranger})
+            with pytest.raises(Exception, match="row-level security policy") as excinfo:
+                await conn.execute(
+                    text(
+                        "INSERT INTO revision_tools (id, expert_revision_id, tool_id, version) "
+                        "VALUES (gen_random_uuid(), :r, 'list_task_files', '1')"
+                    ),
+                    {"r": revision_id},
+                )
+            assert excinfo.value.orig.sqlstate == "42501"
+    finally:
+        await app.dispose()
+    admin = _role_engine(pg, ADMIN_ROLE)
+    try:
+        async with admin.connect() as conn:
+            n = (await conn.execute(text("SELECT count(*) FROM revision_tools"))).scalar_one()
+            assert n == 2  # 种子行 + owner 正向插入行
+    finally:
+        await admin.dispose()
+
+
+async def test_owner_context_cannot_flip_entity_status_or_pointer(pg: PgDb) -> None:
+    """0006 护栏触发器：owner 上下文改自己实体的 published_revision_id/status
+    → 触发器抛错（自我发布面封死）。admin 上下文（无 GUC）放行。
+    每个预期失败语句独立连接块（单块单失败——同块事务会 abort）。"""
+    owner = await _seed_user_with_task(pg, "selfpub@x.com")
+    expert_id, _ = await _published_ids_for(pg, "experts", owner)
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with app.connect() as conn:
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": owner})
+            with pytest.raises(Exception, match="禁止修改发布指针或实体状态"):
+                await conn.execute(
+                    text("UPDATE experts SET published_revision_id = NULL WHERE id = :x"),
+                    {"x": expert_id},
+                )
+        async with app.connect() as conn:
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": owner})
+            with pytest.raises(Exception, match="禁止修改发布指针或实体状态"):
+                await conn.execute(
+                    text("UPDATE experts SET status = 'archived' WHERE id = :x"),
+                    {"x": expert_id},
+                )
+    finally:
+        await app.dispose()
+    admin = _role_engine(pg, ADMIN_ROLE)
+    try:
+        async with admin.connect() as conn:  # admin 上下文（无 GUC）不受护栏约束
+            updated = await conn.execute(
+                text("UPDATE experts SET status = 'draft' WHERE id = :x"), {"x": expert_id}
+            )
+            assert updated.rowcount == 1
+    finally:
+        await admin.dispose()
+
+
+async def test_revision_immutability_guard(pg: PgDb) -> None:
+    """0006 revision 护栏：draft 内容可改 + draft→pending_review 放行；
+    非 draft 内容冻结；status 回退/跳变拒绝；owner_id 改动被 0006 护栏触发器
+    拒绝（BEFORE ROW 触发器先于 RLS WITH CHECK 执行 → P0001 触发器消息，
+    WITH CHECK 的 42501 在此路径不可达）。每个预期失败语句独立连接块。"""
+    owner = await _seed_user_with_task(pg, "immutable@x.com")
+    expert_id = await _superuser_one(pg, "SELECT id FROM experts LIMIT 1")
+    async with pg.engine.begin() as conn:  # 造一条 draft revision（no=2，避开已占的 no=1）
+        draft_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO expert_revisions (id, expert_id, owner_id, revision_no, "
+                    "content_json, content_sha256, status) VALUES (gen_random_uuid(), :x, "
+                    ":u, 2, '{}', :h, 'draft') RETURNING id"
+                ),
+                {"x": expert_id, "u": owner, "h": "e" * 64},
+            )
+        ).scalar_one()
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with app.begin() as conn:  # 放行块：draft 覆写内容 + 提审流转（begin：跨块持久化）
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": owner})
+            await conn.execute(
+                text("UPDATE expert_revisions SET content_json = '{\"a\"\\:1}' WHERE id = :r"),
+                {"r": draft_id},
+            )
+            await conn.execute(
+                text("UPDATE expert_revisions SET status = 'pending_review' WHERE id = :r"),
+                {"r": draft_id},
+            )
+        async with app.connect() as conn:  # 负例 1：非 draft 内容冻结
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": owner})
+            with pytest.raises(Exception, match="revision 提交后内容不可变"):
+                await conn.execute(
+                    text("UPDATE expert_revisions SET content_json = '{}' WHERE id = :r"),
+                    {"r": draft_id},
+                )
+        async with app.connect() as conn:  # 负例 2：status 回退拒绝
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": owner})
+            with pytest.raises(Exception, match="仅允许 draft"):
+                await conn.execute(
+                    text("UPDATE expert_revisions SET status = 'draft' WHERE id = :r"),
+                    {"r": draft_id},
+                )
+        async with app.connect() as conn:  # 负例 3：owner_id 改动 → 触发器先行拦截
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": owner})
+            with pytest.raises(Exception, match="禁止修改 revision 归属或编号") as excinfo:
+                await conn.execute(
+                    text("UPDATE expert_revisions SET owner_id = gen_random_uuid() WHERE id = :r"),
+                    {"r": draft_id},
+                )
+            assert excinfo.value.orig.sqlstate == "P0001"
+    finally:
+        await app.dispose()
+    admin = _role_engine(pg, ADMIN_ROLE)
+    try:
+        async with admin.connect() as conn:  # admin 上下文（无 GUC）不受护栏约束
+            updated = await conn.execute(
+                text(
+                    "UPDATE expert_revisions SET content_json = '{\"admin\"\\:true}' WHERE id = :r"
+                ),
+                {"r": draft_id},
+            )
+            assert updated.rowcount == 1
+    finally:
+        await admin.dispose()
+
+
+async def test_insert_guard_requires_draft_birth(pg: PgDb) -> None:
+    """0006 INSERT 护栏：owner 上下文下 revision 只能生而为 draft（封死
+    「INSERT 生而为 pending_review/published」的审核队列投毒面）；admin 上下文
+    不受限（测试种子即 admin/superuser 形态）。单块单失败。"""
+    owner = await _seed_user_with_task(pg, "birthguard@x.com")
+    expert_id = await _superuser_one(pg, "SELECT id FROM experts LIMIT 1")
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with app.connect() as conn:  # owner 正向：draft 直插放行
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": owner})
+            await conn.execute(
+                text(
+                    "INSERT INTO expert_revisions (id, expert_id, owner_id, revision_no, "
+                    "content_json, content_sha256, status) VALUES (gen_random_uuid(), :x, "
+                    ":u, 3, '{}', :h, 'draft')"
+                ),
+                {"x": expert_id, "u": owner, "h": "f" * 64},
+            )
+        async with app.connect() as conn:  # 负例：生而为 pending_review
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": owner})
+            with pytest.raises(Exception, match="只能生而为 draft"):
+                await conn.execute(
+                    text(
+                        "INSERT INTO expert_revisions (id, expert_id, owner_id, revision_no, "
+                        "content_json, content_sha256, status) VALUES (gen_random_uuid(), :x, "
+                        ":u, 4, '{}', :h, 'pending_review')"
+                    ),
+                    {"x": expert_id, "u": owner, "h": "9" * 64},
+                )
+    finally:
+        await app.dispose()
