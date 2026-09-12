@@ -14,13 +14,23 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.errors import AgentCraftError, ErrorCode
+from backend.v2.content_autocheck import run_auto_check
 from backend.v2.content_hash import ContentTooLarge, assert_content_size, content_sha256
 from backend.v2.idempotency import begin, store, subject_user
 from backend.v2.ids import uuid7
-from backend.v2.models.content import ENTITY_STATUSES, Expert, ExpertRevision, Skill, SkillRevision
+from backend.v2.models.content import (
+    ENTITY_STATUSES,
+    Expert,
+    ExpertRevision,
+    RevisionTool,
+    Skill,
+    SkillRevision,
+    ToolCatalog,
+)
 from backend.v2.runtime import V2Runtime, owner_session
 
 _ENTITLEMENT_SQL = (
@@ -418,3 +428,154 @@ async def get_entity(
         dom.entity_type: _entity_brief(dom, entity),  # {"expert"|"skill": {...}}（Interfaces 形态）
         "revisions": [_revision_brief(rev) for rev in revisions],
     }
+
+
+_MAX_TOOLS = 20
+
+
+async def submit_revision(
+    runtime: V2Runtime,
+    *,
+    user_id: str,
+    target: str,
+    entity_id: str,
+    revision_id: str,
+    tools: list[dict],
+    idem_key: str,
+    idem_hash: str,
+) -> "dict | Replay":
+    """提审（D9/D20）：draft→pending_review；hash 定格；revision_tools 落行。
+
+    自动检查 valid=False → 400 VALIDATION_ERROR（message 附前 3 条 issue）；
+    tools 校验：去重后 ≤20 且 (tool_id,version) 存在于 tool_catalog（不要求 enabled）；
+    skill 域传 tools → 400。重复提审 → 409 REVIEW_PENDING（0006 触发器兜底 DB 层）。
+    """
+    dom = _domain(target)
+    user_id = str(user_id)  # D26 归一
+    eid = _reject_invalid_uuid(entity_id, "entity_id")
+    rid = _reject_invalid_uuid(revision_id, "revision_id")
+    route = f"{dom.route_prefix}/{entity_id}/revisions/{revision_id}/submit"
+    req_hash = idem_hash
+    async with runtime.app_factory() as db:
+        replay = await begin(
+            db,
+            subject_hash=subject_user(user_id),
+            route=route,
+            key=idem_key,
+            req_hash=req_hash,
+        )
+    if replay is not None:
+        return Replay(replay["status_code"], replay["response_json"])
+    clean_tools = _normalize_tools(tools, allow=(dom is _DOMAINS["experts"]))
+    async with owner_session(runtime, user_id) as db:
+        await _assert_expert_author(db, user_id)
+        # D21 锁序：先实体行 FOR UPDATE（与 edit/approve/takedown 同序）——
+        # 串行化并发编辑的草稿覆写；否则 autocheck 校验的快照与随后落库的
+        # pending_review 行可被并发 PUT 替换（autocheck TOCTOU，D9 提交闸被绕过）
+        entity = (
+            await db.execute(select(dom.entity).where(dom.entity.id == eid).with_for_update())
+        ).scalar_one_or_none()
+        if entity is None:
+            raise HTTPException(
+                status_code=404, detail={"code": "NOT_FOUND", "message": "实体不存在"}
+            )
+        revision = (
+            await db.execute(
+                select(dom.revision).where(
+                    dom.revision.id == rid, getattr(dom.revision, dom.fk_field) == eid
+                )
+            )
+        ).scalar_one_or_none()
+        if revision is None:
+            raise HTTPException(
+                status_code=404, detail={"code": "NOT_FOUND", "message": "revision 不存在"}
+            )
+        if revision.status != "draft":
+            raise AgentCraftError(
+                ErrorCode.REVIEW_PENDING, "仅 draft 状态可提交审核", http_status=409
+            )
+        result = run_auto_check(dom.revision_type, revision.content_json)
+        if not result["valid"]:
+            summary = "；".join(f"{i['field']}:{i['rule']}" for i in result["issues"][:3])
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "VALIDATION_ERROR",
+                    "message": f"自动检查未通过：{summary}",
+                },
+            )
+        if clean_tools:
+            rows = (
+                await db.execute(
+                    select(ToolCatalog.tool_id, ToolCatalog.version).where(
+                        tuple_(ToolCatalog.tool_id, ToolCatalog.version).in_(clean_tools)
+                    )
+                )
+            ).all()
+            found = {(t, v) for t, v in rows}
+            missing = [pair for pair in clean_tools if pair not in found]
+            if missing:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "VALIDATION_ERROR",
+                        "message": f"工具不在目录中：{missing[0][0]}@{missing[0][1]}",
+                    },
+                )
+            for tool_id, version in clean_tools:
+                # 无需先清：tools 写行只发生在 draft→pending_review 的单次提交
+                # （重复 submit 在 status 门即 409；覆写草稿走新 revision id）
+                db.add(
+                    RevisionTool(
+                        id=uuid7(),
+                        expert_revision_id=revision.id,
+                        tool_id=tool_id,
+                        version=version,
+                    )
+                )
+        revision.status = "pending_review"
+        await db.flush()
+        # onupdate 时间戳落地后再出参（MissingGreenlet 防护，同 create/edit）
+        await db.refresh(revision)
+        payload = {"data": {"revision": _revision_brief(revision)}}
+        await store(
+            db,
+            subject_hash=subject_user(user_id),
+            route=route,
+            key=idem_key,
+            req_hash=req_hash,
+            status_code=200,
+            response_json=payload,
+        )
+    return payload["data"]
+
+
+def _normalize_tools(tools: list[dict], *, allow: bool) -> list[tuple[str, str]]:
+    if not allow and tools:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "VALIDATION_ERROR", "message": "skill revision 不携带工具"},
+        )
+    pairs: list[tuple[str, str]] = []
+    for item in tools or []:
+        tool_id = item.get("tool_id")
+        version = item.get("version")
+        if (
+            not isinstance(tool_id, str)
+            or not tool_id
+            or not isinstance(version, str)
+            or not version
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "VALIDATION_ERROR", "message": "tools 条目格式非法"},
+            )
+        pair = (tool_id, version)
+        if pair not in pairs:
+            pairs.append(pair)
+    if len(pairs) > _MAX_TOOLS:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "VALIDATION_ERROR", "message": f"工具最多 {_MAX_TOOLS} 项"},
+        )
+    return pairs
