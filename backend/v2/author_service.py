@@ -316,9 +316,10 @@ async def list_entities(
     """本人实体列表（吃调用方 owner_session 会话；D6 本人语义）。
 
     status=None 不过滤；词表外 → 400（注记 3）。显式 owner_id 过滤收窄 RLS
-    发布可见面（他人 published 实体不可混入）；两次查询（实体 + 全部可见
-    revision）后 Python 按 fk 分组；每项附 revision_count / latest_revision / name
-    （name 取最新 revision content_json.name，无 revision 时为 None）。
+    发布可见面（他人 published 实体不可混入）；两次查询（实体 + 仅本人实体集的
+    revision，in 绑定收界——不取全平台发布可见 revision）后 Python 按 fk 分组；
+    每项附 revision_count / latest_revision / name（name 取最新 revision
+    content_json.name，无 revision 时为 None）。
     """
     user_id = str(user_id)  # D26 归一
     _reject_invalid_status(status)
@@ -331,18 +332,21 @@ async def list_entities(
     if status is not None:
         ent_query = ent_query.where(dom.entity.status == status)
     entities = (await db.execute(ent_query)).scalars().all()
-    revisions = (
-        (
-            await db.execute(
-                select(dom.revision).order_by(dom.revision.revision_no.asc(), dom.revision.id)
-            )
-        )
-        .scalars()
-        .all()
-    )
     by_entity: dict[Any, list[Any]] = {}
-    for rev in revisions:
-        by_entity.setdefault(getattr(rev, dom.fk_field), []).append(rev)
+    if entities:  # 空集合跳过 revision 查询（无谓 IO 为零）
+        revisions = (
+            (
+                await db.execute(
+                    select(dom.revision)
+                    .where(getattr(dom.revision, dom.fk_field).in_([ent.id for ent in entities]))
+                    .order_by(dom.revision.revision_no.asc(), dom.revision.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for rev in revisions:
+            by_entity.setdefault(getattr(rev, dom.fk_field), []).append(rev)
     items: list[dict] = []
     for ent in entities:
         revs = by_entity.get(ent.id, [])
