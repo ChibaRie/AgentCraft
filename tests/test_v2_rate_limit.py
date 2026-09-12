@@ -81,6 +81,7 @@ def test_limits_registry_pins_registered_scopes():
         "password_change_totp": (5, 900),
         "provider_test": (10, 3600),
         "report": (10, 86400),  # Phase 4 T8：举报 10 次/天/用户
+        "discover": (60, 3600),  # Phase 4 T9：匿名目录浏览 60 次/小时/IP
     }
 
 

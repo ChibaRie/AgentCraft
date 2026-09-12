@@ -48,6 +48,7 @@ LIMITS: dict[str, tuple[int, int]] = {
     "password_change_totp": (5, 900),  # TOTP 码失败，主体 [user]
     "provider_test": (10, 3600),  # 连通性测试（Sup §7：10 次/小时/用户），主体 [user]
     "report": (10, 86400),  # 举报（Sup §7：10 次/天/用户），主体 [user]——Phase 4 T8
+    "discover": (60, 3600),  # 匿名公开目录浏览（契约缺口，Sup §9 补记），主体 [ip]——Phase 4 T9
 }
 
 _HMAC_KINDS = frozenset({"email", "ip", "user"})
