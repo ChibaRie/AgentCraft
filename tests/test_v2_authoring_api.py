@@ -12,14 +12,6 @@ from tests.v2_content_helpers import (
 )
 from tests.v2_provider_helpers import auth_client, login, seed_active_user
 
-# v2_content_helpers.SKILL_CONTENT["output_requirements"] 为 19 字，差 1 字不达
-# SkillContentPayload min_length=20（helper 文件不在本任务可触碰文件区，D8 上限
-# 为简报规范值不可放宽）——HTTP 用例在该字段上做最小补齐，其余字段原样消费。
-SKILL_CONTENT_HTTP = dict(
-    SKILL_CONTENT,
-    output_requirements="输出结构化问题清单，逐条标注严重级别并给出建议。",
-)
-
 
 async def _author_client(pg, email: str):
     """种子 expert_author 用户并真实登录，返回 (client, user_id)。"""
@@ -177,9 +169,7 @@ async def test_skill_full_flow(pg, provider_env):
     """skill 全链 create→submit(tools=[]) → 200 pending_review；skill 传 tools → 400。"""
     client, _ = await _author_client(pg, "api-skill@x.com")
     created = (
-        await client.post(
-            "/api/v2/skills", json=SKILL_CONTENT_HTTP, headers={"Idempotency-Key": "s1"}
-        )
+        await client.post("/api/v2/skills", json=SKILL_CONTENT, headers={"Idempotency-Key": "s1"})
     ).json()["data"]
     assert created["entity"]["status"] == "draft"
     entity_id = created["entity"]["id"]
@@ -277,9 +267,7 @@ async def test_skill_detail_shape(pg, provider_env):
     """skill 详情出参键形态与 experts 同构（{"skill": {...}, "revisions": [...]}）。"""
     client, _ = await _author_client(pg, "api-skilldetail@x.com")
     created = (
-        await client.post(
-            "/api/v2/skills", json=SKILL_CONTENT_HTTP, headers={"Idempotency-Key": "d1"}
-        )
+        await client.post("/api/v2/skills", json=SKILL_CONTENT, headers={"Idempotency-Key": "d1"})
     ).json()["data"]
     detail = await client.get(f"/api/v2/skills/{created['entity']['id']}")
     assert detail.status_code == 200, detail.text

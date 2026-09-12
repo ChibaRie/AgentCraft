@@ -30,7 +30,7 @@ SKILL_CONTENT = {
     "goal": "发现代码中的缺陷与潜在风险并给出修改建议。",
     "steps": "1. 通读变更范围 2. 按清单逐项检查 3. 输出评审报告。",
     "input_requirements": None,
-    "output_requirements": "输出结构化问题清单，逐条标注严重级别。",
+    "output_requirements": "输出结构化的问题清单，逐条标注严重级别。",
     "constraints": "不修改代码，仅输出评审意见，不执行任何命令。",
 }
 
