@@ -3,6 +3,7 @@
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from backend.errors import AgentCraftError, ErrorCode
 from backend.v2 import idempotency, report_service
@@ -253,6 +254,74 @@ async def test_takedown_publishes_reversal(pg, provider_env):
                 text("SELECT count(*) FROM audit_logs WHERE action = 'report.takedown'")
             )
         ).scalar_one() == 1
+
+
+@pytest.mark.usefixtures("provider_env")
+@pytest.mark.asyncio
+async def test_takedown_rollback_leaves_no_trace(pg, provider_env):
+    """原子性证据（review_service I1 强化同款范式）：takedown 在最终 flush 前已入队
+    4 处写（published 归档 / 指针置空 / 实体回 draft / report actioned），AuditLog
+    actor_id FK（ghost admin_id，users 无此行）在最终 flush 爆 → 整事务回滚。
+    superuser 复核：指针/状态全无残留、audit_logs 0 行——区分「回滚了」与「从未写过」。"""
+    author = await seed_active_user(pg, "td-rb-author@x.com")
+    reporter = await seed_active_user(pg, "td-rb-reporter@x.com")
+    content = dict(EXPERT_CONTENT)
+    entity_id, revision_id = await seed_entity_with_revision(
+        pg,
+        author,
+        "experts",
+        entity_status="published",
+        revision_status="published",
+        content_json=content,
+        content_sha256=content_sha256(content),
+        with_pointer=True,
+    )
+    async with pg.engine.begin() as conn:  # superuser 造 open report（status 列必显式）
+        report_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO reports (id, reporter_id, target_type, target_id, status, reason) "
+                    "VALUES (gen_random_uuid(), CAST(:u AS uuid), 'expert_revision', "
+                    "CAST(:r AS uuid), 'open', '违规') RETURNING id"
+                ),
+                {"u": reporter, "r": revision_id},
+            )
+        ).scalar_one()
+    ghost = str(uuid7())  # 格式合法但 users 无此行 → 最终 flush 时 AuditLog.actor_id FK 违例
+    async with provider_env.admin_factory() as db:
+        with pytest.raises(IntegrityError):
+            async with db.begin():
+                await report_service.resolve_report(
+                    db,
+                    report_id=str(report_id),
+                    action="takedown_revision",
+                    admin_id=ghost,
+                    reason="确认违规",
+                    request_id="req-rb",
+                )
+    async with pg.engine.begin() as conn:  # superuser 复核：4 处写 + 审计全数回滚
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT status, published_revision_id FROM experts WHERE id = CAST(:e AS uuid)"
+                ),
+                {"e": entity_id},
+            )
+        ).one()
+        assert row.status == "published"
+        assert str(row.published_revision_id) == revision_id  # 指针未动
+        assert (
+            await conn.execute(
+                text("SELECT status FROM expert_revisions WHERE id = CAST(:r AS uuid)"),
+                {"r": revision_id},
+            )
+        ).scalar_one() == "published"
+        assert (
+            await conn.execute(
+                text("SELECT status FROM reports WHERE id = CAST(:p AS uuid)"), {"p": report_id}
+            )
+        ).scalar_one() == "open"
+        assert (await conn.execute(text("SELECT count(*) FROM audit_logs"))).scalar_one() == 0
 
 
 @pytest.mark.usefixtures("provider_env")
