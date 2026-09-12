@@ -13,10 +13,12 @@
   SQLSTATE 42501）
 - admin role 经显式 policy 读全量；无 UPDATE/DELETE policy → RLS 默认拒绝 =
   静默 0 行受影响（PostgreSQL 不抛错——brief 的 pytest.raises 版本据此修正为
-  rowcount 断言）
+  rowcount 断言）。0006 例外：experts/skills/expert_revisions/skill_revisions
+  四张治理表新增 *_admin_update policy（Phase 4 裁决 D1），admin UPDATE 对这
+  四张表自 0006 起生效，不再静默 0 行；其余表维持默认拒绝语义不变
 - 未知角色无法连接（PUBLIC 表权限已全撤、角色白名单封闭）
-- 目录契约（Task 6 评审补充）：policy 总数 ≥54（0003 后实际 71）；
-  admin 角色专属 policy ≥12（实际 18）且 app 角色不持有任何 *_admin_* policy；
+- 目录契约（Task 6 评审补充）：policy 总数 ≥54（0006 后实际 78）；
+  admin 角色专属 policy ≥12（实际 23）且 app 角色不持有任何 *_admin_* policy；
   app 授权表白名单 28 张表（0003 起纳入 users/user_entitlements）；11 张 owner 表
   relrowsecurity/relforcerowsecurity 双真（FORCE：表 owner 亦受 RLS 约束）
 - experts/skills（终审 F2）：owner RLS + 发布可见性——SELECT 放行
@@ -471,8 +473,8 @@ async def test_unknown_role_cannot_connect(pg: PgDb) -> None:
 
 async def test_policy_catalog_matches_rls_contract(pg: PgDb) -> None:
     """policy 总数 ≥54（9 owner 表 ×5 + experts/skills ×5×2 + revision 表 ×3×2
-    + reports ×3 = 64）；admin 角色专属 policy ≥12（实际 15）；
-    app 角色不持有任何 *_admin_* policy。"""
+    + reports ×3 = 64，0003 +7、0006 +7 → 实际 78）；admin 角色专属 policy
+    ≥12（0006 后实际 23）；app 角色不持有任何 *_admin_* policy。"""
     async with pg.engine.begin() as conn:
         total = (await conn.execute(text("SELECT count(*) FROM pg_policies"))).scalar_one()
         admin_owned = (

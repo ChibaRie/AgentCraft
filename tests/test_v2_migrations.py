@@ -1,5 +1,6 @@
 """V2 迁移链验收：0001（schema+roles+RLS）+ 0002（种子）+ 0003（identity grants/RLS/列）
-+ 0004（user_providers 活跃条目唯一索引）+ 0005（users 删除期限 CHECK 重命名）。
++ 0004（user_providers 活跃条目唯一索引）+ 0005（users 删除期限 CHECK 重命名）
++ 0006（治理域 admin 写路径 policy + revision_tools RLS + owner 护栏触发器）。
 
 直接对 testcontainer PG 建一次性库跑 alembic 子进程（不经模板库克隆），
 验证 upgrade/downgrade/upgrade 往返幂等与种子/角色齐备。
