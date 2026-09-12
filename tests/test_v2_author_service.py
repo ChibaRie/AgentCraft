@@ -687,3 +687,91 @@ async def test_submit_skill_with_tools_400(pg, provider_env):
             idem_hash=idempotency.request_hash({"tools": [1]}),
         )
     assert excinfo.value.status_code == 400
+
+
+# ---------- 跨 owner 锁语义钉（终审 F1）----------
+# 404 来自 PG「FOR UPDATE 须同时通过 UPDATE policy USING，失败行被静默排除」
+# 语义（experts_app_select 发布可见性放行普通 SELECT，experts_app_update 的
+# USING 仅匹配 owner 本人）；DB 层机制钉见 test_v2_rls.py 的 FOR UPDATE 用例。
+
+
+@pytest.mark.asyncio
+async def test_edit_entity_cross_owner_published_404(pg, provider_env):
+    """stranger（有 entitlement）编辑他人 published 实体 → 实体行锁（D21）
+    拿不到行 → 统一 404。若 with_for_update() 被去掉，锁查询退化为发布可见性
+    可见查询、跨 owner 注入通道重开，本用例即红。"""
+    from backend.v2.runtime import owner_session
+
+    victim = await seed_active_user(pg, "edit-victim@x.com")
+    stranger = await seed_active_user(pg, "edit-stranger@x.com")
+    await seed_entitlement(pg, stranger)  # 过 403 entitlement 门，直抵实体锁
+    victim_eid, _ = await seed_entity_with_revision(
+        pg,
+        victim,
+        "experts",
+        entity_status="published",
+        revision_status="published",
+        with_pointer=True,
+        content_json={"name": "受害者的公开专家"},
+    )
+    async with owner_session(provider_env, stranger) as db:
+        # 取证：该行对 stranger 的普通 SELECT 可见 → 404 只能来自 FOR UPDATE 锁语义
+        n = (
+            await db.execute(
+                text("SELECT count(*) FROM experts WHERE id = CAST(:i AS uuid)"),
+                {"i": victim_eid},
+            )
+        ).scalar_one()
+        assert n == 1
+    with pytest.raises(HTTPException) as excinfo:
+        await author_service.edit_entity(
+            provider_env,
+            user_id=stranger,
+            target="experts",
+            entity_id=victim_eid,
+            content=dict(EXPERT_CONTENT),
+            idem_key="k1",
+            idem_hash=idempotency.request_hash(EXPERT_CONTENT),
+        )
+    assert excinfo.value.status_code == 404
+    assert excinfo.value.detail["code"] == "NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_submit_revision_cross_owner_404(pg, provider_env):
+    """stranger 对他人 published 实体下的 pending_review revision（no=2）提审 →
+    D21 锁序第一步的实体行锁拿不到行 → 404（先于 revision 查找与 status 门）。
+    实体可见性取证同 test_edit_entity_cross_owner_published_404。"""
+    victim = await seed_active_user(pg, "submit-victim@x.com")
+    stranger = await seed_active_user(pg, "submit-stranger@x.com")
+    await seed_entitlement(pg, stranger)
+    victim_eid, _ = await seed_entity_with_revision(
+        pg,
+        victim,
+        "experts",
+        entity_status="published",
+        revision_status="published",
+        with_pointer=True,
+        content_json={"name": "受害者的公开专家"},
+    )
+    rev2_id, _ = await seed_entity_with_revision(  # no=2 pending_review 挂受害实体
+        pg,
+        victim,
+        "experts",
+        revision_status="pending_review",
+        revision_no=2,
+        entity_id=victim_eid,
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        await author_service.submit_revision(
+            provider_env,
+            user_id=stranger,
+            target="experts",
+            entity_id=victim_eid,
+            revision_id=rev2_id,
+            tools=[],
+            idem_key="k1",
+            idem_hash=idempotency.request_hash({"tools": []}),
+        )
+    assert excinfo.value.status_code == 404
+    assert excinfo.value.detail["code"] == "NOT_FOUND"

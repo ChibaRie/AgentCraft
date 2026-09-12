@@ -930,3 +930,35 @@ async def test_insert_guard_requires_draft_birth(pg: PgDb) -> None:
                 )
     finally:
         await app.dispose()
+
+
+async def test_app_role_for_update_excludes_foreign_published_entity(pg: PgDb) -> None:
+    """跨 owner 锁语义钉（终审 F1）：同一 stranger 上下文，普通 SELECT 恰见他人
+    published 实体（experts_app_select 发布可见性），SELECT ... FOR UPDATE 却
+    0 行——experts_app_update 的 USING(owner_id = current_owner_id()) 不匹配的
+    行在锁请求时被静默排除。这正是 edit_entity/submit_revision 跨 owner 统一
+    404 的机制地基（author_service 实体行锁 scalar_one_or_none() → 404
+    NOT_FOUND）：若服务层去掉 with_for_update()，锁查询退化为可见查询，跨
+    owner 注入通道重开。本用例无预期失败语句，单连接块即可（B 纪律）。"""
+    victim = await _seed_user_with_task(pg, "lock-victim@x.com")
+    victim_expert, _ = await _published_ids_for(pg, "experts", victim)
+    stranger = await _seed_bare_user(pg, "lock-stranger@x.com")
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with app.connect() as conn:
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": stranger})
+            visible = (
+                await conn.execute(
+                    text("SELECT id FROM experts WHERE id = :x"), {"x": victim_expert}
+                )
+            ).all()
+            assert len(visible) == 1  # 发布可见性：普通 SELECT 恰见该行
+            locked = (
+                await conn.execute(
+                    text("SELECT id FROM experts WHERE id = :x FOR UPDATE"),
+                    {"x": victim_expert},
+                )
+            ).all()
+            assert locked == []  # FOR UPDATE：UPDATE policy USING 不匹配 → 静默排除 0 行
+    finally:
+        await app.dispose()
