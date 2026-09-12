@@ -80,6 +80,7 @@ def test_limits_registry_pins_registered_scopes():
         "mfa_failure": (10, 900),
         "password_change_totp": (5, 900),
         "provider_test": (10, 3600),
+        "report": (10, 86400),  # Phase 4 T8：举报 10 次/天/用户
     }
 
 
