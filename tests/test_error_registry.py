@@ -14,6 +14,7 @@ def test_new_error_codes_registered():
         "ADMIN_MFA_REQUIRED",
         "QUOTA_DAILY_EXCEEDED",
         "REVISION_NOT_PUBLISHED",
+        "REPORT_ALREADY_RESOLVED",
     ):
         assert ErrorCode(code)
 
