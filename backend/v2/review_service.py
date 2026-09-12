@@ -1,8 +1,11 @@
 """审核发布服务（Phase 4 裁决 D1/D4/D5/D13/D14/D23）：admin 引擎，签名冻结供 Phase 7。
 
 锁序纪律（D14，approve/reject/takedown 一致）：单事务内先锁实体行（FOR UPDATE），
-**锁获得后重读 revision 行（with_for_update）再做断言**——READ COMMITTED 下等锁
-期间并发事务可能已 reject/翻转状态，锁前快照不可信。实体行锁同时串行化「不同
+**锁获得后重读 revision 行（with_for_update + populate_existing）再做断言**——
+READ COMMITTED 下等锁期间并发事务可能已 reject/翻转状态，锁前快照不可信；
+且同一会话的 identity map 默认（populate_existing=False）对二读丢弃新行值、
+返回锁前旧实例，必须显式 populate_existing 才能以锁后真值覆盖，否则行锁
+真落位而断言全是锁前快照（已拒 revision 可被发布）。实体行锁同时串行化「不同
 revision 的并发 approve」「approve×takedown」「approve×作者编辑」。断言序（全部
 基于锁后行）：owner 交叉校验（revision.owner_id == entity.owner_id，防审核队列
 投毒）→ status → hash 三重比对（重算 canonical 防列值被改型 TOCTOU）→ [expert]
@@ -91,8 +94,14 @@ async def approve_revision(
             .with_for_update()
         )
     ).scalar_one()  # FK 保证存在
-    revision = (  # 锁后重读（with_for_update）
-        await admin_db.execute(select(dom.revision).where(dom.revision.id == rid).with_for_update())
+    revision = (  # 锁后重读（with_for_update + populate_existing：identity map
+        # 对同会话二读默认丢弃新行值返回锁前旧实例，须显式覆盖为锁后真值）
+        await admin_db.execute(
+            select(dom.revision)
+            .where(dom.revision.id == rid)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
     ).scalar_one()
     if revision.owner_id != entity.owner_id:  # D14 交叉校验：跨作者内容注入断言
         raise AgentCraftError(
@@ -195,8 +204,14 @@ async def reject_revision(
             .with_for_update()
         )
     ).scalar_one()
-    revision = (  # 锁后重读（同 approve——锁前快照不可信）
-        await admin_db.execute(select(dom.revision).where(dom.revision.id == rid).with_for_update())
+    revision = (  # 锁后重读（同 approve——with_for_update + populate_existing，
+        # identity map 默认返回锁前旧实例，锁前快照不可信）
+        await admin_db.execute(
+            select(dom.revision)
+            .where(dom.revision.id == rid)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
     ).scalar_one()
     if revision.owner_id != entity.owner_id:  # 交叉校验（D14，与 approve 同款）
         raise AgentCraftError(

@@ -3,11 +3,13 @@
 import uuid as _uuid
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 
 from backend.errors import AgentCraftError, ErrorCode
 from backend.v2 import review_service
 from backend.v2.content_hash import content_sha256
+from backend.v2.models.content import ExpertRevision
 from tests.v2_content_helpers import (
     EXPERT_CONTENT,
     seed_entity_with_revision,
@@ -262,15 +264,39 @@ async def test_reject_flow(pg, provider_env):
 @pytest.mark.usefixtures("provider_env")
 @pytest.mark.asyncio
 async def test_approve_rollback_leaves_no_trace(pg, provider_env):
-    # 断言失败（TOOL_REVOKED）→ 同事务的 content_reviews/audit 不落库（原子性）
-    _, _, revision_id = await _seed_pending(pg, tools=[("check_code_style", "1")])
+    """I1 强化「写入后失败」路径：CAS + revision UPDATE 已执行/入队后，最终 flush
+    因 reviewer FK（users 无此行）违例 → 整事务回滚。superuser 复核：实体指针/status
+    未变、revision 仍 pending_review、content_reviews/audit_logs 零行——count==0
+    得以区分「回滚了」与「从未写过」（旧版 TOOL_REVOKED 在全部写之前抛出，断言空转）。"""
+    _, entity_id, revision_id = await _seed_pending(pg, tools=[("check_code_style", "1")])
+    ghost = str(_uuid.uuid4())  # 格式合法但 users 无此行 → flush 时 FK 违例
+    async with provider_env.admin_factory() as db:
+        with pytest.raises(IntegrityError):
+            async with db.begin():
+                await review_service.approve_revision(
+                    db,
+                    target_type="expert_revision",
+                    revision_id=revision_id,
+                    reviewer_id=ghost,
+                    reason="质量合格",
+                    request_id="req-1",
+                )
     async with pg.engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE tool_catalog SET enabled = false WHERE tool_id = 'check_code_style'")
-        )
-    with pytest.raises(AgentCraftError):
-        await _approve(pg, provider_env, "expert_revision", revision_id)
-    async with pg.engine.begin() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT status, published_revision_id FROM experts WHERE id = CAST(:e AS uuid)"
+                ),
+                {"e": entity_id},
+            )
+        ).one()
+        assert row.status == "draft" and row.published_revision_id is None
+        assert (
+            await conn.execute(
+                text("SELECT status FROM expert_revisions WHERE id = CAST(:r AS uuid)"),
+                {"r": revision_id},
+            )
+        ).scalar_one() == "pending_review"
         assert (
             await conn.execute(
                 text(
@@ -281,6 +307,73 @@ async def test_approve_rollback_leaves_no_trace(pg, provider_env):
             )
         ).scalar_one() == 0
         assert (await conn.execute(text("SELECT count(*) FROM audit_logs"))).scalar_one() == 0
+
+
+@pytest.mark.usefixtures("provider_env")
+@pytest.mark.asyncio
+async def test_approve_reread_after_lock_sees_concurrent_reject(pg, provider_env):
+    """C1 回归（identity map 击穿锁后重读）：A 无锁首读（污染 identity map）→
+    B reject 同一 revision 并提交 → A 同事务同会话继续 approve。交错用顺序 await
+    天然确定（无需等锁）。锁后重读必须看到 rejected（populate_existing 覆盖锁前
+    快照）→ 409 REVIEW_PENDING；superuser 复核 revision 仍 rejected、content_reviews
+    无 approved 行（未修复时已拒 revision 会被发布且双 result 并存）。"""
+    _SEQ["n"] += 1
+    reviewer = await seed_active_user(pg, f"racer-{_SEQ['n']}@x.com")
+    _, _, revision_id = await _seed_pending(pg)
+    async with provider_env.admin_factory() as db_a:
+        with pytest.raises(AgentCraftError) as excinfo:
+            async with db_a.begin():
+                # A 锁前快照（approve 内部首读同款无锁语句）→ 污染 A 的 identity map
+                stale = (
+                    await db_a.execute(
+                        select(ExpertRevision).where(ExpertRevision.id == _uuid.UUID(revision_id))
+                    )
+                ).scalar_one()
+                assert stale.status == "pending_review"
+                # B 独立 admin 会话完整 reject 并提交（A 仅持 MVCC 快照，无锁，不阻塞 B）
+                async with provider_env.admin_factory() as db_b:
+                    async with db_b.begin():
+                        await review_service.reject_revision(
+                            db_b,
+                            target_type="expert_revision",
+                            revision_id=revision_id,
+                            reviewer_id=reviewer,
+                            reason="并发拒绝",
+                            request_id="req-c1",
+                        )
+                # A 同一事务/会话继续 approve：若锁后重读仍取 identity map 锁前
+                # 旧实例（status=pending_review），已拒 revision 将被发布
+                await review_service.approve_revision(
+                    db_a,
+                    target_type="expert_revision",
+                    revision_id=revision_id,
+                    reviewer_id=reviewer,
+                    reason="质量合格",
+                    request_id="req-c1",
+                )
+        assert excinfo.value.code == ErrorCode.REVIEW_PENDING
+        assert excinfo.value.http_status == 409
+    async with pg.engine.begin() as conn:
+        assert (
+            await conn.execute(
+                text("SELECT status FROM expert_revisions WHERE id = CAST(:r AS uuid)"),
+                {"r": revision_id},
+            )
+        ).scalar_one() == "rejected"
+        results = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT result FROM content_reviews "
+                        "WHERE target_revision_id = CAST(:r AS uuid)"
+                    ),
+                    {"r": revision_id},
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert results == ["rejected"]
 
 
 @pytest.mark.usefixtures("provider_env")
