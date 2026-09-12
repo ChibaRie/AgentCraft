@@ -446,3 +446,82 @@ async def test_edit_without_entitlement_403(pg, provider_env):
         )
     assert excinfo.value.status_code == 403
     assert excinfo.value.detail["code"] == "FORBIDDEN"
+
+
+@pytest.mark.asyncio
+async def test_list_entities_excludes_foreign_published(pg, provider_env):
+    """D6「本人列表」：他人 published 实体虽在 RLS 发布可见面（先以裸查询取证），
+    list_entities 的服务层 owner 过滤必须剔除——双向互不可见。"""
+    from backend.v2.runtime import owner_session
+
+    author_a = await seed_active_user(pg, "list-a@x.com")
+    author_b = await seed_active_user(pg, "list-b@x.com")
+    await seed_entitlement(pg, author_a)
+    await seed_entitlement(pg, author_b)
+    detail_a = await author_service.create_entity(
+        provider_env,
+        user_id=author_a,
+        target="experts",
+        content=dict(EXPERT_CONTENT),
+        idem_key="ka",
+        idem_hash=idempotency.request_hash(EXPERT_CONTENT),
+    )
+    await seed_entity_with_revision(
+        pg,
+        author_b,
+        "experts",
+        entity_status="published",
+        revision_status="published",
+        with_pointer=True,
+        content_json={"name": "B 的公开专家"},
+    )
+    async with owner_session(provider_env, author_a) as db:
+        # RLS 取证：发布可见面确实含他人 published 实体（2 行 = 本人 draft + 他人 published）
+        n_visible = (
+            await db.execute(text("SELECT count(*) FROM experts WHERE status = 'published'"))
+        ).scalar_one()
+        assert n_visible == 1  # B 的 published 行对 A 可见 → 剔除只能靠服务层
+        items = await author_service.list_entities(
+            db, user_id=author_a, target="experts", status=None
+        )
+    assert [i["id"] for i in items] == [detail_a["entity"]["id"]]
+    # 反向：B 的列表不含 A 的实体
+    async with owner_session(provider_env, author_b) as db:
+        items_b = await author_service.list_entities(
+            db, user_id=author_b, target="experts", status=None
+        )
+    assert [i["name"] for i in items_b] == ["B 的公开专家"]
+
+
+@pytest.mark.asyncio
+async def test_get_entity_foreign_published_404(pg, provider_env):
+    """D6「本人详情」：他人 published 实体在 RLS 发布可见面，get_entity 须
+    owner 过滤收窄 → 统一 404（与其他不可见形态一致）。"""
+    from backend.v2.runtime import owner_session
+
+    author = await seed_active_user(pg, "get-a@x.com")
+    foreign = await seed_active_user(pg, "get-b@x.com")
+    foreign_eid, _ = await seed_entity_with_revision(
+        pg,
+        foreign,
+        "experts",
+        entity_status="published",
+        revision_status="published",
+        with_pointer=True,
+        content_json={"name": "B 的公开专家"},
+    )
+    async with owner_session(provider_env, author) as db:
+        # RLS 取证：该行对 A 可见 → 404 只能来自服务层 owner 过滤
+        n = (
+            await db.execute(
+                text("SELECT count(*) FROM experts WHERE id = CAST(:i AS uuid)"),
+                {"i": foreign_eid},
+            )
+        ).scalar_one()
+        assert n == 1
+        with pytest.raises(HTTPException) as excinfo:
+            await author_service.get_entity(
+                db, user_id=author, target="experts", entity_id=foreign_eid
+            )
+    assert excinfo.value.status_code == 404
+    assert excinfo.value.detail["code"] == "NOT_FOUND"

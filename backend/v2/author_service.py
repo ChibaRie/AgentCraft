@@ -313,16 +313,21 @@ async def list_entities(
     target: str,
     status: str | None,
 ) -> list[dict]:
-    """本人实体列表（吃调用方 owner_session 会话；行可见性由 GUC+RLS 决定）。
+    """本人实体列表（吃调用方 owner_session 会话；D6 本人语义）。
 
-    status=None 不过滤；词表外 → 400（注记 3）。两次查询（实体 + 全部可见
+    status=None 不过滤；词表外 → 400（注记 3）。显式 owner_id 过滤收窄 RLS
+    发布可见面（他人 published 实体不可混入）；两次查询（实体 + 全部可见
     revision）后 Python 按 fk 分组；每项附 revision_count / latest_revision / name
     （name 取最新 revision content_json.name，无 revision 时为 None）。
     """
     user_id = str(user_id)  # D26 归一
     _reject_invalid_status(status)
     dom = _domain(target)
-    ent_query = select(dom.entity).order_by(dom.entity.created_at.asc(), dom.entity.id.asc())
+    ent_query = (
+        select(dom.entity)
+        .where(dom.entity.owner_id == _uuid.UUID(user_id))  # D6：本人列表
+        .order_by(dom.entity.created_at.asc(), dom.entity.id.asc())
+    )
     if status is not None:
         ent_query = ent_query.where(dom.entity.status == status)
     entities = (await db.execute(ent_query)).scalars().all()
@@ -376,11 +381,22 @@ async def get_entity(
     target: str,
     entity_id: str,
 ) -> dict:
-    """实体详情 + 全部 revisions（吃调用方 owner_session 会话；跨 owner 不可见 → 统一 404）。"""
+    """本人实体详情 + 全部 revisions（吃调用方 owner_session 会话；统一 404）。
+
+    D6 本人语义：显式 owner_id 过滤收窄 RLS 发布可见面——他人实体（含
+    published）一律与其他不可见形态同形 404。
+    """
     user_id = str(user_id)  # D26 归一
     eid = _reject_invalid_uuid(entity_id, "entity_id")
     dom = _domain(target)
-    entity = (await db.execute(select(dom.entity).where(dom.entity.id == eid))).scalar_one_or_none()
+    entity = (
+        await db.execute(
+            select(dom.entity).where(
+                dom.entity.id == eid,
+                dom.entity.owner_id == _uuid.UUID(user_id),  # D6：本人详情
+            )
+        )
+    ).scalar_one_or_none()
     if entity is None:
         raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "实体不存在"})
     revisions = (
