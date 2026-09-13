@@ -3,7 +3,6 @@ import { CheckCircle, Warning } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { request } from "../api/client.js";
 import { formatDateTime } from "../lib/datetime.js";
-import McpServerManager from "../components/McpServerManager.jsx";
 import SkillEditorModal from "../components/SkillEditorModal.jsx";
 
 const STATUS_LABELS = { draft: "草稿", published: "已发布", offline: "已下架" };
@@ -159,7 +158,6 @@ function SkillCard({ skill, busy, validation, binding, onAction }) {
 
 export default function SkillManagePage() {
   const { isReady, isAuthenticated } = useAuth();
-  const [activeTab, setActiveTab] = useState("skill");
   const [skills, setSkills] = useState([]);
   const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -315,40 +313,13 @@ export default function SkillManagePage() {
   return (
     <main className="app-main">
       <header className="page-header rise">
-        <h1 className="page-title">
-          {activeTab === "mcp" ? "MCP Server 管理" : "Skill 管理"}
-        </h1>
+        <h1 className="page-title">Skill 管理</h1>
         <p className="page-sub">
-          {activeTab === "mcp"
-            ? "注册 MCP Server 并发现工具，发布后即可绑定到专家，让 Agent 真实调用。"
-            : "把能力封装为可复用的 Skill：校验通过后发布，才能绑定到你的专家。"}
+          把能力封装为可复用的 Skill：校验通过后发布，才能绑定到你的专家。
         </p>
       </header>
 
-      <div className="manage-tabs rise" style={{ "--rise-index": 1 }}>
-        <button
-          type="button"
-          className={`manage-tab${activeTab === "skill" ? " is-active" : ""}`}
-          aria-current={activeTab === "skill"}
-          onClick={() => setActiveTab("skill")}
-        >
-          Skill
-        </button>
-        <button
-          type="button"
-          className={`manage-tab${activeTab === "mcp" ? " is-active" : ""}`}
-          aria-current={activeTab === "mcp"}
-          onClick={() => setActiveTab("mcp")}
-        >
-          MCP Server
-        </button>
-      </div>
-
-      {activeTab === "mcp" ? (
-        <McpServerManager />
-      ) : (
-        <>
-      <div className="manage-toolbar rise" style={{ "--rise-index": 2 }}>
+      <div className="manage-toolbar rise" style={{ "--rise-index": 1 }}>
         <span className="manage-count">{isLoading ? "" : `共 ${total} 个 Skill`}</span>
         <div className="manage-toolbar-actions">
           <button
@@ -421,8 +392,6 @@ export default function SkillManagePage() {
           onClose={() => setEditorSkill(null)}
           onSaved={handleSaved}
         />
-      )}
-        </>
       )}
     </main>
   );

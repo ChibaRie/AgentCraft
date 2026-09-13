@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Plus, X } from "@phosphor-icons/react";
 import { request } from "../api/client.js";
-import McpBindingPanel from "../components/McpBindingPanel.jsx";
 import { CATEGORY_OPTIONS, STATUS_LABELS } from "../lib/categories.js";
 
 const FIELD_RULES = {
@@ -133,7 +132,6 @@ export default function ExpertEditPage({ expertId }) {
   const [examples, setExamples] = useState([""]);
   const [status, setStatus] = useState("draft");
   const [boundSkills, setBoundSkills] = useState([]);
-  const [boundMcps, setBoundMcps] = useState([]);
   const [mySkills, setMySkills] = useState([]);
   const [errors, setErrors] = useState({});
   const [formAlert, setFormAlert] = useState("");
@@ -148,7 +146,6 @@ export default function ExpertEditPage({ expertId }) {
     }
     const payload = await request(`/api/experts/${expertId}`);
     setBoundSkills(payload.data.skills);
-    setBoundMcps(payload.data.mcps || []);
     setStatus(payload.data.status);
   }, [expertId]);
 
@@ -178,7 +175,6 @@ export default function ExpertEditPage({ expertId }) {
         setExamples(data.task_examples?.length ? data.task_examples : [""]);
         setStatus(data.status);
         setBoundSkills(data.skills);
-        setBoundMcps(data.mcps || []);
         setMySkills(skills.data);
       } catch (error) {
         if (!cancelled) {
@@ -524,16 +520,10 @@ export default function ExpertEditPage({ expertId }) {
         </form>
 
         {isNew ? (
-          <>
-            <section className="profile-card rise" style={{ "--rise-index": 2 }} aria-label="Skill 绑定">
-              <h2 className="profile-card-title">Skill 绑定</h2>
-              <p className="detail-prose">保存专家后即可在这里绑定并启用已发布的 Skill。</p>
-            </section>
-            <section className="profile-card rise" style={{ "--rise-index": 3 }} aria-label="MCP 绑定">
-              <h2 className="profile-card-title">MCP 绑定</h2>
-              <p className="detail-prose">保存专家后即可在这里绑定已发布的 MCP Server。</p>
-            </section>
-          </>
+          <section className="profile-card rise" style={{ "--rise-index": 2 }} aria-label="Skill 绑定">
+            <h2 className="profile-card-title">Skill 绑定</h2>
+            <p className="detail-prose">保存专家后即可在这里绑定并启用已发布的 Skill。</p>
+          </section>
         ) : (
           <SkillBindingPanel
             skills={boundSkills}
@@ -561,14 +551,6 @@ export default function ExpertEditPage({ expertId }) {
                 request(`/api/experts/${expertId}/skills/${skillId}`, { method: "DELETE" })
               )
             }
-          />
-        )}
-        {!isNew && (
-          <McpBindingPanel
-            expertId={expertId}
-            bindings={boundMcps}
-            busy={bindBusy}
-            onChanged={refreshBindings}
           />
         )}
       </div>

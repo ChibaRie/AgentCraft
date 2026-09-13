@@ -531,7 +531,6 @@ export default function TaskChatPage() {
                 streamingToolCalls={streaming.toolCalls ?? []}
                 taskCreatedAt={task.created_at}
                 skillsCount={task.skills?.length ?? 0}
-                mcpCount={task.mcp_tools?.length ?? 0}
               />
               {streaming.active && streaming.text === "" && streaming.thinking === "" && (
                 <p className="task-stream-hint">专家正在思考…</p>
@@ -606,7 +605,6 @@ export default function TaskChatPage() {
       {taskId && !isMissing && task && (
         <TaskContextPanel
           skills={task.skills ?? []}
-          mcpTools={task.mcp_tools ?? []}
           toolCalls={panelToolCalls}
         />
       )}

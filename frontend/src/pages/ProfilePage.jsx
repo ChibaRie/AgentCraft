@@ -151,13 +151,13 @@ export default function ProfilePage() {
                   </>
                 )}
                 {justApplied ? " " : ""}
-                你已是专家用户，可以创建并发布自己的专家，为其装配 Skill 与 MCP 工具。
+                你已是专家用户，可以创建并发布自己的专家，为其装配 Skill。
               </p>
             ) : (
               <div className="profile-expert-cta">
                 <p className="profile-expert-desc">
-                  成为专家用户后，你可以创建自己的专家：定义人设与方法论、装配 Skill 与
-                  MCP 工具、发布到专家中心供他人召唤。申请即时生效。
+                  成为专家用户后，你可以创建自己的专家：定义人设与方法论、装配
+                  Skill、发布到专家中心供他人召唤。申请即时生效。
                 </p>
                 <div className="form-alert" role="alert" hidden={!applyError}>
                   {applyError}

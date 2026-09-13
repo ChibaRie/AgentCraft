@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react";
-import { Wrench, X } from "@phosphor-icons/react";
+import { X } from "@phosphor-icons/react";
 import { formatDateTime } from "../lib/datetime.js";
 
 /**
- * 右侧上下文面板（P09 增强）：Skill 快照 / MCP 工具 / 调用记录 三 tab。
+ * 右侧上下文面板（P09 增强）：Skill 快照 / 调用记录 两 tab。
  *
- * 数据全部来自任务创建时冻结的快照（GET /api/tasks/{id} 的 skills/mcp_tools）
+ * 数据全部来自任务创建时冻结的快照（GET /api/tasks/{id} 的 skills）
  * 与消息历史中的 role=tool 行——「任务创建后改专家/Skill 不影响本任务」
  * 的快照语义在 UI 上可见。
  */
-export default function TaskContextPanel({ skills = [], mcpTools = [], toolCalls = [] }) {
+export default function TaskContextPanel({ skills = [], toolCalls = [] }) {
   const [activeTab, setActiveTab] = useState("skill");
   const [drawerSkill, setDrawerSkill] = useState(null);
 
@@ -29,7 +29,6 @@ export default function TaskContextPanel({ skills = [], mcpTools = [], toolCalls
 
   const tabs = [
     { key: "skill", label: "Skill", count: skills.length },
-    { key: "mcp", label: "MCP 工具", count: mcpTools.length },
     { key: "events", label: "调用记录", count: toolCalls.length },
   ];
 
@@ -71,33 +70,6 @@ export default function TaskContextPanel({ skills = [], mcpTools = [], toolCalls
                   {skill.content.split("\n")[0]?.replace(/^角色：/, "") || "查看完整定义"}
                 </span>
               </button>
-            ))
-          )}
-        </div>
-      )}
-
-      {activeTab === "mcp" && (
-        <div className="context-body" role="tabpanel">
-          <p className="context-note">
-            工具集在任务创建时冻结（能力上限快照）；调用经控制面实时校验，
-            Server 下架 / 工具禁用 / 授权撤销会立即阻断。
-          </p>
-          {mcpTools.length === 0 ? (
-            <p className="context-empty">本任务未绑定 MCP 工具</p>
-          ) : (
-            mcpTools.map((tool) => (
-              <div className="context-tool-card" key={`${tool.serverId}-${tool.name}`}>
-                <div className="context-tool-head">
-                  <Wrench size={12} aria-hidden="true" />
-                  <span className="context-tool-name">{tool.name}</span>
-                  {tool.sensitive && (
-                    <span className="skill-status is-offline" title="敏感工具：启用已记录授权">
-                      敏感
-                    </span>
-                  )}
-                </div>
-                <p className="context-tool-desc">{tool.description}</p>
-              </div>
             ))
           )}
         </div>

@@ -91,13 +91,13 @@ function HistoryMessage({ message }) {
 }
 
 /** 任务创建系统便签（快照加载信息）。 */
-function SystemNote({ skillsCount, mcpCount, createdAt }) {
+function SystemNote({ skillsCount, createdAt }) {
   if (!createdAt) {
     return null;
   }
   return (
     <p className="system-note">
-      任务已创建 · 已加载 {skillsCount} 个 Skill、{mcpCount} 个 MCP 工具 · 快照已冻结（
+      任务已创建 · 已加载 {skillsCount} 个 Skill · 快照已冻结（
       {formatDateTime(createdAt)}）
     </p>
   );
@@ -117,15 +117,10 @@ export default function MessageList({
   streamingToolCalls = [],
   taskCreatedAt = null,
   skillsCount = 0,
-  mcpCount = 0,
 }) {
   return (
     <div className="message-list">
-      <SystemNote
-        skillsCount={skillsCount}
-        mcpCount={mcpCount}
-        createdAt={taskCreatedAt}
-      />
+      <SystemNote skillsCount={skillsCount} createdAt={taskCreatedAt} />
       {messages.map((message) => (
         <HistoryMessage key={message.id} message={message} />
       ))}

@@ -42,7 +42,7 @@ function ThemeToggle() {
 const TASK_DOMAIN_LINKS = [
   { to: "/discover", label: "专家中心" },
   { to: "/tasks", label: "任务" },
-  { to: "/skills", label: "Skill / MCP 管理" },
+  { to: "/skills", label: "技能管理" },
 ];
 
 const TASK_DOMAIN_DISABLED_HINT = "任务域尚未接入新登录体系";
