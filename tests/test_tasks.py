@@ -368,7 +368,7 @@ def test_create_task_snapshots_frozen(client, test_db):
     assert [s["name"] for s in data["skills"]] == ["技术周报生成"]
     assert "收集本周技术素材" in data["skills"][0]["content"]
     assert data["snapshot_loaded_at"] == skill_snapshot["loaded_at"]
-    assert data["mcp_tools"] == []
+    assert "mcp_tools" not in data  # Phase 5：详情响应不再暴露 mcp_tools 键
 
 
 # ---------------------------------------------------------------------------

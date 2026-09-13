@@ -5,11 +5,10 @@
 - ruff 执行：format --check + check 的产物解析为 issues；执行类失败（rc>=2、
   超时、ruff 缺失）→ 502
 - 内部接口：X-Task-Token 三重校验复用；400 路径非法
-- 扩展生成：task.ts 固定追加 check_code_style 注册块（§7.4）
+- 扩展生成：task.ts 按平台工具选择子注册 check_code_style（Phase 5 常量表 × 选择子）
 """
 
 import asyncio
-import json
 from pathlib import Path
 
 import pytest
@@ -162,32 +161,22 @@ async def test_run_ruff_timeout_maps_502(tmp_path):
 
 def test_extension_registers_check_code_style(tmp_path):
     generator = ExtensionGenerator(tmp_path / "extensions")
-    path = generator.generate(7, [], provider="faux")
+    path = generator.generate(7, [("check_code_style", "1")], provider="faux")
     source = path.read_text(encoding="utf-8")
     assert "check_code_style" in source
     assert "/internal/harness/check-code-style" in source
     # 非 faux 同样注册
-    path2 = generator.generate(8, [], provider="openai")
+    path2 = generator.generate(8, [("check_code_style", "1")], provider="openai")
     assert "check_code_style" in path2.read_text(encoding="utf-8")
 
 
-def test_extension_mcp_tools_and_harness_coexist(tmp_path):
+def test_extension_empty_selector_registers_nothing(tmp_path):
+    """迁移自 test_extension_mcp_tools_and_harness_coexist：MCP 工具面已下线
+    （Phase 5 D8），空选择子生成纯 provider 扩展——无任何工具注册。"""
     generator = ExtensionGenerator(tmp_path / "extensions")
-    tools = [
-        {
-            "name": "list_directory",
-            "label": "list_directory",
-            "description": "d",
-            "schema": {"type": "object"},
-            "serverId": 1,
-        }
-    ]
-    path = generator.generate(9, tools, provider="openai")
-    source = path.read_text(encoding="utf-8")
-    parsed = json.dumps(
-        {"has_mcp": "list_directory" in source, "has_harness": "check_code_style" in source}
-    )
-    assert json.loads(parsed) == {"has_mcp": True, "has_harness": True}
+    source = generator.generate(9, [], provider="openai").read_text(encoding="utf-8")
+    assert "check_code_style" not in source
+    assert "pi.registerProvider" in source
 
 
 def test_extension_declares_image_input_for_real_provider(tmp_path):
@@ -195,10 +184,14 @@ def test_extension_declares_image_input_for_real_provider(tmp_path):
     Pi read 工具剥离图像块——read.js getNonVisionImageNote 依据模型元数据
     input 是否含 "image" 决定丢弃，多模态模型被注册元数据冤枉）。"""
     generator = ExtensionGenerator(tmp_path / "extensions")
-    source = generator.generate(11, [], provider="openai").read_text(encoding="utf-8")
+    source = generator.generate(11, [("check_code_style", "1")], provider="openai").read_text(
+        encoding="utf-8"
+    )
     assert 'input: ["text", "image"]' in source
     # faux 回显引擎仍为纯文本（不涉及图像）
-    faux = generator.generate(12, [], provider="faux").read_text(encoding="utf-8")
+    faux = generator.generate(12, [("check_code_style", "1")], provider="faux").read_text(
+        encoding="utf-8"
+    )
     assert 'input: ["text"]' in faux
 
 

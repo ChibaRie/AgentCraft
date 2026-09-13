@@ -32,8 +32,10 @@ async def main() -> None:  # noqa: C901 - 探针脚本，分支多为实验场�
     workdir = Path(sys.argv[3]) if len(sys.argv) > 3 else Path.home() / ".pi-probe"
     scenario = sys.argv[4] if len(sys.argv) > 4 else "basic"
 
+    # V1 过渡选择子（与 pi_engine_manager._V1_TRANSITION_TOOLS 一致；probe
+    # 保持轻量，不引入引擎模块依赖）
     extension = ExtensionGenerator(workdir / "extensions").generate(
-        task_id=1, mcp_tools=[], provider="faux"
+        task_id=1, tools=[("check_code_style", "1")], provider="faux"
     )
 
     if scenario == "abort":

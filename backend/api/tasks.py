@@ -144,7 +144,6 @@ async def get_task(
             # 快照摘要（创建时冻结，右侧上下文面板展示；§7.5/DB 设计 §6）
             "skills": json.loads(task.skill_snapshot or "{}").get("skills", []),
             "snapshot_loaded_at": json.loads(task.skill_snapshot or "{}").get("loaded_at"),
-            "mcp_tools": json.loads(task.mcp_snapshot or "{}").get("tools", []),
             "provider": provider_service.provider_summary(
                 json.loads(task.provider_snapshot or "{}")
             ),
@@ -204,7 +203,6 @@ async def send_message(
         )
         return {"message_id": message.id}
 
-    mcp_tools = json.loads(task.mcp_snapshot or "{}").get("tools", [])
     skill_snapshot = json.loads(task.skill_snapshot or "{}")
 
     async def event_stream() -> AsyncIterator[str]:
@@ -221,7 +219,6 @@ async def send_message(
                 skill_snapshot=skill_snapshot,
                 task_files=task_files,
                 expert_name=task.expert_name_snapshot,
-                mcp_tools=mcp_tools,
                 content=context.content,
                 persist_assistant=persist_assistant,
                 persist_tool=persist_tool,

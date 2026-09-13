@@ -21,7 +21,7 @@ import logging
 import os
 import secrets
 import shutil
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -50,6 +50,10 @@ HistoryFetcher = Callable[[int, int], Awaitable[list[dict]]]
 ProviderResolver = Callable[[int, int | None], Awaitable[dict]]
 
 _ROLE_LABELS = {"user": "用户", "assistant": "助手", "tool": "工具"}
+
+# V1 过渡选择子（Phase 5 裁决 D4）：V1 任务工具集恒为此集合——保持现有
+# check_code_style 行为；Phase 6 随任务域消亡。
+_V1_TRANSITION_TOOLS: tuple[tuple[str, str], ...] = (("check_code_style", "1"),)
 
 
 def _human_bytes(num_bytes: int) -> str:
@@ -146,7 +150,6 @@ class PiEngineManager:
         skill_snapshot: dict,
         task_files: list[dict],
         expert_name: str,
-        mcp_tools: list[dict] | None = None,
     ) -> PiEngine:
         """取用健康容器；Skill/Provider 指纹变化或引擎死亡时重建。
 
@@ -178,7 +181,7 @@ class PiEngineManager:
             skill_snapshot=skill_snapshot,
             task_files=task_files,
             expert_name=expert_name,
-            mcp_tools=mcp_tools or [],
+            tools=_V1_TRANSITION_TOOLS,
             provider_snapshot=current_provider,
         )
         engine.provider_fingerprint = current_fingerprint
@@ -203,7 +206,7 @@ class PiEngineManager:
         skill_snapshot: dict,
         task_files: list[dict],
         expert_name: str,
-        mcp_tools: list[dict],
+        tools: Sequence[tuple[str, str]],
         provider_snapshot: dict,
     ) -> PiEngine:
         system_prompt = self._skill_loader.build_system_prompt(
@@ -220,7 +223,7 @@ class PiEngineManager:
         workdir_host = self._resolve_workdir_host(stored_workdir)
         task_files_host = self._task_files_root / f"task-{task_id}"
         task_files_host.mkdir(parents=True, exist_ok=True)  # 空目录也需可 bind
-        extension_path = self._extension_generator.generate(task_id, mcp_tools, provider)
+        extension_path = self._extension_generator.generate(task_id, tools, provider)
         # §7.9：挂载源全部服务端派生且必须绝对化
         workdir_host = self._absolute(workdir_host, "工作目录")
         task_files_host = self._absolute(task_files_host, "任务文件目录")
@@ -516,7 +519,6 @@ class PiEngineManager:
         skill_snapshot: dict,
         task_files: list[dict],
         expert_name: str,
-        mcp_tools: list[dict] | None = None,
         content: str,
         persist_assistant: Callable,
         persist_tool: Callable,
@@ -536,7 +538,6 @@ class PiEngineManager:
             skill_snapshot=skill_snapshot,
             task_files=task_files,
             expert_name=expert_name,
-            mcp_tools=mcp_tools,
         )
         self._last_activity[task_id] = asyncio.get_running_loop().time()
 
@@ -580,7 +581,6 @@ class PiEngineManager:
                     skill_snapshot=skill_snapshot,
                     task_files=task_files,
                     expert_name=expert_name,
-                    mcp_tools=mcp_tools,
                 )
                 self._last_activity[task_id] = asyncio.get_running_loop().time()
 

@@ -26,7 +26,7 @@ from backend.models.skill import Skill
 from backend.models.task import Task
 from backend.models.task_file import TaskFile
 from backend.schemas.task import TaskCreateRequest
-from backend.services import mcp_service, provider_service
+from backend.services import provider_service
 from backend.services.task_locks import task_data_lock
 from backend.services.user_service import UserSystemError
 from backend.services.workspace import (
@@ -157,10 +157,9 @@ async def create_task(
         "expert_methodology": expert.methodology,
         "loaded_at": _now().isoformat(),
     }
-    # MCP 能力上限快照（§12 决策 15）：enabled 绑定 ∩ published Server ∩
-    # enabled 工具 ∩（非敏感 或 已授权）；任务创建后新增工具不进入旧任务
-    mcp_tools = await mcp_service.load_snapshot_tools(db, expert.id)
-    mcp_snapshot = {"tools": mcp_tools, "loaded_at": _now().isoformat()}
+    # MCP 快照恒为空集（Phase 5 裁决 D8）：用户 MCP 工具面已下线，任务创建
+    # 不再装配快照工具；字段保留冻结形态，Phase 6 平台工具选择子另行承接
+    mcp_snapshot = {"tools": [], "loaded_at": _now().isoformat()}
 
     # 64KiB 上限在创建时把关（§7.5）：超长 prompt 禁止进入后续 argv
     try:
