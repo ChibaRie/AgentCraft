@@ -271,7 +271,8 @@ async def seed(database_url: str | None) -> None:
             category="tech",
             skill=weekly,
         )
-        assistant = await _ensure_expert(
+        # 会议助手专家仅创建展示，无任务样例挂靠（原 MCP 绑定消费者已随 D12 删除）
+        await _ensure_expert(
             db,
             demo.id,
             created,
