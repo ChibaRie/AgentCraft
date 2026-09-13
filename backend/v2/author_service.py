@@ -533,6 +533,10 @@ async def submit_revision(
                         version=version,
                     )
                 )
+            # 先落工具行（此刻父仍 draft，0007 触发器放行），再翻状态——
+            # 同 flush 内 UOW 先发父 UPDATE 会让触发器在 INSERT 时点看到
+            # 非 draft 父行误 RAISE
+            await db.flush()
         revision.status = "pending_review"
         await db.flush()
         # onupdate 时间戳落地后再出参（MissingGreenlet 防护，同 create/edit）
