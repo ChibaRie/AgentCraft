@@ -46,18 +46,6 @@ services:
     networks:
       - internal
 
-  # MCP stdio 沙箱镜像（§10.2）：仅用于镜像构建，McpClient 每次调用经
-  # `docker run --rm -i` 从该镜像拉起一次性容器（不作为常驻服务运行）
-  mcp-sandbox:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.mcp-sandbox
-    image: agentcraft-mcp-sandbox:latest
-    profiles:
-      - mcp-sandbox
-    networks:
-      - internal
-
 networks:
   internal:
     internal: true

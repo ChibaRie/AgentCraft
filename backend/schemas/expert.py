@@ -106,15 +106,6 @@ class ExpertBindingToggleRequest(BaseModel):
     enabled: bool
 
 
-class ExpertMCPBindingRequest(BaseModel):
-    server_id: int
-    enabled: bool = False
-
-
-class ExpertMCPUpdateRequest(BaseModel):
-    enabled: bool
-
-
 class ExpertResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -139,16 +130,8 @@ class BoundSkillRef(BaseModel):
     enabled: bool
 
 
-class BoundMCPServerRef(BaseModel):
-    id: int
-    name: str
-    status: str
-    enabled: bool
-
-
 class ExpertDetailResponse(ExpertResponse):
     skills: list[BoundSkillRef]
-    mcps: list[BoundMCPServerRef]
 
 
 class ExpertBindingResponse(BaseModel):

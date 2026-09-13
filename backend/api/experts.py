@@ -21,14 +21,12 @@ from backend.schemas.expert import (
     ExpertBindingToggleRequest,
     ExpertCreateRequest,
     ExpertDetailResponse,
-    ExpertMCPBindingRequest,
-    ExpertMCPUpdateRequest,
     ExpertResponse,
     ExpertSkillBindingRequest,
     ExpertUpdateRequest,
     UnboundResponse,
 )
-from backend.services import expert_service, mcp_service, task_lifecycle
+from backend.services import expert_service, task_lifecycle
 
 router = APIRouter(prefix="/experts", tags=["experts"])
 discover_router = APIRouter(prefix="/discover/experts", tags=["discover"])
@@ -100,8 +98,6 @@ async def get_expert(
             )
             for binding, skill in bindings
         ],
-        # MCP 绑定列表（server id/name/status/enabled）；连接信息不在此返回（§6.3）
-        mcps=await mcp_service.list_expert_bindings(db, user.id, expert_id),
     )
     return {"data": detail}
 
@@ -191,56 +187,6 @@ async def unbind_skill(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, UnboundResponse]:
     await expert_service.unbind_skill(db, user.id, expert_id, skill_id)
-    return {"data": UnboundResponse(message="unbound")}
-
-
-@router.post("/{expert_id}/mcp", status_code=status.HTTP_201_CREATED)
-async def bind_mcp(
-    expert_id: int,
-    payload: ExpertMCPBindingRequest,
-    user: User = Depends(require_expert_role),
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, object]:
-    binding = await mcp_service.bind_server(
-        db, user.id, expert_id, payload.server_id, enabled=payload.enabled
-    )
-    return {
-        "data": {
-            "expert_id": binding.expert_id,
-            "server_id": binding.server_id,
-            "enabled": bool(binding.enabled),
-        }
-    }
-
-
-@router.put("/{expert_id}/mcp/{server_id}")
-async def update_mcp_binding(
-    expert_id: int,
-    server_id: int,
-    payload: ExpertMCPUpdateRequest,
-    user: User = Depends(require_expert_role),
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, object]:
-    binding = await mcp_service.update_binding(
-        db, user.id, expert_id, server_id, enabled=payload.enabled
-    )
-    return {
-        "data": {
-            "expert_id": binding.expert_id,
-            "server_id": binding.server_id,
-            "enabled": bool(binding.enabled),
-        }
-    }
-
-
-@router.delete("/{expert_id}/mcp/{server_id}")
-async def unbind_mcp(
-    expert_id: int,
-    server_id: int,
-    user: User = Depends(require_expert_role),
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, object]:
-    await mcp_service.unbind_server(db, user.id, expert_id, server_id)
     return {"data": UnboundResponse(message="unbound")}
 
 

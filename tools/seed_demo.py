@@ -8,11 +8,10 @@
     python tools/seed_demo.py --database sqlite+aiosqlite:///./demo.db
 
 内容：demo 专家用户（密码 secret123）+ 2 个已发布 Skill + 2 位已发布专家
-（含 MCP 绑定与已发布文件系统 Server）+ 2 个示例任务。全部按用户名/名称
-键控：重复执行不产生重复数据；不触碰已存在的其他账号。
++ 2 个示例任务。全部按用户名/名称键控：重复执行不产生重复数据；
+不触碰已存在的其他账号。
 
-纪律：默认不创建任何演示外数据；密钥环未配置时跳过 env 信封（Server 无
-env 也可运行文件系统 Server）。演示账号仅限本地开发环境使用。
+纪律：默认不创建任何演示外数据。演示账号仅限本地开发环境使用。
 """
 
 from __future__ import annotations
@@ -140,87 +139,10 @@ async def _ensure_expert(
     return row
 
 
-async def _ensure_fs_server(db, owner_id: int, created: list[str]):
-    from sqlalchemy import select
-
-    from backend.models.mcp_server import MCPServer
-    from backend.models.mcp_tool import MCPTool
-
-    server = (
-        await db.execute(
-            select(MCPServer).where(MCPServer.owner_id == owner_id, MCPServer.name == "文件系统")
-        )
-    ).scalar_one_or_none()
-    if server is not None:
-        return server
-    server = MCPServer(
-        owner_id=owner_id,
-        name="文件系统",
-        description="在沙箱内浏览与读写授权目录中的文件",
-        transport="stdio",
-        command="mcp-server-filesystem /workspace",
-        status="published",
-    )
-    db.add(server)
-    await db.flush()
-    created.append("MCP Server 文件系统（已发布）")
-    db.add_all(
-        [
-            MCPTool(
-                server_id=server.id,
-                name="list_directory",
-                description="列出目录内容（只读）",
-                input_schema=json.dumps(
-                    {
-                        "type": "object",
-                        "properties": {"path": {"type": "string"}},
-                        "required": ["path"],
-                    }
-                ),
-                sensitive=False,
-                enabled=True,
-            ),
-            MCPTool(
-                server_id=server.id,
-                name="write_file",
-                description="写入文件（敏感，默认关闭）",
-                input_schema=json.dumps(
-                    {
-                        "type": "object",
-                        "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
-                        "required": ["path", "content"],
-                    }
-                ),
-                sensitive=True,
-                enabled=False,
-            ),
-        ]
-    )
-    return server
-
-
-async def _ensure_binding(db, expert_id: int, server_id: int, created: list[str]) -> None:
-    from sqlalchemy import select
-
-    from backend.models.expert_mcp import ExpertMCP
-
-    binding = (
-        await db.execute(
-            select(ExpertMCP).where(
-                ExpertMCP.expert_id == expert_id, ExpertMCP.server_id == server_id
-            )
-        )
-    ).scalar_one_or_none()
-    if binding is None:
-        db.add(ExpertMCP(expert_id=expert_id, server_id=server_id, enabled=True))
-        created.append(f"专家 #{expert_id} 绑定文件系统 Server")
-
-
 async def _ensure_task(
     db,
     user_id: int,
     expert,
-    server_id: int,
     title: str,
     status: str,
     created: list[str],
@@ -239,21 +161,6 @@ async def _ensure_task(
         skipped.append(f"任务 {title}")
         return
     now = datetime.now(timezone.utc)
-    snapshot_tools = [
-        {
-            "name": "list_directory",
-            "label": "list_directory",
-            "description": "列出目录内容（只读）",
-            "schema": {
-                "type": "object",
-                "properties": {"path": {"type": "string"}},
-                "required": ["path"],
-            },
-            "serverId": server_id,
-            "sensitive": False,
-            "authorized_at": None,
-        }
-    ]
     row = Task(
         user_id=user_id,
         expert_id=expert.id,
@@ -261,7 +168,10 @@ async def _ensure_task(
         title=title,
         status=status,
         skill_snapshot=json.dumps({"skills": [], "loaded_at": now.isoformat()}, ensure_ascii=False),
-        mcp_snapshot=json.dumps({"tools": snapshot_tools}, ensure_ascii=False),
+        # 用户 MCP 面已下线（Phase 5 T2/D12）：快照恒为空工具集
+        mcp_snapshot=json.dumps(
+            {"tools": [], "loaded_at": now.isoformat()}, ensure_ascii=False
+        ),
         provider_snapshot=json.dumps({"source": "system"}),
         workdir="/workspaces/authorized",
     )
@@ -374,18 +284,9 @@ async def seed(database_url: str | None) -> None:
             skill=minutes,
         )
 
-        # 2) 文件系统 MCP Server（已发布）+ 工具 + 绑定（展示 MCP 管线）
-        fs_server = await _ensure_fs_server(db, demo.id, created)
-        for expert in (editor, assistant):
-            await _ensure_binding(db, expert.id, fs_server.id, created)
-
-        # 3) 示例任务（completed + created 各一，展示 P05/P09 视图）
-        await _ensure_task(
-            db, demo.id, editor, fs_server.id, "整理本周技术周报", "completed", created, skipped
-        )
-        await _ensure_task(
-            db, demo.id, editor, fs_server.id, "起草月度技术回顾", "created", created, skipped
-        )
+        # 2) 示例任务（completed + created 各一，展示 P05/P09 视图）
+        await _ensure_task(db, demo.id, editor, "整理本周技术周报", "completed", created, skipped)
+        await _ensure_task(db, demo.id, editor, "起草月度技术回顾", "created", created, skipped)
 
         await db.commit()
 

@@ -47,18 +47,6 @@ CONTRACTS = [
     ("POST", "/api/tasks/1/complete"),
     ("POST", "/api/tasks/1/abort"),
     ("DELETE", "/api/tasks/1"),
-    ("POST", "/api/mcp/servers"),
-    ("GET", "/api/mcp/servers"),
-    ("GET", "/api/mcp/servers/1"),
-    ("PUT", "/api/mcp/servers/1"),
-    ("POST", "/api/mcp/servers/1/discover"),
-    ("PUT", "/api/mcp/servers/1/tools/1"),
-    ("POST", "/api/mcp/servers/1/publish"),
-    ("POST", "/api/mcp/servers/1/offline"),
-    ("DELETE", "/api/mcp/servers/1"),
-    ("POST", "/api/experts/1/mcp"),
-    ("PUT", "/api/experts/1/mcp/1"),
-    ("DELETE", "/api/experts/1/mcp/1"),
     ("POST", "/internal/ui/response"),
     ("POST", "/internal/harness/check-code-style"),
 ]
@@ -110,20 +98,8 @@ IMPLEMENTED = {
     ("GET", "/api/providers/1"),
     ("PUT", "/api/providers/1"),
     ("DELETE", "/api/providers/1"),
-    # 阶段 6：MCP 管理（行为由 test_mcp_api 覆盖；/internal/mcp/call 已删，T4）
-    ("POST", "/api/mcp/servers"),
-    ("GET", "/api/mcp/servers"),
-    ("GET", "/api/mcp/servers/1"),
-    ("PUT", "/api/mcp/servers/1"),
-    ("POST", "/api/mcp/servers/1/discover"),
-    ("PUT", "/api/mcp/servers/1/tools/1"),
-    ("POST", "/api/mcp/servers/1/publish"),
-    ("POST", "/api/mcp/servers/1/offline"),
-    ("DELETE", "/api/mcp/servers/1"),
-    ("POST", "/api/experts/1/mcp"),
-    ("PUT", "/api/experts/1/mcp/1"),
-    ("DELETE", "/api/experts/1/mcp/1"),
     # 阶段 6/7：内部接口均已实现或令牌门禁（行为由 test_harness/test_internal_mcp 覆盖）
+    # 用户 MCP 面已全量下线（Phase 5 T5）：/api/mcp* 与 /api/experts/{id}/mcp* 零路由
     ("POST", "/internal/ui/response"),
     ("POST", "/internal/harness/check-code-style"),
 }
@@ -132,7 +108,6 @@ IMPLEMENTED = {
 PROTECTED_PREFIXES = (
     "/api/experts",
     "/api/skills",
-    "/api/mcp/servers",
     "/api/tasks",
     "/api/users",
     "/api/workspaces",

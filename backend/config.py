@@ -28,9 +28,6 @@ class Settings(BaseSettings):
     PI_TASK_MAX_LIFETIME_MINUTES: int = 30  # 任务总超时（§7.8.1），超阈 abort+failed
     PI_FAUX_CHUNK_DELAY_MS: int = 15  # faux 回显分帧节奏（0=即时；供 abort 观察流式）
     PI_NETWORK_NAME: str = "agentcraft-internal"
-    MCP_SANDBOX_IMAGE: str = "agentcraft-mcp-sandbox:latest"  # stdio MCP Server 沙箱镜像
-    MCP_CALL_TIMEOUT_SECONDS: int = 30  # /internal/mcp/call 单请求超时（§6.8）
-    MCP_RESULT_MAX_BYTES: int = 102400  # 工具结果截断上限（100KB，§6.8）
     AGENTCRAFT_BACKEND_URL: str = "http://agentcraft-control:8000"
     AGENTCRAFT_BACKEND_PORT: int = 8000  # dev 转发容器回源宿主机控制面的端口
     DOCKER_API_URL: str = "http://docker-socket-proxy:2375"
@@ -41,7 +38,8 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "replace-me"
     JWT_ALGORITHM: str = "HS256"
     MCP_ENCRYPTION_ACTIVE_KID: str = "primary"
-    MCP_ENCRYPTION_KEYRING: str = ""  # kid:<base64url 32B>[:,...];Provider Key/MCP env 信封加密
+    # Argon2/信封密钥环材料，provider-proxy 与 skill_import 共用；历史名保留（用户 MCP 面已下线）
+    MCP_ENCRYPTION_KEYRING: str = ""
     JWT_EXPIRE_MINUTES: int = 120
     DATABASE_URL: str = "sqlite+aiosqlite:///./agentcraft.db"
     TASK_TOKEN_SECRET: str = ""  # 任务凭据签名密钥，必须与 SECRET_KEY 不同

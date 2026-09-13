@@ -190,7 +190,7 @@ def test_list_returns_own_experts_with_status_filter(client):
     assert [item["name"] for item in offline["data"]] == ["草稿专家"]
 
 
-def test_detail_includes_bound_skills_without_mcp_credentials(client):
+def test_detail_includes_bound_skills_without_connection_info(client):
     token, _ = register_expert(client)
     expert_id = create_expert(client, token).json()["data"]["id"]
     skill_id = make_published_skill(client, token)
@@ -201,8 +201,8 @@ def test_detail_includes_bound_skills_without_mcp_credentials(client):
     data = response.json()["data"]
     assert data["skills"][0]["id"] == skill_id
     assert data["skills"][0]["enabled"] is True
-    assert data["mcps"] == []
-    # MCP 连接信息（command/env_vars）不出现在自有详情中（§6.3；avatar_url 键名合法含 url）
+    # 用户 MCP 面已下线（Phase 5 T5）；连接信息（command/env_vars）不回显的隐私口径保留
+    # （avatar_url 键名合法含 url）
     assert "command" not in json.dumps(data)
     assert "env_vars" not in json.dumps(data)
 
