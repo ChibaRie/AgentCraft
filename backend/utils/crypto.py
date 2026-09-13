@@ -1,4 +1,4 @@
-"""AES-256-GCM 信封加密（手册 §11.3 契约；Provider Key 与 MCP env 同款方案，换 AAD）。
+"""AES-256-GCM 信封加密（手册 §11.3 契约）。
 
 信封 JSON：`{v:1, alg:"A256GCM", kid, nonce, ciphertext, tag}`
 - nonce 12B / tag 16B，base64url 无填充；tag 独立存放，不拼入 ciphertext

@@ -991,41 +991,6 @@ a {
   background: var(--surface-3);
 }
 
-.manage-tabs {
-  display: inline-flex;
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
-  padding: 3px;
-  margin-bottom: 16px;
-}
-
-.manage-tab {
-  border: 0;
-  background: none;
-  padding: 7px 22px;
-  border-radius: 7px;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-3);
-  cursor: pointer;
-  transition:
-    color var(--duration-fast) var(--ease-out),
-    background-color var(--duration-fast) var(--ease-out);
-}
-
-.manage-tab.is-active {
-  background: var(--surface);
-  color: var(--ink-strong);
-  box-shadow: var(--shadow-1);
-}
-
-.manage-tab:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
 .manage-toolbar {
   display: flex;
   align-items: center;
@@ -3021,42 +2986,7 @@ a {
   white-space: nowrap;
 }
 
-.context-tool-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  background: var(--surface);
-  min-width: 0;
-}
-
-.context-tool-card + .context-tool-card {
-  margin-top: 8px;
-}
-
-.context-tool-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.context-tool-head .skill-status {
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.context-tool-card .context-tool-name {
-  font-family: ui-monospace, "SF Mono", Consolas, monospace;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--ink-strong);
-  overflow-wrap: anywhere;
-}
-
-.context-tool-card .context-tool-desc {
+.context-tool-desc {
   margin: 0;
   font-size: 12px;
   line-height: 1.55;
@@ -3066,23 +2996,6 @@ a {
   -webkit-box-orient: vertical;
   overflow: hidden;
   overflow-wrap: anywhere;
-}
-
-.context-tool-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 12px;
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  background: var(--surface);
-  font-size: 12.5px;
-  color: var(--text-2);
-}
-
-.context-tool-name {
-  font-weight: 700;
-  color: var(--ink);
 }
 
 /* 调用记录 */
@@ -3661,54 +3574,4 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-}
-
-/* ---------- MCP 工具行（名/简介两行排版，开关右对齐） ---------- */
-
-.tool-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 14px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
-}
-
-.tool-row + .tool-row {
-  margin-top: 8px;
-}
-
-.tool-row-info {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  flex: 1;
-}
-
-.tool-row-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.tool-row-name {
-  font-size: 14px;
-  font-weight: 650;
-  color: var(--ink-strong);
-  font-family: ui-monospace, "SF Mono", Consolas, monospace;
-  overflow-wrap: anywhere;
-}
-
-.tool-row-desc {
-  margin: 0;
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: var(--text-3);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }

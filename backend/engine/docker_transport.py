@@ -476,8 +476,8 @@ async def docker_remove_container(name: str, *, docker_bin: str = "docker") -> N
     await proc.wait()
 
 
-# 开发形态后端转发器（阶段 6 MCP 桥）：任务容器只入 internal 网络（§10.2），
-# 而 /internal/mcp/call 需要容器回调控制面。开发机控制面跑在宿主机时，
+# 开发形态后端转发器：任务容器只入 internal 网络（§10.2），
+# 而 /internal/harness/* 工具回调需要容器回调控制面。开发机控制面跑在宿主机时，
 # 用一个 双网络（internal+bridge）转发容器 在 internal 网络内以
 # `agentcraft-control` 别名监听并转发到 host.docker.internal:<port>——
 # 与 provider-proxy 同款双网络模式；compose 形态（存在 agentcraft-control
@@ -553,7 +553,7 @@ async def docker_ensure_backend_forwarder(
     _, stderr = await run.communicate()
     if run.returncode != 0:
         logger.warning(
-            "启动后端转发容器失败（容器回调 /internal/mcp/call 将不可达；exit=%d，stderr %d 字节）",
+            "启动后端转发容器失败（容器工具回调控制面将不可达；exit=%d，stderr %d 字节）",
             run.returncode,
             len(stderr),
         )

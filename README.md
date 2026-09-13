@@ -32,8 +32,7 @@
                         ├─ 每任务 docker run ──> pi-task-<id>（只读 rootfs、非 root、
                         │      internal 网络；/workspace rw + /task-files ro + 扩展 ro）
                         │      ├─ 模型请求 ──> provider-proxy（持原始 Key，按任务令牌路由上游）
-                        │      └─ MCP 工具回调 ──> 控制面 /internal/mcp/call
-                        │                            └─ docker run ──> mcp-sandbox（真实 MCP Server）
+                        │      └─ 工具回调 ──> 控制面 /internal/harness/check-code-style
                         └─ 后台巡检：空闲回收 / 看门狗 / 总超时 / 崩溃恢复
 ```
 
@@ -43,7 +42,7 @@
 
 ## 快速开始
 
-前置：Python 3.12+、Node 22+、Docker Desktop（沙箱与 MCP 桥需要）。
+前置：Python 3.12+、Node 22+、Docker Desktop（沙箱需要）。
 
 ```bash
 # 1) 后端
@@ -61,7 +60,6 @@ cd frontend && npm install && npm run dev   # http://127.0.0.1:5173
 
 # 3) 构建沙箱镜像（首次；受限网络可加 npm 镜像 build-arg）
 docker compose -f docker/docker-compose.yml --profile pi-worker build pi-worker
-docker compose -f docker/docker-compose.yml --profile mcp-sandbox build mcp-sandbox
 ```
 
 演示数据（可选，幂等）：
@@ -84,12 +82,12 @@ cd frontend && npm run build
 
 ```
 backend/
-  api/            # 路由层（users/skills/experts/tasks/mcp/providers/internal）
-  services/       # 业务层（task/mcp/provider/lifecycle/harness/…）
-  engine/         # PiEngine(Manager)/Docker 传输/SkillLoader/EventHandler/MCP 客户端/扩展生成
+  api/            # 路由层（users/skills/experts/tasks/providers/internal）
+  services/       # 业务层（task/provider/lifecycle/harness/…）
+  engine/         # PiEngine(Manager)/Docker 传输/SkillLoader/EventHandler/扩展生成
   models/ alembic/
   provider_proxy.py   # 按任务令牌路由的薄代理（独立容器运行）
-docker/           # control / pi-worker / provider-proxy / mcp-sandbox
+docker/           # control / pi-worker / provider-proxy
 frontend/src/     # pages（P01-P10）/ components / api / lib
 tests/            # 全量测试（含沙箱隔离性与契约占位校验）
 tools/            # seed_demo.py 演示种子
@@ -106,5 +104,4 @@ docs/             # 开发计划 / 进度 / 开发记录 / 阶段手册
 ## 已知边界（v1）
 
 - 单实例部署，mutation lock 为进程内 `asyncio.Lock`（spec §7.2.1 教学版决策，不引入 Redis）
-- mcp-sandbox 为共享镜像，不挂载任务工作区（文件系统 Server 看到的是沙箱自身目录）
 - Provider Proxy 不做 Responses API 转换（Pi 扩展直接注册 completions 协议）

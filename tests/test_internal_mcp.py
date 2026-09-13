@@ -9,9 +9,6 @@
 401 路径在任务查询之前即被拦截，故用例无需播种任务行。
 """
 
-import base64
-import os
-
 import pytest
 from sqlalchemy import text
 
@@ -24,9 +21,6 @@ from tests.test_v2_runtime import make_v2_runtime
 
 pytestmark = pytest.mark.usefixtures("client")
 
-KEY = os.urandom(32)
-KID = "primary"
-
 
 class FakeManager:
     def __init__(self) -> None:
@@ -37,25 +31,20 @@ class FakeManager:
 
 
 class SimpleEnv:
-    def __init__(self, test_db, manager, settings) -> None:
-        self.db = test_db
+    def __init__(self, manager) -> None:
         self.manager = manager
-        self.settings = settings
 
 
 @pytest.fixture()
 def mcp_env(test_db, tmp_path):
-    raw = base64.urlsafe_b64encode(KEY).decode().rstrip("=")
     settings = Settings(
-        MCP_ENCRYPTION_ACTIVE_KID=KID,
-        MCP_ENCRYPTION_KEYRING=f"{KID}:{raw}",
         HOST_DATA_ROOT=str(tmp_path / "data"),
         HOST_WORKSPACE_ROOT=str(tmp_path / "workspaces"),
     )
     app.dependency_overrides[get_settings] = lambda: settings
     manager = FakeManager()
     app.dependency_overrides[get_pi_engine_manager] = lambda: manager
-    yield SimpleEnv(test_db, manager, settings)
+    yield SimpleEnv(manager)
     app.dependency_overrides.pop(get_settings, None)
     app.dependency_overrides.pop(get_pi_engine_manager, None)
 
