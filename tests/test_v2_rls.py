@@ -684,7 +684,8 @@ async def test_boundary_set_current_owner_performs_no_authorization(pg: PgDb) ->
 
 async def _seed_revision_tools(pg: PgDb, owner: _uuid.UUID) -> _uuid.UUID:
     """superuser 造独立链：draft expert（无 published 指针）→ revision_no=1
-    （pending_review）→ revision_tools 一行，返回 revision id。
+    （draft——0007 冻结护栏起，owner 正向插行要求父 revision 尚为 draft，
+    提审后工具集冻结）→ revision_tools 一行，返回 revision id。
 
     刻意不挂 published_revision_id 指针：stranger 对 revision_tools 的 0 行断言
     不得被 revision_tools_app_published_read（0006 的指针读通路）命中；也避开
@@ -705,7 +706,7 @@ async def _seed_revision_tools(pg: PgDb, owner: _uuid.UUID) -> _uuid.UUID:
                 text(
                     "INSERT INTO expert_revisions (id, expert_id, owner_id, revision_no, "
                     "content_json, content_sha256, status) VALUES (gen_random_uuid(), :x, "
-                    ":u, 1, '{}', :h, 'pending_review') RETURNING id"
+                    ":u, 1, '{}', :h, 'draft') RETURNING id"
                 ),
                 {"x": expert_id, "u": owner, "h": "d" * 64},
             )
@@ -743,14 +744,17 @@ async def test_admin_role_updates_governance_rows_after_0006(pg: PgDb) -> None:
         await admin.dispose()
 
 
-async def _superuser_one(pg: PgDb, sql: str) -> _uuid.UUID:  # 模块内小助手，放文件底部工具区
+async def _superuser_one(
+    pg: PgDb, sql: str, params: dict[str, object] | None = None
+) -> _uuid.UUID:  # 模块内小助手，放文件底部工具区
     async with pg.engine.begin() as conn:
-        return (await conn.execute(text(sql))).scalar_one()
+        return (await conn.execute(text(sql), params or {})).scalar_one()
 
 
 async def test_revision_tools_cross_owner_isolation(pg: PgDb) -> None:
     """0006 revision_tools RLS：owner 上下文可见自己的行、可对自己 revision 插行
-    （submit 落行的正向通路）；陌生 owner 上下文 0 行（published 指针通路不命中）、
+    （submit 落行的正向通路——0007 起该通路即 draft 期写行，父 revision 取 draft）；
+    陌生 owner 上下文 0 行（published 指针通路不命中）、
     对他人 revision 插行被 WITH CHECK 拒绝（42501）；admin 全量可读。
     每个上下文独立连接块：同连接的 autobegin 事务共享且 GUC 事务本地，一条语句
     失败会 abort 该事务内全部后续语句（InFailedSqlTransaction 25P02）。"""
@@ -962,3 +966,122 @@ async def test_app_role_for_update_excludes_foreign_published_entity(pg: PgDb) -
             assert locked == []  # FOR UPDATE：UPDATE policy USING 不匹配 → 静默排除 0 行
     finally:
         await app.dispose()
+
+
+# ---- Phase 5（0007）：revision_tools 冻结护栏 ----
+
+
+async def _seed_tools_with_revision_states(pg: PgDb) -> tuple[_uuid.UUID, _uuid.UUID]:
+    """superuser 造一个作者的两条 revision（draft no=1 / pending_review no=2），
+    各带一行 revision_tools，返回 (draft_tools_row_id, pending_tools_row_id)。"""
+    async with pg.engine.begin() as conn:
+        user_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO users (id, email, password_hash, role, status) "
+                    "VALUES (gen_random_uuid(), 'tools-freeze@x.com', 'h', 'user', 'active') "
+                    "RETURNING id"
+                )
+            )
+        ).scalar_one()
+        expert_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO experts (id, owner_id, status) "
+                    "VALUES (gen_random_uuid(), :u, 'draft') RETURNING id"
+                ),
+                {"u": user_id},
+            )
+        ).scalar_one()
+        out = []
+        for no, status in ((1, "draft"), (2, "pending_review")):
+            revision_id = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO expert_revisions (id, expert_id, owner_id, revision_no, "
+                        "content_json, content_sha256, status) VALUES (gen_random_uuid(), :x, "
+                        ":u, :n, '{}', :h, :s) RETURNING id"
+                    ),
+                    {"x": expert_id, "u": user_id, "n": no, "h": str(no) * 64, "s": status},
+                )
+            ).scalar_one()
+            tools_row = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO revision_tools (id, expert_revision_id, tool_id, version) "
+                        "VALUES (gen_random_uuid(), :r, 'check_code_style', '1') RETURNING id"
+                    ),
+                    {"r": revision_id},
+                )
+            ).scalar_one()
+            out.append(tools_row)
+    return out[0], out[1]
+
+
+async def test_revision_tools_frozen_once_parent_not_draft(pg: PgDb) -> None:
+    """0007 冻结护栏：owner 上下文对 draft 父行的 tools 行可改/可删（提审前可调整），
+    对非 draft 父行 INSERT/UPDATE/DELETE 全部 RAISE；admin 上下文放行。
+    每个预期失败语句独立连接块（单块单失败纪律）。"""
+    draft_row, pending_row = await _seed_tools_with_revision_states(pg)
+    owner = await _superuser_one(pg, "SELECT owner_id FROM experts LIMIT 1")
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with app.connect() as conn:  # draft 父行：正向放行（UPDATE 再改回）
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": owner})
+            await conn.execute(
+                text("UPDATE revision_tools SET version = '1' WHERE id = CAST(:r AS uuid)"),
+                {"r": draft_row},
+            )
+        async with app.connect() as conn:  # 非 draft 父行：UPDATE 拒绝
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": owner})
+            with pytest.raises(Exception, match="父 revision 非 draft"):
+                await conn.execute(
+                    text(
+                        "UPDATE revision_tools SET tool_id = 'read_task_file' "
+                        "WHERE id = CAST(:r AS uuid)"
+                    ),
+                    {"r": pending_row},
+                )
+        async with app.connect() as conn:  # 非 draft 父行：DELETE 拒绝
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": owner})
+            with pytest.raises(Exception, match="父 revision 非 draft"):
+                await conn.execute(
+                    text("DELETE FROM revision_tools WHERE id = CAST(:r AS uuid)"),
+                    {"r": pending_row},
+                )
+        async with app.connect() as conn:  # 非 draft 父行：INSERT 拒绝
+            await conn.execute(text("SELECT app.set_current_owner(:u)"), {"u": owner})
+            parent = await _superuser_one(
+                pg,
+                "SELECT expert_revision_id FROM revision_tools "
+                "WHERE id = CAST(:r AS uuid)",  # 取父 revision id 需 superuser
+                {"r": pending_row},
+            )
+            with pytest.raises(Exception, match="父 revision 非 draft"):
+                await conn.execute(
+                    text(
+                        "INSERT INTO revision_tools (id, expert_revision_id, tool_id, version) "
+                        "VALUES (gen_random_uuid(), CAST(:r AS uuid), 'list_task_files', '1')"
+                    ),
+                    {"r": parent},
+                )
+    finally:
+        await app.dispose()
+    admin = _role_engine(pg, ADMIN_ROLE)
+    try:
+        async with admin.connect() as conn:
+            # RLS 默认拒绝：admin 对 revision_tools 仅有 admin_read policy（0006:108-111），
+            # 无 UPDATE policy → 静默 0 行（触发器放行救不了 RLS 行过滤——两层独立机制）
+            updated = await conn.execute(
+                text("UPDATE revision_tools SET version = '1' WHERE id = CAST(:r AS uuid)"),
+                {"r": pending_row},
+            )
+            assert updated.rowcount == 0
+    finally:
+        await admin.dispose()
+    async with pg.engine.begin() as conn:  # superuser（GUC 未设、不受 RLS 限）：钉触发器放行语义
+        updated = await conn.execute(
+            text("UPDATE revision_tools SET version = '1' WHERE id = CAST(:r AS uuid)"),
+            {"r": pending_row},
+        )
+        assert updated.rowcount == 1
