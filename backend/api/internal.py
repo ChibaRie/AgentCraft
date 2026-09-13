@@ -1,8 +1,6 @@
-"""内部接口：Pi 任务沙箱回调（Engineering Spec §6.8）。
-
-仅供任务容器内扩展调用，不对外暴露。/internal/mcp/call 校验链：
-X-Task-Token（任务级+实例级）→ body task_id 一致 → 快照能力上限 →
-kill switch（Server/工具/绑定/敏感授权）→ 连接 Server 执行 tools/call。
+"""平台工具回调面（Phase 5 收窄后）：/internal/harness/check-code-style
+（X-Task-Token 三重校验 + tool_catalog.enabled 第二校验）与 /internal/ui/response
+501 占位。用户 MCP 语义已下线（/internal/mcp/call 删除）。
 """
 
 import logging
@@ -11,13 +9,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.config import Settings, get_settings
 from backend.database import get_db
 from backend.dependencies import get_pi_engine_manager
 from backend.engine.pi_engine_manager import PiEngineManager
 from backend.models.task import Task
-from backend.services import harness_service, mcp_service
+from backend.services import harness_service
 from backend.services.task_token import TaskTokenInvalid, decode_task_token
+from backend.v2.runtime import V2Runtime, get_optional_v2_runtime
+from backend.v2.tool_service import assert_tool_enabled
 
 router = APIRouter(tags=["internal"])
 
@@ -30,15 +29,19 @@ class TaskTokenUnauthorized(HTTPException):
         super().__init__(status.HTTP_401_UNAUTHORIZED, "任务令牌无效")
 
 
-class MCPCallRequest(BaseModel):
+class HarnessCheckRequest(BaseModel):
     task_id: int
-    server_id: int
-    tool_name: str
-    args: dict = {}
+    path: str | None = None
+
+
+class UiResponseRequest(BaseModel):
+    task_id: int
 
 
 def _require_task_token(
-    request: Request, payload: MCPCallRequest, manager: PiEngineManager
+    request: Request,
+    payload: HarnessCheckRequest | UiResponseRequest,
+    manager: PiEngineManager,
 ) -> dict:
     """X-Task-Token 三重校验：签名有效、任务一致、实例一致（旧容器令牌失效）。
 
@@ -61,44 +64,23 @@ def _require_task_token(
     return claims
 
 
-@router.post("/mcp/call")
-async def call_mcp(
-    payload: MCPCallRequest,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-    manager: PiEngineManager = Depends(get_pi_engine_manager),
-) -> dict[str, object]:
-    _require_task_token(request, payload, manager)
-    task = await db.get(Task, payload.task_id)
-    if task is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
-    # 快照能力上限 + kill switch（任一失败即 403/404，§6.8）
-    await mcp_service.validate_task_tool_call(db, task, payload.server_id, payload.tool_name)
-    result = await mcp_service.execute_task_tool_call(
-        db,
-        settings,
-        server_id=payload.server_id,
-        tool_name=payload.tool_name,
-        args=payload.args,
-    )
-    return {"data": result}
-
-
-class HarnessCheckRequest(BaseModel):
-    task_id: int
-    path: str | None = None
-
-
 @router.post("/harness/check-code-style")
 async def check_code_style(
     payload: HarnessCheckRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
     manager: PiEngineManager = Depends(get_pi_engine_manager),
+    rt: V2Runtime | None = Depends(get_optional_v2_runtime),
 ) -> dict[str, object]:
-    """§6.8：ruff format --check + ruff check（容器回调；30s 超时在服务层）。"""
+    """ruff format --check + ruff check（容器回调；30s 超时在服务层）。
+
+    目录第二校验（Phase 5 T4）：V2 运行时在场时校验 check_code_style@1 在
+    tool_catalog 中启用（kill switch），不存在/停用统一 403 TOOL_REVOKED。
+    """
     _require_task_token(request, payload, manager)
+    if rt is not None:  # V2 可选运行时（main.py:62）：未配置双 DSN 时跳过目录校验
+        async with rt.app_factory() as v2_db:
+            await assert_tool_enabled(v2_db, "check_code_style", "1")
     task = await db.get(Task, payload.task_id)
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
@@ -110,7 +92,7 @@ async def check_code_style(
 
 @router.post("/ui/response")
 async def respond_ui(
-    payload: MCPCallRequest,
+    payload: UiResponseRequest,
     request: Request,
     manager: PiEngineManager = Depends(get_pi_engine_manager),
 ) -> dict[str, object]:

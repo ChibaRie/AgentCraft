@@ -1,31 +1,26 @@
-"""/internal/mcp/call 测试（手册 §6.8：任务令牌鉴权 + 快照/kill switch 双层校验）。
+"""/internal 回调面测试（Phase 5 收窄后）。
 
-- 鉴权：X-Task-Token 缺失/非法 401；body task_id 与令牌不符 401；
-  令牌与当前容器实例不符（manager 无此令牌）401
-- 能力上限：工具不在 tasks.mcp_snapshot → 404
-- kill switch（快照可见 ≠ 可调用）：Server 非 published / 工具禁用 /
-  绑定禁用 / 敏感授权缺失或早于快照时点 → 403
-- 执行：tools/call 成功 200 {content, is_error:false}；工具自身失败
-  is_error:true 透传；上游失败 502
+- /internal/mcp/call 已物理删除（用户 MCP 语义下线，T4）；openapi 契约面同步
+  收口于 tests/test_api_contracts.py
+- /internal/harness/check-code-style：X-Task-Token 三重校验（签名/任务一致/
+  实例一致）→ tool_catalog.enabled 第二校验（kill switch，V2 可选运行时依赖）
+- /internal/ui/response：501 占位同样先验任务令牌（/internal 不留未鉴权面）
+
+401 路径在任务查询之前即被拦截，故用例无需播种任务行。
 """
 
 import base64
-import json
 import os
-from datetime import datetime
 
 import pytest
+from sqlalchemy import text
 
 from backend.config import Settings, get_settings
 from backend.dependencies import get_pi_engine_manager
 from backend.main import app
-from backend.models.expert import Expert
-from backend.models.expert_mcp import ExpertMCP
-from backend.models.mcp_server import MCPServer
-from backend.models.mcp_tool import MCPTool
-from backend.models.task import Task
-from backend.models.user import User
 from backend.services.task_token import create_task_token
+from backend.v2.runtime import get_optional_v2_runtime
+from tests.test_v2_runtime import make_v2_runtime
 
 pytestmark = pytest.mark.usefixtures("client")
 
@@ -39,6 +34,13 @@ class FakeManager:
 
     def get_task_token(self, task_id: int):
         return self.tokens.get(task_id)
+
+
+class SimpleEnv:
+    def __init__(self, test_db, manager, settings) -> None:
+        self.db = test_db
+        self.manager = manager
+        self.settings = settings
 
 
 @pytest.fixture()
@@ -58,275 +60,121 @@ def mcp_env(test_db, tmp_path):
     app.dependency_overrides.pop(get_pi_engine_manager, None)
 
 
-class SimpleEnv:
-    def __init__(self, test_db, manager, settings) -> None:
-        self.db = test_db
-        self.manager = manager
-        self.settings = settings
+# ---------------------------------------------------------------------------
+# 鉴权：X-Task-Token 三重校验（载体 = /internal/harness/check-code-style）
+# ---------------------------------------------------------------------------
 
 
-async def seed_task(
-    db_env,
-    *,
-    tool_sensitive: bool = False,
-    tool_enabled: bool = True,
-    tool_authorized: datetime | None = None,
-    binding_enabled: bool = True,
-    server_status: str = "published",
-    snapshot_entry: dict | None = None,
-) -> int:
-    """播种 user/expert/server/tool/binding/task；返回 task_id。"""
-    factory = db_env.db.session_factory
-    async with factory() as session:
-        user = User(
-            username="mcp-task-u", email="mcp-task-u@example.com", password_hash="x", role="expert"
-        )
-        session.add(user)
-        await session.flush()
-        expert = Expert(
-            owner_id=user.id,
-            name="MCP专家",
-            description="d",
-            category="tech",
-            persona="p" * 10,
-            methodology="m" * 10,
-        )
-        session.add(expert)
-        await session.flush()
-        server = MCPServer(
-            owner_id=user.id,
-            name="fs",
-            description="f",
-            transport="http-sse",
-            url="http://mcp/mcp",
-            status=server_status,
-        )
-        session.add(server)
-        await session.flush()
-        session.add(
-            MCPTool(
-                server_id=server.id,
-                name="list_directory",
-                description="列目录",
-                input_schema='{"type":"object"}',
-                sensitive=tool_sensitive,
-                enabled=tool_enabled,
-                authorized_at=tool_authorized,
-            )
-        )
-        session.add(ExpertMCP(expert_id=expert.id, server_id=server.id, enabled=binding_enabled))
-        entry = snapshot_entry or {
-            "name": "list_directory",
-            "label": "list_directory",
-            "description": "列目录",
-            "schema": {"type": "object"},
-            "serverId": server.id,
-            "sensitive": tool_sensitive,
-            "authorized_at": tool_authorized.isoformat() if tool_authorized else None,
-        }
-        if entry.get("serverId") == "SELF":  # 测试哨兵：引用本任务自己的 server
-            entry["serverId"] = server.id
-        task = Task(
-            user_id=user.id,
-            expert_id=expert.id,
-            expert_name_snapshot="MCP专家",
-            title="t",
-            status="running",
-            skill_snapshot="{}",
-            mcp_snapshot=json.dumps({"tools": [entry]}),
-            provider_snapshot=json.dumps(
-                {
-                    "source": "system",
-                    "protocol": "openai",
-                    "base_url": "http://proxy:8080/v1",
-                    "model_id": "m",
-                }
-            ),
-            workdir="/workspaces/authorized",
-        )
-        session.add(task)
-        await session.commit()
-        return task.id, server.id, user.id
-
-
-def call(client, token, task_id, server_id, tool_name="list_directory", args=None):
+def _post_check(client, token, task_id=1):
     return client.post(
-        "/internal/mcp/call",
-        json={
-            "task_id": task_id,
-            "server_id": server_id,
-            "tool_name": tool_name,
-            "args": args or {},
-        },
-        headers={"X-Task-Token": token},
+        "/internal/harness/check-code-style",
+        json={"task_id": task_id, "path": "."},
+        headers={"X-Task-Token": token} if token is not None else None,
     )
-
-
-# ---------------------------------------------------------------------------
-# 鉴权
-# ---------------------------------------------------------------------------
 
 
 def test_missing_token_401(client, mcp_env):
-    response = client.post(
-        "/internal/mcp/call",
-        json={"task_id": 1, "server_id": 1, "tool_name": "x", "args": {}},
-    )
+    response = _post_check(client, None)
     assert response.status_code == 401
 
 
 def test_bad_token_401(client, mcp_env):
-    response = call(client, "garbage", 1, 1)
+    response = _post_check(client, "garbage")
     assert response.status_code == 401
 
 
 def test_token_task_mismatch_401(client, mcp_env):
-    task_id, server_id, _user_id = mcp_env.db.run(seed_task(db_env=mcp_env))
+    task_id = 1
     other_token = create_task_token(task_id + 100, instance="inst-a", model_id="m")
     mcp_env.manager.tokens[task_id] = create_task_token(task_id, instance="inst-a", model_id="m")
-    response = call(client, other_token, task_id, server_id)
+    response = _post_check(client, other_token, task_id=task_id)
     assert response.status_code == 401
 
 
 def test_stale_instance_token_401(client, mcp_env):
     """容器已重建：manager 只认当前实例令牌。"""
-    task_id, server_id, _ = mcp_env.db.run(seed_task(db_env=mcp_env))
+    task_id = 1
     stale = create_task_token(task_id, instance="old-instance", model_id="m")
     mcp_env.manager.tokens[task_id] = create_task_token(
         task_id, instance="new-instance", model_id="m"
     )
-    response = call(client, stale, task_id, server_id)
+    response = _post_check(client, stale, task_id=task_id)
     assert response.status_code == 401
 
 
 # ---------------------------------------------------------------------------
-# 能力上限 + kill switch
+# kill switch 第二校验（tool_catalog.enabled，V2 可选运行时依赖注入）
 # ---------------------------------------------------------------------------
 
 
-def test_tool_not_in_snapshot_404(client, mcp_env):
-    task_id, server_id, _ = mcp_env.db.run(seed_task(db_env=mcp_env))
-    mcp_env.manager.tokens[task_id] = create_task_token(task_id, instance="i", model_id="m")
-    response = call(
-        client, mcp_env.manager.tokens[task_id], task_id, server_id, tool_name="not_registered"
-    )
-    assert response.status_code == 404
+@pytest.mark.asyncio
+async def test_check_code_style_blocked_when_tool_disabled(client, mcp_env, pg):
+    """kill switch 第二校验：目录停用 check_code_style@1 后回调 403 TOOL_REVOKED。
+
+    测试进程被 conftest neutralize_v2_env 钉空双 DSN，被测 app 必须经依赖
+    override 注入 pg-backed runtime（直调 v2_runtime_from_settings() 恒 None
+    会静默跳过校验）。
+    """
+    rt = make_v2_runtime(pg)
+    app.dependency_overrides[get_optional_v2_runtime] = lambda: rt
+    try:
+        token = create_task_token(1, instance="i", model_id="m")
+        mcp_env.manager.tokens[1] = token
+        async with pg.engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE tool_catalog SET enabled = false "
+                    "WHERE tool_id = 'check_code_style' AND version = '1'"
+                )
+            )
+        resp = _post_check(client, token)
+        assert resp.status_code == 403
+        assert resp.json()["error"]["code"] == "TOOL_REVOKED"
+    finally:
+        app.dependency_overrides.pop(get_optional_v2_runtime, None)
+        rt.close()
 
 
-def test_server_offline_blocks_403(client, mcp_env):
-    task_id, server_id, _ = mcp_env.db.run(seed_task(db_env=mcp_env, server_status="offline"))
-    token = create_task_token(task_id, instance="i", model_id="m")
-    mcp_env.manager.tokens[task_id] = token
-    response = call(client, token, task_id, server_id)
-    assert response.status_code == 403
-
-
-def test_tool_disabled_blocks_403(client, mcp_env):
-    task_id, server_id, _ = mcp_env.db.run(seed_task(db_env=mcp_env, tool_enabled=False))
-    token = create_task_token(task_id, instance="i", model_id="m")
-    mcp_env.manager.tokens[task_id] = token
-    response = call(client, token, task_id, server_id)
-    assert response.status_code == 403
-
-
-def test_binding_disabled_blocks_403(client, mcp_env):
-    task_id, server_id, _ = mcp_env.db.run(seed_task(db_env=mcp_env, binding_enabled=False))
-    token = create_task_token(task_id, instance="i", model_id="m")
-    mcp_env.manager.tokens[task_id] = token
-    response = call(client, token, task_id, server_id)
-    assert response.status_code == 403
-
-
-def test_sensitive_tool_stale_authorization_blocks_403(client, mcp_env):
-    """DB 授权早于快照授权时点 → 403（§6.8：不早于快照授权时点）。"""
-    task_id, server_id, _ = mcp_env.db.run(
-        seed_task(
-            db_env=mcp_env,
-            tool_sensitive=True,
-            tool_authorized=datetime(2026, 9, 1, 12, 0, 0),
-            snapshot_entry={
-                "name": "list_directory",
-                "label": "list_directory",
-                "description": "列目录",
-                "schema": {"type": "object"},
-                "serverId": "SELF",
-                "sensitive": True,
-                "authorized_at": "2026-09-02T12:00:00",  # 快照晚于 DB 授权
-            },
-        )
-    )
-    token = create_task_token(task_id, instance="i", model_id="m")
-    mcp_env.manager.tokens[task_id] = token
-    response = call(client, token, task_id, server_id)
-    assert response.status_code == 403
+@pytest.mark.asyncio
+async def test_check_code_style_proceeds_when_tool_enabled(client, mcp_env, pg):
+    """第二校验只拦停用/不存在：目录在场且启用时放行到任务查询（无任务 → 404）。"""
+    rt = make_v2_runtime(pg)
+    app.dependency_overrides[get_optional_v2_runtime] = lambda: rt
+    try:
+        token = create_task_token(1, instance="i", model_id="m")
+        mcp_env.manager.tokens[1] = token
+        async with pg.engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE tool_catalog SET enabled = true "
+                    "WHERE tool_id = 'check_code_style' AND version = '1'"
+                )
+            )
+        resp = _post_check(client, token)
+        assert resp.status_code == 404
+        assert resp.json()["error"]["code"] == "NOT_FOUND"
+    finally:
+        app.dependency_overrides.pop(get_optional_v2_runtime, None)
+        rt.close()
 
 
 # ---------------------------------------------------------------------------
-# 执行
+# /internal/ui/response：501 占位同样先验任务令牌
 # ---------------------------------------------------------------------------
 
 
-class FakeCallClient:
-    def __init__(self, result, error: Exception | None = None) -> None:
-        self._result = result
-        self._error = error
-        self.calls: list[tuple[str, dict]] = []
-
-    async def call(self, name, args):
-        self.calls.append((name, args))
-        if self._error:
-            raise self._error
-        return self._result
-
-    async def close(self):
-        return None
-
-
-def _stub_call_factory(monkeypatch, client: FakeCallClient):
-    from backend.services import mcp_service
-
-    def factory(settings):
-        return lambda server: client
-
-    monkeypatch.setattr(mcp_service, "_default_client_factory", factory)
-
-
-def test_call_executes_and_returns_content(client, mcp_env, monkeypatch):
-    task_id, server_id, _ = mcp_env.db.run(seed_task(db_env=mcp_env))
-    token = create_task_token(task_id, instance="i", model_id="m")
-    mcp_env.manager.tokens[task_id] = token
-    fake = FakeCallClient({"content": "a.txt\nb.txt", "is_error": False})
-    _stub_call_factory(monkeypatch, fake)
-    response = call(client, token, task_id, server_id, args={"path": "/workspace"})
-    assert response.status_code == 200
-    assert response.json()["data"] == {"content": "a.txt\nb.txt", "is_error": False}
-    assert fake.calls == [("list_directory", {"path": "/workspace"})]
-
-
-def test_call_tool_error_passthrough(client, mcp_env, monkeypatch):
-    task_id, server_id, _ = mcp_env.db.run(seed_task(db_env=mcp_env))
-    token = create_task_token(task_id, instance="i", model_id="m")
-    mcp_env.manager.tokens[task_id] = token
-    _stub_call_factory(monkeypatch, FakeCallClient({"content": "路径不存在", "is_error": True}))
-    response = call(client, token, task_id, server_id)
-    assert response.status_code == 200
-    assert response.json()["data"] == {"content": "路径不存在", "is_error": True}
-
-
-def test_call_upstream_failure_502(client, mcp_env, monkeypatch):
-    from backend.engine.mcp_client import MCPClientError
-
-    task_id, server_id, _ = mcp_env.db.run(seed_task(db_env=mcp_env))
-    token = create_task_token(task_id, instance="i", model_id="m")
-    mcp_env.manager.tokens[task_id] = token
-    _stub_call_factory(monkeypatch, FakeCallClient(None, error=MCPClientError("refused")))
-    response = call(client, token, task_id, server_id)
-    assert response.status_code == 502
-
-
-def test_call_without_manager_token_401(client, mcp_env):
-    """manager 无该任务的令牌（容器未运行/后端重启）→ 401。"""
-    task_id, server_id, _ = mcp_env.db.run(seed_task(db_env=mcp_env))
-    token = create_task_token(task_id, instance="i", model_id="m")
-    response = call(client, token, task_id, server_id)
+def test_ui_response_without_token_401(client, mcp_env):
+    response = client.post("/internal/ui/response", json={"task_id": 1})
     assert response.status_code == 401
+
+
+def test_ui_response_valid_token_501(client, mcp_env):
+    task_id = 1
+    token = create_task_token(task_id, instance="i", model_id="m")
+    mcp_env.manager.tokens[task_id] = token
+    response = client.post(
+        "/internal/ui/response",
+        json={"task_id": task_id},
+        headers={"X-Task-Token": token},
+    )
+    assert response.status_code == 501

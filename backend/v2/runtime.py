@@ -63,6 +63,12 @@ async def get_v2_runtime(request: Request) -> V2Runtime:
     return runtime
 
 
+async def get_optional_v2_runtime(request: Request) -> V2Runtime | None:
+    """V2 可选弱依赖：未配置双 DSN 返回 None（不 503）——供 V1 面的目录校验等
+    附加门使用；V2-only 功能不得用它（那是 get_v2_runtime 的 503 语义）。"""
+    return v2_runtime_from_settings()
+
+
 async def get_admin_db(
     runtime: V2Runtime = Depends(get_v2_runtime),
 ) -> AsyncIterator[AsyncSession]:

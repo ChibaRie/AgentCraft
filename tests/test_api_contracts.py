@@ -59,7 +59,6 @@ CONTRACTS = [
     ("POST", "/api/experts/1/mcp"),
     ("PUT", "/api/experts/1/mcp/1"),
     ("DELETE", "/api/experts/1/mcp/1"),
-    ("POST", "/internal/mcp/call"),
     ("POST", "/internal/ui/response"),
     ("POST", "/internal/harness/check-code-style"),
 ]
@@ -111,7 +110,7 @@ IMPLEMENTED = {
     ("GET", "/api/providers/1"),
     ("PUT", "/api/providers/1"),
     ("DELETE", "/api/providers/1"),
-    # 阶段 6：MCP 管理 + 内部调用（行为由 test_mcp_api/test_internal_mcp 覆盖）
+    # 阶段 6：MCP 管理（行为由 test_mcp_api 覆盖；/internal/mcp/call 已删，T4）
     ("POST", "/api/mcp/servers"),
     ("GET", "/api/mcp/servers"),
     ("GET", "/api/mcp/servers/1"),
@@ -124,7 +123,6 @@ IMPLEMENTED = {
     ("POST", "/api/experts/1/mcp"),
     ("PUT", "/api/experts/1/mcp/1"),
     ("DELETE", "/api/experts/1/mcp/1"),
-    ("POST", "/internal/mcp/call"),
     # 阶段 6/7：内部接口均已实现或令牌门禁（行为由 test_harness/test_internal_mcp 覆盖）
     ("POST", "/internal/ui/response"),
     ("POST", "/internal/harness/check-code-style"),
