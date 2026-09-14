@@ -35,8 +35,8 @@ from backend.config import get_settings
 from backend.v2.models import RateLimitEvent
 
 # scope 名 → (限值, 窗口秒)。Phase 2 全量注册；Phase 3+ 各域注册各自 scope
-# （占位：task_create / upload / send_message / report / sse_connect，
-# 登记前 enforce 拒绝服务而非静默放行）。
+# （登记前 enforce 拒绝服务而非静默放行）。Phase 6 T8a 登记任务域四 scope（D12）：
+# send_message / sse_connect 的路由挂接归 T8b（messages/events/SSE）。
 LIMITS: dict[str, tuple[int, int]] = {
     "login": (10, 900),
     "invitation_accept": (5, 3600),
@@ -49,9 +49,14 @@ LIMITS: dict[str, tuple[int, int]] = {
     "provider_test": (10, 3600),  # 连通性测试（Sup §7：10 次/小时/用户），主体 [user]
     "report": (10, 86400),  # 举报（Sup §7：10 次/天/用户），主体 [user]——Phase 4 T8
     "discover": (60, 3600),  # 匿名公开目录浏览（契约缺口，Sup §9 补记），主体 [ip]——Phase 4 T9
+    "task_create": (30, 86400),  # 任务创建（Sup §7：30 次/天/用户），主体 [user]——Phase 6 T8a
+    "upload": (60, 3600),  # 任务文件上传（Sup §7：60 次/小时/用户），主体 [user]——Phase 6 T8a
+    "send_message": (60, 3600),  # 任务消息发送（Sup §7：60 次/小时/用户），主体 [user]——Phase 6 T8b
+    # SSE 连接建立（Sup §7：60 次/小时/用户·任务），主体 [user, task]——Phase 6 T8b
+    "sse_connect": (60, 3600),
 }
 
-_HMAC_KINDS = frozenset({"email", "ip", "user"})
+_HMAC_KINDS = frozenset({"email", "ip", "user", "task"})
 
 # 单语句聚合（per-subject）：逐主体计数取最大值 + 窗口内最老事件 + DB 时钟
 # （now() 语句内一致，剩余秒数与窗口过滤共用同一时钟基准，杜绝应用/DB 时钟偏差
@@ -95,11 +100,11 @@ def _rate_limit_hmac_key() -> bytes:
 def hmac_subject(kind: str, value: str) -> str:
     """限流主体派生：``HMAC-SHA256(key, msg=f"{kind}:{value}")`` hexdigest（64 hex）。
 
-    kind ∈ "email" | "ip" | "user"；明文（邮箱/IP）不落库，只落 HMAC 摘要。
-    与 hash_token（SHA-256 令牌指纹）是有意不同的原语，不得混用。
+    kind ∈ "email" | "ip" | "user" | "task"；明文（邮箱/IP/任务 ID）不落库，只落
+    HMAC 摘要。与 hash_token（SHA-256 令牌指纹）是有意不同的原语，不得混用。
     """
     if kind not in _HMAC_KINDS:
-        raise ValueError(f"未知限流主体类别: {kind}（仅限 email/ip/user）")
+        raise ValueError(f"未知限流主体类别: {kind}（仅限 email/ip/user/task）")
     msg = f"{kind}:{value}".encode("utf-8")
     return hmac.new(_rate_limit_hmac_key(), msg, hashlib.sha256).hexdigest()
 

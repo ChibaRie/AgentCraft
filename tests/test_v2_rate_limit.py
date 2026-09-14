@@ -66,7 +66,7 @@ async def _count(pg: PgDb, scope: str | None = None, subject_hash: str | None = 
         return (await conn.execute(stmt)).scalar_one()
 
 
-# ---------- LIMITS 注册表（Phase 2 全量 scope 钉死）----------
+# ---------- LIMITS 注册表（Phase 2 全量 scope 钉死；Phase 3+ 各域随登记追加）----------
 
 
 def test_limits_registry_pins_registered_scopes():
@@ -82,6 +82,10 @@ def test_limits_registry_pins_registered_scopes():
         "provider_test": (10, 3600),
         "report": (10, 86400),  # Phase 4 T8：举报 10 次/天/用户
         "discover": (60, 3600),  # Phase 4 T9：匿名目录浏览 60 次/小时/IP
+        "task_create": (30, 86400),  # Phase 6 T8a（D12）：任务创建 30 次/天/用户
+        "upload": (60, 3600),  # Phase 6 T8a（D12）：任务文件上传 60 次/小时/用户
+        "send_message": (60, 3600),  # Phase 6 T8a（D12）：消息发送 60 次/小时/用户（T8b 挂接）
+        "sse_connect": (60, 3600),  # Phase 6 T8a（D12）：SSE 连接 60 次/小时/用户·任务（T8b 挂接）
     }
 
 
@@ -222,11 +226,11 @@ async def test_scope_isolation(pg: PgDb, v2_runtime):
 
 
 async def test_enforce_rejects_unregistered_scope(pg: PgDb, v2_runtime):
-    """未注册 scope（含 Phase 3+ 占位名）拒绝服务而非静默放行。"""
+    """未注册 scope（Phase 4/6 已登记原占位名——改用从未注册名）拒绝服务而非静默放行。"""
     async with v2_runtime.app_factory() as db:
         with pytest.raises(ValueError):
-            await enforce(db, scope="task_create", subjects=[_subject("ph")])
-    assert await _count(pg, "task_create") == 0
+            await enforce(db, scope="task_never_registered", subjects=[_subject("ph")])
+    assert await _count(pg, "task_never_registered") == 0
 
 
 async def test_enforce_rejects_empty_subjects(pg: PgDb, v2_runtime):

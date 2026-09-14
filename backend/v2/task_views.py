@@ -16,7 +16,8 @@
   永不接收外部裸串（上游审查顺延约束）。
 
 get_task_view/list_tasks/get_quota_view 经 ``task_service`` 再导出（冻结接口
-位置不变），也可直接从本模块消费。
+位置不变），也可直接从本模块消费；``get_task_quota_view``（D7g 任务粒度
+配额视图，Phase 6 T8a 补）直接从本模块消费。
 """
 
 import uuid as _uuid
@@ -255,4 +256,60 @@ async def get_quota_view(db: AsyncSession, *, owner_id: str) -> dict:
             "retained_storage_bytes": int(usage.retained_storage_bytes) if usage else 0,
         },
         "limits": _lim,
+    }
+
+
+async def get_task_quota_view(db: AsyncSession, *, owner_id: str, task_id: str) -> dict:
+    """任务粒度用量视图（D7g / Sup §4:105：当前用量/上限/输入冻结状态）。
+
+    用量按任务文件账（两方向存活行，墓碑不计）聚合；上限为任务域三把门
+    （PRD §4.1:108-109 契约钉值，从 task_file_service 单一事实源函数域导入——
+    本模块先于 task_file_service 被其导入，模块级反向导入成环）；input_frozen
+    即 input_committed_at 已设（冻结后任何文件变更 409 INPUT_COMMITTED）。
+    权威判定仍在写事务内（本视图只读）。任务缺失/他人（RLS 0 行）/已删除
+    → 统一 404（Sup §7）。
+    """
+    tid = _parse_id(task_id, "task_id")
+    _parse_id(owner_id, "owner_id")
+    task = (
+        await db.execute(
+            select(Task.input_committed_at).where(Task.id == tid, Task.status != "deleted")
+        )
+    ).first()
+    if task is None:
+        raise _task_not_found()
+    rows = (
+        await db.execute(
+            select(
+                TaskFile.direction,
+                func.count(),
+                func.coalesce(func.sum(TaskFile.size_bytes), 0),
+            )
+            .where(TaskFile.task_id == tid, TaskFile.state != "deleted")
+            .group_by(TaskFile.direction)
+        )
+    ).all()
+    by_direction = {d: (int(n), int(s)) for d, n, s in rows}
+    inputs_count, inputs_bytes = by_direction.get("input", (0, 0))
+    outputs_count, outputs_bytes = by_direction.get("output", (0, 0))
+    from backend.v2.task_file_service import (  # 函数域导入防环（见 docstring）
+        _MAX_FILES_PER_TASK,
+        _MAX_SINGLE_FILE_BYTES,
+        _MAX_TASK_INPUT_BYTES,
+    )
+
+    return {
+        "usage": {
+            "inputs_count": inputs_count,
+            "outputs_count": outputs_count,
+            "inputs_bytes": inputs_bytes,
+            "outputs_bytes": outputs_bytes,
+            "total_bytes": inputs_bytes + outputs_bytes,
+        },
+        "limits": {
+            "max_files_per_task": _MAX_FILES_PER_TASK,
+            "max_single_file_bytes": _MAX_SINGLE_FILE_BYTES,
+            "max_task_bytes": _MAX_TASK_INPUT_BYTES,
+        },
+        "input_frozen": task.input_committed_at is not None,
     }
