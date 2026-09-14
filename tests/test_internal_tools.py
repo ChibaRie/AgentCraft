@@ -320,6 +320,32 @@ async def test_fenced_old_epoch_token_rejected(client, tools_env, pg):
     assert n == 0
 
 
+async def test_fenced_token_precedes_permissions_gates(client, tools_env, pg):
+    """校验链冻结全序钉（fix round 1）：fence 先于 permissions 形态闸——
+    fenced 旧令牌即便携带畸形请求体（穿越形 file_name / 非法 base64）也一律
+    401（而非 400 TOOL_CALL_REJECTED）；形态闸只对活令牌分流 400。"""
+    uid, tid, rid, epoch = await _seed_running_minimal(pg, "t7-fence-order@x.test")
+    token = tools_env.register(uid, tid, rid, epoch)
+    async with pg.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE task_rounds SET lease_epoch = lease_epoch + 1 WHERE id = :r"),
+            {"r": rid},
+        )
+    resp = _post(client, "read-task-file", tid, token, file_name="../x")
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "UNAUTHORIZED"
+    resp = _post(
+        client,
+        "write-output-file",
+        tid,
+        token,
+        file_name="a/b",
+        content_base64="!!!not-base64!!!",
+    )
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "UNAUTHORIZED"
+
+
 async def test_registry_miss_and_stale_instance_401(client, tools_env, pg):
     """登记表核验：未登记令牌 / 他实例令牌（同 claims 异 instance）→ 401。"""
     uid, tid, rid, epoch = await _seed_running_minimal(pg, "t7-reg@x.test")

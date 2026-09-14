@@ -9,6 +9,8 @@
   task_rounds 当前值（fence 后旧令牌一律 401，Eng §3.3:85）→ D16 owner
   会话（owner 从 claims 取，免 admin 反查）→ assert_tool_enabled 第二校验
   （403 TOOL_REVOKED）→ permissions 服务端强制（TOOL_CALL_REJECTED 400）。
+  permissions 形态闸（含请求形态/content_base64 解码）在 owner 会话内 fence
+  之后执行——fenced 旧令牌即便携带畸形请求体也一律 401。
   用户 MCP 语义已下线（/internal/mcp/call 删除）。
 """
 
@@ -201,7 +203,8 @@ async def _assert_round_live(db: AsyncSession, claims: dict) -> None:
 def _assert_tool_permissions(tool_id: str, *, needs_paths: tuple[str, ...] = ()) -> None:
     """permissions 服务端强制（D2）：描述符声明缺失/形态不符/未声明所需路径 →
     400 TOOL_CALL_REJECTED。network:false 是容器面语义（回调端点本身不外呼），
-    声明为真即描述符被篡改，拒绝。"""
+    声明为真即描述符被篡改，拒绝。校验链位置（冻结全序）：epoch fence 与
+    assert_tool_enabled 之后——只对活令牌分流 400，fenced 旧令牌在更早层 401。"""
     tool = PLATFORM_TOOLS.get((tool_id, "1"))
     perms = tool.permissions if tool is not None else None
     if not isinstance(perms, dict) or perms.get("network") is not False:
@@ -214,7 +217,7 @@ def _assert_tool_permissions(tool_id: str, *, needs_paths: tuple[str, ...] = ())
 
 def _reject_traversal(file_name: str) -> None:
     """permissions 路径形态强制：穿越形/分段名/点段名 → 400 TOOL_CALL_REJECTED
-    （服务层防穿越为行键查询，本闸在请求形态层前置拒绝）。"""
+    （服务层防穿越为行键查询，本闸在 fence 之后的请求形态层拒绝）。"""
     if (
         not isinstance(file_name, str)
         or not file_name
@@ -232,13 +235,16 @@ async def read_task_file_tool(
     rt: V2Runtime = Depends(get_v2_runtime),
 ) -> dict[str, object]:
     """读取任务输入文件字节（read_task_file@1 回调；只认 inputs 根——
-    read_input_bytes 行键防穿越）。"""
+    read_input_bytes 行键防穿越）。
+
+    校验链冻结全序：fence（401）先于 permissions 形态闸——fenced 旧令牌即便
+    携带畸形请求体也一律 401，permissions 闸只对活令牌分流 400。"""
     claims = _require_v2_task_token(request, payload, rt)
-    _assert_tool_permissions("read_task_file", needs_paths=("/task-files",))
-    _reject_traversal(payload.file_name)
     async with owner_session(rt, claims["owner_id"]) as db:
         await _assert_round_live(db, claims)
         await assert_tool_enabled(db, "read_task_file", "1")
+        _assert_tool_permissions("read_task_file", needs_paths=("/task-files",))
+        _reject_traversal(payload.file_name)
         content = await read_input_bytes(
             rt.storage,
             db,
@@ -262,17 +268,20 @@ async def write_output_file_tool(
     rt: V2Runtime = Depends(get_v2_runtime),
 ) -> dict[str, object]:
     """登记容器产物（write_output_file@1 回调；写 outputs/artifacts 根——
-    register_output TaskStorage 派生路径；round_id/lease_epoch 取自 claims）。"""
+    register_output TaskStorage 派生路径；round_id/lease_epoch 取自 claims）。
+
+    校验链冻结全序：fence（401）先于 permissions 形态闸/content_base64 解码
+    （同 read-task-file）——fenced 旧令牌即便携带畸形请求体也一律 401。"""
     claims = _require_v2_task_token(request, payload, rt)
-    _assert_tool_permissions("write_output_file", needs_paths=("/outputs",))
-    _reject_traversal(payload.file_name)
-    try:
-        content = base64.b64decode(payload.content_base64, validate=True)
-    except (ValueError, TypeError) as exc:
-        raise _tool_call_rejected("content_base64 非法") from exc
     async with owner_session(rt, claims["owner_id"]) as db:
         await _assert_round_live(db, claims)
         await assert_tool_enabled(db, "write_output_file", "1")
+        _assert_tool_permissions("write_output_file", needs_paths=("/outputs",))
+        _reject_traversal(payload.file_name)
+        try:
+            content = base64.b64decode(payload.content_base64, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise _tool_call_rejected("content_base64 非法") from exc
         out = await register_output(
             db,
             rt.storage,
@@ -292,12 +301,14 @@ async def list_task_files_tool(
     request: Request,
     rt: V2Runtime = Depends(get_v2_runtime),
 ) -> dict[str, object]:
-    """任务输入文件元数据（list_task_files@1 回调；list_input_meta 存活口径）。"""
+    """任务输入文件元数据（list_task_files@1 回调；list_input_meta 存活口径）。
+
+    校验链冻结全序同 read/write：fence（401）先于 permissions 形态闸。"""
     claims = _require_v2_task_token(request, payload, rt)
-    _assert_tool_permissions("list_task_files", needs_paths=("/task-files", "/outputs"))
     async with owner_session(rt, claims["owner_id"]) as db:
         await _assert_round_live(db, claims)
         await assert_tool_enabled(db, "list_task_files", "1")
+        _assert_tool_permissions("list_task_files", needs_paths=("/task-files", "/outputs"))
         files = await list_input_meta(db, task_id=claims["task_id"])
     return {"data": {"files": files}}
 
@@ -309,15 +320,17 @@ async def query_task_state_tool(
     rt: V2Runtime = Depends(get_v2_runtime),
 ) -> dict[str, object]:
     """任务状态摘要（query_task_state@1 回调）：D14 视图经服务端构造器剥除
-    lease_* 字段（剥除式而非 400 拒绝式；描述符 exclude 声明一并强制）。"""
+    lease_* 字段（剥除式而非 400 拒绝式；描述符 exclude 声明一并强制）。
+
+    校验链冻结全序同 read/write：fence（401）先于 permissions 形态闸。"""
     claims = _require_v2_task_token(request, payload, rt)
-    _assert_tool_permissions("query_task_state")
-    # 剥除谓词 = lease_ 前缀 ∪ 描述符 permissions.exclude 声明（D2：permissions
-    # 服务端强制；描述符被扩列时响应面同步收口）
-    perms = PLATFORM_TOOLS[("query_task_state", "1")].permissions or {}
-    excluded = frozenset(str(k) for k in (perms.get("exclude") or ()))
     async with owner_session(rt, claims["owner_id"]) as db:
         await _assert_round_live(db, claims)
         await assert_tool_enabled(db, "query_task_state", "1")
+        _assert_tool_permissions("query_task_state")
+        # 剥除谓词 = lease_ 前缀 ∪ 描述符 permissions.exclude 声明（D2：
+        # permissions 服务端强制；描述符被扩列时响应面同步收口）
+        perms = PLATFORM_TOOLS[("query_task_state", "1")].permissions or {}
+        excluded = frozenset(str(k) for k in (perms.get("exclude") or ()))
         view = await get_task_view(db, owner_id=claims["owner_id"], task_id=claims["task_id"])
     return {"data": {"task": _strip_lease_fields(view, excluded)}}
