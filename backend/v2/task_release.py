@@ -94,17 +94,34 @@ async def _apply_release_accounting(
             .values(state="free", task_id=None, leased_until=None)
             .execution_options(synchronize_session=False)
         )
-        await db.execute(
+        # 下限谓词（T5 承接审查项，与 _refund_storage 同型）：账面不足拒绝写负 + ERROR
+        decremented = await db.execute(
             text(
-                "UPDATE user_quota_usage SET running_tasks = running_tasks - :n WHERE user_id = :u"
+                "UPDATE user_quota_usage SET running_tasks = running_tasks - :n "
+                "WHERE user_id = :u AND running_tasks >= :n"
             ),
             {"n": running_n, "u": owner_id},
         )
+        if decremented.rowcount == 0:
+            logger.error(
+                "任务释放递减 running_tasks：账面不足（拒绝写负，须人工对账）user_id=%s n=%d",
+                owner_id,
+                running_n,
+            )
     if active_n:
-        await db.execute(
-            text("UPDATE user_quota_usage SET active_tasks = active_tasks - :n WHERE user_id = :u"),
+        decremented = await db.execute(
+            text(
+                "UPDATE user_quota_usage SET active_tasks = active_tasks - :n "
+                "WHERE user_id = :u AND active_tasks >= :n"
+            ),
             {"n": active_n, "u": owner_id},
         )
+        if decremented.rowcount == 0:
+            logger.error(
+                "任务释放递减 active_tasks：账面不足（拒绝写负，须人工对账）user_id=%s n=%d",
+                owner_id,
+                active_n,
+            )
     if refund_storage:
         nbytes = sum(int(n or 0) for _, n in released)
         if nbytes > 0:
