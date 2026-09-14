@@ -16,8 +16,8 @@ DB 原文永不进入模板。阶段 5 范围：
 扩展经 jiti 加载，`@earendil-works/pi-ai` 等导入由 alias/virtualModules
 解析（与扩展文件路径无关），孤立挂载文件可正常 import。
 模板占位用 __TOKEN__ 替换（TS 代码大括号多，str.format 转义不可维护）；
-注入顺序（faux/task_id 先、TOOLS JSON 最后）加占位 token 断言构成
-模板安全化（S2 §5）。
+注入顺序（faux/task_id/TOOLS JSON 先、model_input 载荷最后）加模板区
+占位 token 断言（数据区豁免）构成模板安全化（S2 §5，Phase 6 D5 方案 a）。
 """
 
 from __future__ import annotations
@@ -218,8 +218,10 @@ class ExtensionGenerator:
            引擎层无 DB；回调时点第二校验在 /internal，Phase 6 任务创建为第一时点）；
         ② kind="harness" 按选择子注册；kind="container" Phase 5 不注册（无实现，
            Phase 6 随卷模型交付）；
-        ③ 模板安全化（S2 §5）：faux/task_id 先注入、TOOLS JSON 最后注入，且注入前
-           断言序列化结果不含 __[A-Z_]+__ 形态 token（命中 ValueError 拒生成）。
+        ③ 模板安全化（S2 §5，Phase 6 D5 方案 a）：faux/task_id/TOOLS JSON 先注入，
+           终检断言模板区零 token（唯一豁免是待填充的 __MODEL_INPUT__ 占位符，
+           命中 ValueError 拒生成）；model_input 载荷最后注入且此后无任何
+           replace/扫描——数据区豁免 token 断言（载荷中 token 字样原样出产物）。
         """
         registered: list[dict] = []
         for tool_id, version in tools:
@@ -242,16 +244,23 @@ class ExtensionGenerator:
             # faux 回显模型无图像输入——保持 ["text"] 硬编码，不吃 model_input
             faux_block = _FAUX_BLOCK_TEMPLATE.replace("__ECHO_MAX__", str(_FAUX_ECHO_MAX_CHARS))
         else:
-            faux_block = _NO_FAUX_BLOCK.replace("__MODEL_INPUT__", json.dumps(list(model_input)))
+            # __MODEL_INPUT__ 占位符保留到终检之后填充（D5 方案 a）：载荷不得
+            # 随 faux_block 提前进入 source，否则被后续 replace 链扫描/改写
+            faux_block = _NO_FAUX_BLOCK
         source = (
             _EXTENSION_TEMPLATE.replace("__FAUX_BLOCK__", faux_block)
             .replace("__TASK_ID__", str(int(task_id)))
-            .replace("__MODEL_INPUT__", json.dumps(list(model_input)))
             .replace("__TOOLS_JSON__", json.dumps(registered, ensure_ascii=False))
-            # TOOLS JSON 最后注入：不再被后续替换扫描（S2 §5 缺陷 A 闭环）
         )
-        if _TEMPLATE_TOKEN_RE.search(source):
+        # 终检（S2 §5 缺陷 A 闭环，Phase 6 D5 方案 a）：位于 TOOLS JSON 注入之后、
+        # model_input 注入之前——此时载荷尚未进入 source，断言作用于模板区。
+        # 唯一合法残留是非 faux 路径待填充的 __MODEL_INPUT__ 占位符；其余任何
+        # __[A-Z_]+__ 形态（含 TOOLS 载荷携带者）→ ValueError 拒绝写盘。
+        expected_pending = [] if provider == "faux" else ["__MODEL_INPUT__"]
+        if _TEMPLATE_TOKEN_RE.findall(source) != expected_pending:
             raise ValueError("生成产物含未替换/非法模板占位 token，拒绝写盘")
+        # model_input 载荷最后注入：此后不再有任何 replace/扫描（数据区豁免）
+        source = source.replace("__MODEL_INPUT__", json.dumps(list(model_input)))
         self.extensions_root.mkdir(parents=True, exist_ok=True)
         path = self.extensions_root / f"task-{int(task_id)}.ts"
         path.write_text(source, encoding="utf-8", newline="\n")

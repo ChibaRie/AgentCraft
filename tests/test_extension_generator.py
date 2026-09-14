@@ -62,3 +62,53 @@ def test_v1_transition_selector_shape(tmp_path):
 
     assert _V1_TRANSITION_TOOLS == (("check_code_style", "1"),)
     assert _V1_TRANSITION_TOOLS[0] in PLATFORM_TOOLS
+
+
+# --- Phase 6 T1（D5 方案 a）：终检前移 + model_input 载荷最后注入 ---
+# 数据区豁免：model_input 载荷中的 token 字样原样保留出产物（重排前会被
+# 后续 replace 链吞掉/改写/递归展开——①②③ 在重排前为红）。
+
+
+def test_model_input_token_tools_json_survives(tmp_path):
+    # D5 ①：载荷含 __TOOLS_JSON__ 字样 → 原样保留
+    src = _gen(
+        tmp_path, [("check_code_style", "1")], model_input=("text", "__TOOLS_JSON__")
+    ).read_text(encoding="utf-8")
+    assert '["text", "__TOOLS_JSON__"]' in src
+
+
+def test_model_input_token_task_id_survives(tmp_path):
+    # D5 ②：载荷含 __TASK_ID__ 字样 → 原样保留
+    src = _gen(
+        tmp_path, [("check_code_style", "1")], model_input=("text", "__TASK_ID__")
+    ).read_text(encoding="utf-8")
+    assert '["text", "__TASK_ID__"]' in src
+
+
+def test_model_input_token_self_referential_survives(tmp_path):
+    # D5 ③：载荷自指 __MODEL_INPUT__ → 原样保留（单遍替换不重扫替换文本）
+    src = _gen(
+        tmp_path, [("check_code_style", "1")], model_input=("text", "__MODEL_INPUT__")
+    ).read_text(encoding="utf-8")
+    assert '["text", "__MODEL_INPUT__"]' in src
+
+
+def test_tools_json_payload_token_rejected(tmp_path, monkeypatch):
+    # D5 ④：TOOLS JSON 载荷携带 token → 终检仍拒绝写盘（安全化不因重排松动）
+    import dataclasses
+
+    import backend.engine.extension_generator as eg
+
+    real = PLATFORM_TOOLS[("check_code_style", "1")]
+    poisoned = dataclasses.replace(real, description="x __TOOLS_JSON__ y")
+    monkeypatch.setattr(eg, "PLATFORM_TOOLS", {("check_code_style", "1"): poisoned})
+    with pytest.raises(ValueError, match="模板占位"):
+        _gen(tmp_path, [("check_code_style", "1")])
+
+
+def test_model_input_lowercase_token_form_preserved(tmp_path):
+    # D5 ⑤：合法数据（__x__ 非大写 token 形态）逐字节保留出产物
+    src = _gen(tmp_path, [("check_code_style", "1")], model_input=("text", "__x__")).read_text(
+        encoding="utf-8"
+    )
+    assert '["text", "__x__"]' in src
