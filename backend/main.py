@@ -24,7 +24,9 @@ from backend.v2.deletion_service import deletion_sweep_loop
 from backend.v2.mailer import transport_from_settings
 from backend.v2.outbox import outbox_loop
 from backend.v2.runtime import v2_runtime_from_settings
-from backend.v2.task_dispatcher import dispatcher_loop
+from backend.v2.task_dispatcher import _instance_id, dispatcher_loop
+from backend.v2.task_executor import RoundExecutor, executor_loop
+from backend.v2.task_streams import TaskStreamRegistry
 
 logger = logging.getLogger("agentcraft")
 
@@ -61,11 +63,18 @@ async def lifespan(_app: FastAPI):
     outbox_task: asyncio.Task | None = None
     sweep_task: asyncio.Task | None = None
     dispatcher_task: asyncio.Task | None = None
+    executor_task: asyncio.Task | None = None
     if v2_rt is not None:
         transport = transport_from_settings(settings)
         outbox_task = asyncio.create_task(outbox_loop(v2_rt, transport), name="outbox-dispatcher")
         # 注销宽限期到期清理作业（60s 轮询；outbox_loop 同款 try/except-continue 形态）
         sweep_task = asyncio.create_task(deletion_sweep_loop(v2_rt), name="deletion-sweeper")
+        # 任务域执行器生产接线（Phase 6 T6b，D3 单实例）：streams 注册表 + 执行器
+        # 挂 runtime（dispatch 领轮经 executor.notify 唤醒；D18 注销钩子经
+        # runtime.executor 放弃通知）→ executor_loop 常驻（notify 消费 + 周期对账）
+        executor = RoundExecutor(v2_rt, streams=TaskStreamRegistry(), instance_id=_instance_id())
+        v2_rt.executor = executor
+        executor_task = asyncio.create_task(executor_loop(v2_rt), name="task-executor")
         # 任务域调度循环（Phase 6 T5）：领槽/回收/双清扫四作业串行（D16 两段式；
         # V2_TASK.dispatcher_poll_seconds 轮询；executor 缺位时 dispatch 空转免领）
         dispatcher_task = asyncio.create_task(dispatcher_loop(v2_rt), name="task-dispatcher")
@@ -74,7 +83,9 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         # 先停后台任务，再释放引擎；CancelledError 穿透各循环的常规异常捕获
-        for background in (outbox_task, sweep_task, dispatcher_task):
+        # （executor 最后取消：先停 dispatcher 防新领取，执行链在取消展开中经
+        # _run_round finally 释放引擎/容器/续约协程——T6b 关停验证钉无挂起）
+        for background in (outbox_task, sweep_task, dispatcher_task, executor_task):
             if background is not None:
                 background.cancel()
                 with suppress(asyncio.CancelledError):

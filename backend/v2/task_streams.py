@@ -19,11 +19,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import weakref
 
 logger = logging.getLogger("agentcraft.task.streams")
 
 # 单订阅队列上限：流式增量洪泛的内存防线（与 pi_engine_manager._ROUND_QUEUE_MAX 同量级）
 _QUEUE_MAX = 2000
+
+# 实例登记（WeakSet）：conftest 清理夹具消费（T6a M-4 交接）——仅测试残留实例的
+# 同步引用清场；WeakSet 不阻止 GC，生产生命周期不受影响
+LIVE_REGISTRIES: "weakref.WeakSet[TaskStreamRegistry]" = weakref.WeakSet()
 
 
 class _Subscription:
@@ -41,6 +46,7 @@ class TaskStreamRegistry:
 
     def __init__(self) -> None:
         self._subs: dict[str, list[_Subscription]] = {}
+        LIVE_REGISTRIES.add(self)
 
     def register(self, task_id: str, after: int = 0) -> asyncio.Queue:
         """注册订阅者并返回消费队列；``after`` 水位之前的带序帧不投递。"""

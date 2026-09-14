@@ -84,6 +84,7 @@ class FakePiTransport:
     def __init__(self) -> None:
         self.written: list[dict] = []
         self.aborted = False  # 曾收到 abort（断言用）
+        self.ignore_abort = False  # T6b：True 时 abort 只记账不生效（bounded-stop forced 路径注入）
         self._round_cancelled = False  # 仅取消当前轮；新一轮不受影响
         self.closed = False
         self.fail_after_prompt = False
@@ -111,6 +112,8 @@ class FakePiTransport:
             self._schedule_round(cmd["message"])
         elif cmd.get("type") == "abort":
             self.aborted = True
+            if self.ignore_abort:
+                return  # T6b：abort 不生效（轮挂至 engine.stop，forced 收尾路径）
             self._round_cancelled = True
             # 真实 Pi 中止帧序（tests/fixtures/pi_frames/faux_abort.jsonl）：
             # 半截回复以 stopReason=aborted 的 message_end 交付，settled 照常收尾
@@ -258,6 +261,42 @@ def reset_task_locks():
     yield
     task_locks._data_locks.clear()
     task_locks._round_locks.clear()
+
+
+@pytest.fixture(autouse=True)
+def v2_executor_streams_hygiene():
+    """executor/streams 模块级登记的同步清场（T6a M-4 交接，T6b 落地）。
+
+    纪律：同步函数、不触碰事件循环（不 cancel/不 await 任何任务）、不做 IO——
+    仅对上一用例残留实例做字典/集合级引用清理（asyncio 资源随用例事件循环关闭
+    而失效，此处只解除跨用例可达引用）。V1 用例从不构造 executor/registry，
+    WeakSet 为空 → 零开销 no-op（V1 基线不拖慢，计时对比见 task-6b-report）。
+    """
+    yield
+    from backend.v2 import task_executor as _te
+    from backend.v2 import task_streams as _ts
+
+    try:
+        for executor in list(_te.LIVE_EXECUTORS):
+            executor.tokens.clear()
+            executor._inflight.clear()
+            executor._renewals.clear()
+            executor._engines.clear()
+            executor._removals.clear()
+            executor._rounds.clear()
+            executor._detached_tasks.clear()
+            while True:
+                try:
+                    executor.notify_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+    except Exception:  # noqa: BLE001 - 清场夹具绝不破坏测试进程
+        pass
+    try:
+        for registry in list(_ts.LIVE_REGISTRIES):
+            registry._subs.clear()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @pytest.fixture()

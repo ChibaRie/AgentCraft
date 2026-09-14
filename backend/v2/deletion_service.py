@@ -15,8 +15,9 @@
   请求不写幂等记录亦无可重放）→ owner 单事务（GUC=user）：active→deleting
   跃迁（deletion_deadline_at = now()+14d，rowcount=1 复核，RETURNING 以 DB 时钟
   求剩余天数）→ ``revoke_all``（A10：含当前会话，全会话失效）→
-  ``TERMINATE_TASKS_HOOK``（模块级钩子：Phase 2 默认 no-op，任务域 Phase 6 注入
-  任务终止/卷清理）→ deletion_cancel 令牌（14 天，与 outbox 模板有效期同源
+  ``TERMINATE_TASKS_HOOK``（模块级钩子：Phase 6 T6b 起默认即任务域真件——D18
+  注销物理删；测试经模块属性 monkeypatch 注入替件）→ deletion_cancel 令牌
+  （14 天，与 outbox 模板有效期同源
   ``VALID_HOURS['deletion_cancel']``=336h）+ outbox 同事务（入队异常 → 整体回滚，
   绝不进入 deleting）→ 幂等 store；成功 200 {status, days_remaining} +
   clear_session_cookie（全会话已死，双 cookie 一并清除）。
@@ -61,6 +62,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.errors import AgentCraftError, ErrorCode
+from backend.v2 import task_executor
 from backend.v2.idempotency import begin, store, subject_token, subject_user
 from backend.v2.models import AccountActionToken
 from backend.v2.outbox import VALID_HOURS, enqueue
@@ -124,13 +126,18 @@ _CONSUME_TOKEN_SQL = text(
 
 
 async def _noop_terminate_tasks(db: AsyncSession, user_id: uuid.UUID) -> None:
-    """Phase 2 默认实现：no-op。任务终止/任务卷清理由任务域（Phase 6）注入替换。"""
+    """Phase 2 默认实现（历史形态保留注记）：no-op。Phase 6 T6b 起钩子默认值即
+    任务域真件 ``terminate_tasks_hook``（D18 注销物理删）；测试经模块属性
+    monkeypatch 注入替件（test_v2_deletion_flow 同型）。"""
 
 
-TERMINATE_TASKS_HOOK: Callable[[AsyncSession, uuid.UUID], Awaitable[None]] = _noop_terminate_tasks
-"""模块级任务终止钩子：request owner 事务内在 revoke_all 之后调用（任务域 Phase 6
-替换为真实实现；Key 密文删除属 user_providers 域，Phase 3 已于 sweep 显式 DELETE，
-不经此钩子）。"""
+TERMINATE_TASKS_HOOK: Callable[[AsyncSession, uuid.UUID], Awaitable[None]] = (
+    task_executor.terminate_tasks_hook
+)
+"""模块级任务终止钩子：request owner 事务内在 revoke_all 之后调用（D18：①
+fire-and-forget 放弃通知 → ② 同事务活跃轮 cancelled + 三本账释放 + 物理 DELETE
+任务行 → ③ post-commit 物理删 task-storage，失败留 sweep 兜底；Key 密文删除属
+user_providers 域，Phase 3 已于 sweep 显式 DELETE，不经此钩子）。"""
 
 
 @dataclass(frozen=True)
@@ -245,7 +252,7 @@ async def request_deletion(
         body = {"data": {"status": "deleting", "days_remaining": int(row.days_remaining)}}
 
         await revoke_all(db, owner_uuid)  # A10：含当前会话，全会话失效
-        await TERMINATE_TASKS_HOOK(db, owner_uuid)  # 任务域 Phase 6 注入；现 no-op
+        await TERMINATE_TASKS_HOOK(db, owner_uuid)  # D18 注销物理删（T6b 真件）
 
         cancel_token = generate_token()
         db.add(

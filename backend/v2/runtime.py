@@ -8,7 +8,7 @@
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator
+from typing import TYPE_CHECKING, AsyncIterator
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import text
@@ -16,6 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from backend.v2.db import build_engine, session_factory
 from backend.v2.task_storage import TaskStorage
+
+if TYPE_CHECKING:
+    from backend.v2.task_executor import RoundExecutor
 
 
 @dataclass
@@ -27,6 +30,10 @@ class V2Runtime:
     # 不触 I/O）；生产经 v2_runtime_from_settings 传入配置根（V2_TASK.storage_root →
     # <HOST_DATA_ROOT>/task-storage/ 派生）。
     storage: TaskStorage = field(default_factory=lambda: TaskStorage(Path("./data/task-storage")))
+    # T6b：RoundExecutor 句柄（main.py lifespan 生产接线 / 测试 setattr 注入；
+    # None = 未接线——dispatch notify/executor_loop/注销放弃通知均按缺位降级）。
+    # 字符串注解防循环导入（task_executor 反向 import 本模块）。
+    executor: "RoundExecutor | None" = None
 
     def close(self) -> None:
         for engine in self.engines:
