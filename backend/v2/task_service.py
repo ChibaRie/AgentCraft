@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
@@ -67,6 +68,7 @@ __all__ = [
     "get_task_view",
     "list_tasks",
     "release_task_holdings",
+    "send_message",
 ]
 
 logger = logging.getLogger("agentcraft.task")
@@ -690,3 +692,137 @@ async def delete_task(db: AsyncSession, *, owner_id: str, task_id: str) -> dict:
     await release_task_holdings(db, task_id=str(task.id), owner_id=str(owner_uuid))
     await db.flush()
     return {"task": {"id": str(task.id), "status": "deleted"}}
+
+
+# ---------------------------------------------------------------------------
+# 消息发送（Phase 6 T8b：ready 门 + 活跃轮闸 + 预算校验）
+# ---------------------------------------------------------------------------
+
+# 活跃轮占线的重试间隔（V1 task_round_lock 429 同值语义；Retry-After 载体）
+_ROUND_BUSY_RETRY_AFTER = "5"
+
+
+def _round_busy() -> AgentCraftError:
+    """429 TASK_ROUND_BUSY（活跃/排队轮占线；Retry-After 随错误头透传）。"""
+    return AgentCraftError(
+        ErrorCode.TASK_ROUND_BUSY,
+        "当前一轮回复仍在进行，请稍后再发送",
+        http_status=429,
+        headers={"Retry-After": _ROUND_BUSY_RETRY_AFTER},
+    )
+
+
+def _is_active_round_conflict(exc: IntegrityError) -> bool:
+    """IntegrityError 是否来自 one_active_round_per_task 部分唯一索引（约束名与
+    Database Design §3 一字不差；asyncpg UniqueViolationError 携带
+    constraint_name，缺失时退化到异常串匹配）。"""
+    orig = getattr(exc, "orig", None)
+    name = str(getattr(orig, "constraint_name", "") or "")
+    return "one_active_round_per_task" in (name or str(orig or exc))
+
+
+async def send_message(db: AsyncSession, *, owner_id: str, task_id: str, content: str) -> dict:
+    """发送下一条用户消息（Sup §1.2:25，Phase 6 T8b）。
+
+    门序（幂等由路由层先裁——命中重放无论当前状态，见 tasks.py 模块注记）：
+    活跃轮预检（429 TASK_ROUND_BUSY + Retry-After，覆盖 queued/running 及一切
+    活跃轮形态）→ ready 门（其余状态 409 TASK_INVALID_TRANSITION）→ 预算校验
+    （D7d，与 create 同一 ``_validate_initial_message``）→ 写事务：message 落库
+    （sequence 原子分配）+ message_saved → assert_transition(ready→queued) +
+    条件翻转（行锁在握）+ status_changed → INSERT round(pending,
+    source_message_id) + round_queued。
+
+    one_active_round_per_task 部分唯一索引即并发闸门：预检漏网的并发双发在
+    flush 处以 IntegrityError 浮出，按约束名映射同一 429（事务随 owner_session
+    回滚——无半账、不落幂等记录，客户端可原 key 重试）。
+
+    返回 ``{"message": {"id", "event_sequence"}, "event_sequence": round_queued
+    序, "round_id"}``（路由层包 202 ``{data: ...}`` 信封）。
+    """
+    task = await _lock_task(db, task_id)
+    owner_uuid = _parse_id(owner_id, "owner_id")
+    active = (
+        await db.execute(
+            select(TaskRound.id)
+            .where(TaskRound.task_id == task.id, TaskRound.state.in_(_ACTIVE_ROUND_STATES))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if active is not None:
+        raise _round_busy()
+    if task.status != "ready":
+        raise _transition_conflict("任务当前状态不可发送消息")
+    _validate_initial_message(content)
+
+    seq_m = await _allocate_event_sequence(db, task.id)
+    mid = uuid7()
+    db.add(
+        TaskMessage(
+            id=mid,
+            task_id=task.id,
+            owner_id=owner_uuid,
+            event_sequence=seq_m,
+            author="user",
+            content=content,
+        )
+    )
+    _add_event(
+        db,
+        task_id=task.id,
+        owner_id=owner_uuid,
+        sequence=seq_m,
+        event_type="message_saved",
+        payload={"message_id": str(mid), "event_sequence": seq_m, "author": "user"},
+        message_id=mid,
+    )
+    assert_transition("ready", "queued")
+    flipped = await db.execute(
+        update(Task)
+        .where(Task.id == task.id, Task.status == "ready")
+        .values(status="queued")
+        .execution_options(synchronize_session=False)
+    )
+    if flipped.rowcount == 0:  # FOR UPDATE 行锁在握，理论不可达——条件仲裁双保险
+        raise _transition_conflict()
+    seq_r = await _allocate_event_sequence(db, task.id, 2)
+    _add_event(
+        db,
+        task_id=task.id,
+        owner_id=owner_uuid,
+        sequence=seq_r,
+        event_type="status_changed",
+        payload={"status": "queued"},
+    )
+    round_id = uuid7()
+    db.add(
+        TaskRound(
+            id=round_id,
+            task_id=task.id,
+            owner_id=owner_uuid,
+            source_message_id=mid,
+            state="pending",
+            attempt=0,
+        )
+    )
+    try:
+        # 唯一活跃索引在此浮出并发冲突（429 映射；其余 IntegrityError 照常上抛）
+        await db.flush()
+    except IntegrityError as exc:
+        if _is_active_round_conflict(exc):
+            raise _round_busy() from exc
+        raise
+    _add_event(
+        db,
+        task_id=task.id,
+        owner_id=owner_uuid,
+        sequence=seq_r + 1,
+        event_type="round_queued",
+        payload={"round_id": str(round_id)},
+        round_id=round_id,
+    )
+    await db.flush()
+    return {
+        "message": {"id": str(mid), "event_sequence": seq_m},
+        "event_sequence": seq_r + 1,
+        "round_id": str(round_id),
+    }

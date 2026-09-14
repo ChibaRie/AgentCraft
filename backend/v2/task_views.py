@@ -28,7 +28,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.errors import AgentCraftError, ErrorCode
 from backend.v2.author_service import _reject_invalid_uuid as _parse_uuid
-from backend.v2.models import Task, TaskFile, TaskRound, UserQuota, UserQuotaUsage
+from backend.v2.models import (
+    Task,
+    TaskEvent,
+    TaskFile,
+    TaskMessage,
+    TaskRound,
+    UserQuota,
+    UserQuotaUsage,
+)
 
 # 活跃轮状态集（one_active_round_per_task 部分唯一索引同词表）
 _ACTIVE_ROUND_STATES = ("pending", "running", "cancelling")
@@ -312,4 +320,76 @@ async def get_task_quota_view(db: AsyncSession, *, owner_id: str, task_id: str) 
             "max_task_bytes": _MAX_TASK_INPUT_BYTES,
         },
         "input_frozen": task.input_committed_at is not None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 补拉读面（Phase 6 T8b：messages 全量正文 / events 事实序列 + 快照）
+# ---------------------------------------------------------------------------
+
+
+async def _require_live_task(db: AsyncSession, task_id: str) -> _uuid.UUID:
+    """任务存在性门（读面统一 404）：缺失/他人（RLS 0 行）/已删除同形（Sup §7）；
+    返回规范化 UUID（非法路径段 400）——SSE 流建立前的 JSON 短路也走本门。"""
+    tid = _parse_id(task_id, "task_id")
+    exists = (
+        await db.execute(select(Task.id).where(Task.id == tid, Task.status != "deleted"))
+    ).scalar_one_or_none()
+    if exists is None:
+        raise _task_not_found()
+    return tid
+
+
+async def list_task_messages(
+    db: AsyncSession, *, owner_id: str, task_id: str, after: int, limit: int
+) -> list[dict]:
+    """消息补拉（Sup §1.2:26）：event_sequence 升序、全量正文，``after`` 游标 +
+    ``limit`` 截断（1≤limit≤200 由路由层 Query 门校验）。不可用于状态恢复——
+    事实面是 /events。"""
+    tid = await _require_live_task(db, task_id)
+    _parse_id(owner_id, "owner_id")
+    rows = (
+        (
+            await db.execute(
+                select(TaskMessage)
+                .where(TaskMessage.task_id == tid, TaskMessage.event_sequence > after)
+                .order_by(TaskMessage.event_sequence)
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "id": str(m.id),
+            "event_sequence": int(m.event_sequence),
+            "author": m.author,
+            "content": m.content,
+            "created_at": m.created_at.isoformat(),
+        }
+        for m in rows
+    ]
+
+
+async def list_task_events(
+    db: AsyncSession, *, owner_id: str, task_id: str, after: int, limit: int | None
+) -> dict:
+    """事件补拉（Sup §1.2:27）：sequence 升序 ``(sequence, type, payload)`` 行 +
+    当前任务快照 {status, event_sequence}（同一会话读出；after > watermark 时
+    事件自然空集、快照仍在）。``limit=None`` 不截断（SSE 重放面全量拉取）。"""
+    tid = await _require_live_task(db, task_id)
+    _parse_id(owner_id, "owner_id")
+    snap = (await db.execute(select(Task.status, Task.event_sequence).where(Task.id == tid))).one()
+    query = (
+        select(TaskEvent.sequence, TaskEvent.type, TaskEvent.payload_json)
+        .where(TaskEvent.task_id == tid, TaskEvent.sequence > after)
+        .order_by(TaskEvent.sequence)
+    )
+    if limit is not None:
+        query = query.limit(limit)
+    rows = (await db.execute(query)).all()
+    return {
+        "snapshot": {"status": snap.status, "event_sequence": int(snap.event_sequence)},
+        "events": [(int(r.sequence), r.type, r.payload_json) for r in rows],
     }

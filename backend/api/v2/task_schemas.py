@@ -37,3 +37,15 @@ class TaskCommitRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     manifest: list[dict]
+
+
+class TaskSendMessageRequest(BaseModel):
+    """POST /api/v2/tasks/{id}/messages 请求体（Sup §1.2:25：消息正文）。
+
+    content 字符级粗闸仅挡量级异常载荷（先于业务零 DB 副作用）；服务层按
+    UTF-8 字节对 Settings.SKILL_PROMPT_MAX_BYTES=65,536 精确校验（D7d，与
+    create 同一 ``_validate_initial_message`` 门）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1, max_length=65536)
