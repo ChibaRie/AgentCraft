@@ -371,8 +371,12 @@ async def read_input_bytes(
     """读取输入文件字节（T7 /internal/tools 回调消费；D16 owner 会话内调用）。
 
     file_name 只作行查询键、永不参与路径拼接（防穿越）；物理路径只认行内
-    storage_key 严格解析派生。行不可见（缺失/他人/墓碑/键形态异常）或物理文件
-    缺失（OSError）→ FILE_NOT_FOUND 404。
+    storage_key 严格解析派生。行查询钉 input 面（task_files 无 (task_id,
+    file_name) 唯一约束——跨方向同名合法，committed 输入与 T7 产物行并存时
+    只认 input 行，防 MultipleResultsFound 与产物路径错面派生）；存活口径
+    （state != 'deleted'，墓碑即 FILE_NOT_FOUND，与 list_input_meta 对齐）。
+    行不可见（缺失/他人/墓碑/键形态异常）或物理文件缺失（OSError）→
+    FILE_NOT_FOUND 404。
     """
     tid = _parse_id(task_id, "task_id")
     uid = _parse_id(owner_id, "owner_id")
@@ -383,6 +387,7 @@ async def read_input_bytes(
             select(TaskFile).where(
                 TaskFile.task_id == tid,
                 TaskFile.owner_id == uid,
+                TaskFile.direction == "input",
                 TaskFile.file_name == file_name,
                 TaskFile.state != "deleted",
             )

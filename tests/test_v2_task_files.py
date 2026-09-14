@@ -535,6 +535,47 @@ async def test_read_input_bytes_missing_physical_file_404(pg, app_engine, domain
     assert ei.value.http_status == 404
 
 
+async def test_read_input_bytes_cross_direction_name_collision(pg, app_engine, domain, storage):
+    """跨方向同名（task_files 无 (task_id, file_name) 唯一约束）：committed 输入
+    a.txt 与 registered 产物 a.txt 并存 → 只认 input 行返回输入内容，不抛
+    MultipleResultsFound、不落产物路径派生。"""
+    uid, tid = await _uploading_task(pg, domain)
+    input_fid = await seed_input_file(
+        pg, uid, tid, size_bytes=5, state="committed", file_name="a.txt"
+    )
+    await seed_input_file(
+        pg, uid, tid, size_bytes=9, direction="output", state="registered", file_name="a.txt"
+    )
+    async with pg.engine.connect() as conn:  # seed 不写盘：按行内 storage_key 补物理文件
+        key = (
+            await conn.execute(
+                text("SELECT storage_key FROM task_files WHERE id = :f"),
+                {"f": str(input_fid)},
+            )
+        ).scalar_one()
+    storage.input_path(tid, str(key).split("/")[2]).write_bytes(b"INPUT")
+    async with owner_tx(app_engine, uid) as db:
+        got = await read_input_bytes(storage, db, owner_id=uid, task_id=tid, file_name="a.txt")
+    assert got == b"INPUT"
+
+
+async def test_read_input_bytes_tombstoned_input_with_output_same_name_404(
+    pg, app_engine, domain, storage
+):
+    """输入墓碑 + 产物同名：input 面 + 存活口径（与 list_input_meta 对齐）→
+    FILE_NOT_FOUND 404，不把产物行送进 input 路径派生。"""
+    uid, tid = await _uploading_task(pg, domain)
+    await seed_input_file(pg, uid, tid, size_bytes=5, state="deleted", file_name="a.txt")
+    await seed_input_file(
+        pg, uid, tid, size_bytes=9, direction="output", state="registered", file_name="a.txt"
+    )
+    async with owner_tx(app_engine, uid) as db:
+        with pytest.raises(AgentCraftError) as ei:
+            await read_input_bytes(storage, db, owner_id=uid, task_id=tid, file_name="a.txt")
+    assert ei.value.code is ErrorCode.FILE_NOT_FOUND
+    assert ei.value.http_status == 404
+
+
 async def test_list_input_meta_for_callback(pg, app_engine, domain, storage, delete_root):
     """T7 元数据面：仅存活输入（墓碑/产物不可见），meta 键集钉死；非法 task_id
     段 400。"""
