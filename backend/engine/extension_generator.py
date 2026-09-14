@@ -9,9 +9,9 @@ DB 原文永不进入模板。阶段 5 范围：
 - faux Provider 注册（PI_PROVIDER=faux 时）：CLI 无内置 faux（实测
   `Unknown provider "faux"`），按官方 custom-provider 机制经扩展注册，
   自定义 streamSimple 回显对话上下文，供无 Key 联调与重播种验收
-- 平台工具注册循环：harness 类工具经 /internal 端点回调（凭 X-Task-Token，
-  回调时点第二校验在 /internal）；container 类工具 Phase 5 不注册
-  （Phase 6 随卷模型交付）
+- 平台工具注册循环：callback_path 非空即注册（Phase 6 D2 全回调——harness 与
+  container 统一走 /internal 端点回调，凭 X-Task-Token，回调时点第二校验在
+  /internal；Phase 5 的「container 不注册」中间态随 D2 裁决演进消亡）
 
 扩展经 jiti 加载，`@earendil-works/pi-ai` 等导入由 alias/virtualModules
 解析（与扩展文件路径无关），孤立挂载文件可正常 import。
@@ -216,8 +216,9 @@ class ExtensionGenerator:
         """生成 task-<task_id>.ts。tools 为 (tool_id, version) 选择子：
         ① 未知组合 → ValueError（生成时点白名单，调用方负责 enabled 校验——
            引擎层无 DB；回调时点第二校验在 /internal，Phase 6 任务创建为第一时点）；
-        ② kind="harness" 按选择子注册；kind="container" Phase 5 不注册（无实现，
-           Phase 6 随卷模型交付）；
+        ② callback_path 非空即注册（Phase 6 D2 全回调：harness/container 统一
+           路径——四容器工具经 /internal/tools/* 回调，check_code_style 经
+           /internal/harness/*；callback_path 为空的描述符不注册）；
         ③ 模板安全化（S2 §5，Phase 6 D5 方案 a）：faux/task_id/TOOLS JSON 先注入，
            终检断言模板区零 token（唯一豁免是待填充的 __MODEL_INPUT__ 占位符，
            命中 ValueError 拒生成）；model_input 载荷最后注入且此后无任何
@@ -232,8 +233,8 @@ class ExtensionGenerator:
             tool = PLATFORM_TOOLS.get((tool_id, version))
             if tool is None:
                 raise ValueError(f"未知平台工具: {tool_id}@{version}")
-            if tool.kind != "harness":
-                continue  # Phase 6：container 工具随卷模型/回调实现交付
+            if not tool.callback_path:
+                continue  # D2 全回调：callback_path 非空即注册（无回调面即无实现）
             registered.append(
                 {
                     "name": tool.tool_id,

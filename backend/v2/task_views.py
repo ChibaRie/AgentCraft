@@ -7,7 +7,8 @@
 纪律：
 
 - 视图字段钉死 D14：排除 lease_owner/lease_epoch（红线）；round 摘要仅
-  id/state/attempt；
+  id/state/attempt；``_strip_lease_fields`` 构造器为回调响应面（T7
+  query_task_state）提供同红线剥除式防线；
 - deleted 任务统一 404（Sup §7「越权、不存在、已删除资源一律 404」）；
 - 服务函数不 begin 不 commit；调用方会话必须已 set_current_owner（RLS 生效
   前提），本模块不重复设置；
@@ -51,6 +52,22 @@ def _task_not_found() -> AgentCraftError:
 def _round_out(row) -> dict:
     """round 摘要（D14：仅 id/state/attempt——lease_owner/lease_epoch 红线排除）。"""
     return {"id": str(row.id), "state": row.state, "attempt": int(row.attempt)}
+
+
+def _strip_lease_fields(node, excluded: frozenset[str] = frozenset()):
+    """lease_* 字段剥除构造器（Phase 6 T7）：递归剥除键名以 ``lease_`` 开头的
+    字段，外加 ``excluded`` 显式声明集（query_task_state 描述符 permissions.
+    exclude 的服务端强制值源）。D14 红线的构造器级防线——视图装配已排除，本
+    构造器对任意输入视图再收口一次；回调响应面消费，剥除式而非 400 拒绝式。"""
+    if isinstance(node, dict):
+        return {
+            key: _strip_lease_fields(value, excluded)
+            for key, value in node.items()
+            if not str(key).startswith("lease_") and key not in excluded
+        }
+    if isinstance(node, list):
+        return [_strip_lease_fields(item, excluded) for item in node]
+    return node
 
 
 async def _load_task_views(db: AsyncSession, task_ids: list[_uuid.UUID]) -> list[dict]:

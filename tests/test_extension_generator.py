@@ -27,11 +27,29 @@ def test_unknown_tool_rejected(tmp_path):
         _gen(tmp_path, [("no_such_tool", "1")])
 
 
-def test_container_kind_not_registered_in_phase5(tmp_path):
-    path = _gen(tmp_path, [("read_task_file", "1"), ("check_code_style", "1")])
-    src = path.read_text(encoding="utf-8")
-    assert "read_task_file" not in src  # kind=container 不注册（Phase 6 随卷模型）
+def test_container_tools_registered_via_callback_phase6(tmp_path):
+    """Phase 6（D2 全回调，改写申报——原钉锁 test_container_kind_not_registered_
+    in_phase5 为 Phase 5 中间态，D2 用户裁决 2026-09-14 演进为全回调）：
+    四 container 工具经 /internal/tools/* callback_path 注册进 task.ts，
+    check_code_style 仍注册（harness/container 统一「callback_path 非空即注册」）。"""
+    tools = [
+        ("read_task_file", "1"),
+        ("write_output_file", "1"),
+        ("list_task_files", "1"),
+        ("query_task_state", "1"),
+        ("check_code_style", "1"),
+    ]
+    src = _gen(tmp_path, tools).read_text(encoding="utf-8")
+    for name, callback in (
+        ("read_task_file", "/internal/tools/read-task-file"),
+        ("write_output_file", "/internal/tools/write-output-file"),
+        ("list_task_files", "/internal/tools/list-task-files"),
+        ("query_task_state", "/internal/tools/query-task-state"),
+    ):
+        assert f'"{name}"' in src
+        assert callback in src
     assert '"check_code_style"' in src
+    assert "/internal/harness/check-code-style" in src
 
 
 def test_no_template_token_survives(tmp_path):
@@ -62,6 +80,44 @@ def test_v1_transition_selector_shape(tmp_path):
 
     assert _V1_TRANSITION_TOOLS == (("check_code_style", "1"),)
     assert _V1_TRANSITION_TOOLS[0] in PLATFORM_TOOLS
+
+
+# --- Phase 6 T7（D2 全回调）：callback_path/permissions/parameters 对齐 ---
+
+
+def test_container_descriptors_callback_and_permissions_align_seed():
+    """四 container 描述符：callback_path 填参 + permissions 对齐 0002 种子
+    tool_catalog.permissions JSONB（服务端强制值源）；check_code_style 面不变。"""
+    expected_permissions = {
+        ("read_task_file", "1"): {"paths": ["/task-files"], "network": False},
+        ("write_output_file", "1"): {"paths": ["/outputs"], "network": False},
+        ("list_task_files", "1"): {"paths": ["/task-files", "/outputs"], "network": False},
+        ("query_task_state", "1"): {
+            "fields": ["status", "round_summary"],
+            "exclude": ["lease_owner", "lease_epoch"],
+            "network": False,
+        },
+    }
+    expected_callbacks = {
+        ("read_task_file", "1"): "/internal/tools/read-task-file",
+        ("write_output_file", "1"): "/internal/tools/write-output-file",
+        ("list_task_files", "1"): "/internal/tools/list-task-files",
+        ("query_task_state", "1"): "/internal/tools/query-task-state",
+        ("check_code_style", "1"): "/internal/harness/check-code-style",
+    }
+    for key, perms in expected_permissions.items():
+        assert PLATFORM_TOOLS[key].permissions == perms
+    for key, callback in expected_callbacks.items():
+        assert PLATFORM_TOOLS[key].callback_path == callback
+    assert PLATFORM_TOOLS[("check_code_style", "1")].permissions is None
+
+
+def test_write_output_file_parameters_aligned():
+    params = PLATFORM_TOOLS[("write_output_file", "1")].parameters
+    assert set(params["properties"]) == {"file_name", "content_base64"}
+    assert params["required"] == ["file_name", "content_base64"]
+    read_params = PLATFORM_TOOLS[("read_task_file", "1")].parameters
+    assert set(read_params["properties"]) == {"file_name"}  # 回调体契约 {file_name}
 
 
 # --- Phase 6 T1（D5 方案 a）：终检前移 + model_input 载荷最后注入 ---
