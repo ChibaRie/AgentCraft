@@ -207,13 +207,13 @@ class ExtensionGenerator:
 
     def generate(
         self,
-        task_id: int,
+        task_id: int | str,
         tools: Sequence[tuple[str, str]],
         provider: str,
         *,
         model_input: Sequence[str] = ("text", "image"),
     ) -> Path:
-        """生成 task-<id>.ts。tools 为 (tool_id, version) 选择子：
+        """生成 task-<task_id>.ts。tools 为 (tool_id, version) 选择子：
         ① 未知组合 → ValueError（生成时点白名单，调用方负责 enabled 校验——
            引擎层无 DB；回调时点第二校验在 /internal，Phase 6 任务创建为第一时点）；
         ② kind="harness" 按选择子注册；kind="container" Phase 5 不注册（无实现，
@@ -222,6 +222,10 @@ class ExtensionGenerator:
            终检断言模板区零 token（唯一豁免是待填充的 __MODEL_INPUT__ 占位符，
            命中 ValueError 拒生成）；model_input 载荷最后注入且此后无任何
            replace/扫描——数据区豁免 token 断言（载荷中 token 字样原样出产物）。
+
+        task_id 类型（Phase 6 T6a，D17 申报例外）：int → 数字字面量（V1 路径
+        byte-identical）；str（V2 UUID）→ 带引号的 TS 字符串字面量（json.dumps
+        转义），文件名 ``task-<task_id>.ts`` 原样取串。
         """
         registered: list[dict] = []
         for tool_id, version in tools:
@@ -240,6 +244,12 @@ class ExtensionGenerator:
                     "callbackPath": tool.callback_path,
                 }
             )
+        if isinstance(task_id, int):
+            task_id_text = str(int(task_id))  # V1 int 路径：数字字面量 + task-<int>.ts
+            task_id_literal = task_id_text
+        else:
+            task_id_text = str(task_id)  # V2 UUID 路径：串原样；字面量带引号安全转义
+            task_id_literal = json.dumps(task_id_text)
         if provider == "faux":
             # faux 回显模型无图像输入——保持 ["text"] 硬编码，不吃 model_input
             faux_block = _FAUX_BLOCK_TEMPLATE.replace("__ECHO_MAX__", str(_FAUX_ECHO_MAX_CHARS))
@@ -249,7 +259,7 @@ class ExtensionGenerator:
             faux_block = _NO_FAUX_BLOCK
         source = (
             _EXTENSION_TEMPLATE.replace("__FAUX_BLOCK__", faux_block)
-            .replace("__TASK_ID__", str(int(task_id)))
+            .replace("__TASK_ID__", task_id_literal)
             .replace("__TOOLS_JSON__", json.dumps(registered, ensure_ascii=False))
         )
         # 终检（S2 §5 缺陷 A 闭环，Phase 6 D5 方案 a）：位于 TOOLS JSON 注入之后、
@@ -262,6 +272,6 @@ class ExtensionGenerator:
         # model_input 载荷最后注入：此后不再有任何 replace/扫描（数据区豁免）
         source = source.replace("__MODEL_INPUT__", json.dumps(list(model_input)))
         self.extensions_root.mkdir(parents=True, exist_ok=True)
-        path = self.extensions_root / f"task-{int(task_id)}.ts"
+        path = self.extensions_root / f"task-{task_id_text}.ts"
         path.write_text(source, encoding="utf-8", newline="\n")
         return path

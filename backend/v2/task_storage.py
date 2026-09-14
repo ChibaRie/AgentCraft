@@ -50,6 +50,13 @@ class TaskStorage:
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
+    def extension_root(self) -> Path:
+        """任务扩展脚本目录 extensions/（T6a：executor 据此构造 ExtensionGenerator，
+        使扩展产物落盘 task-storage/extensions/ 与 extension_path 同一异名空间）。"""
+        path = self._root / "extensions"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def delete_task_storage(self, task_id: str) -> None:
         """删除任务物理树 tasks/<id>/ 与 artifacts/<id>/（幂等：不存在即静默）。
 
