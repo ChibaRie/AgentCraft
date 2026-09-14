@@ -49,7 +49,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from tests.conftest import ADMIN_ROLE, APP_ROLE, PgDb
+from tests.conftest import ADMIN_ROLE, APP_ROLE, PgDb, make_role_engine
 
 pytestmark = [pytest.mark.usefixtures("pg")]
 
@@ -69,8 +69,11 @@ OWNER_TABLES = (
 
 
 def _role_engine(pg: PgDb, role: tuple[str, str]) -> AsyncEngine:
-    """以指定角色（app/admin）建连接池，指向当前测试库。"""
-    return create_async_engine(pg.role_url(*role))
+    """以指定角色（app/admin）建连接池，指向当前测试库。
+
+    实现已收编为 tests.conftest.make_role_engine（Phase 6 T2 role_engine 工厂
+    夹具的底层）；本模块级别名保留，既有调用点零改动。"""
+    return make_role_engine(pg, role)
 
 
 async def _seed_user_with_task(pg: PgDb, email: str) -> _uuid.UUID:
@@ -1085,3 +1088,101 @@ async def test_revision_tools_frozen_once_parent_not_draft(pg: PgDb) -> None:
             {"r": pending_row},
         )
         assert updated.rowcount == 1
+
+
+# ---- Phase 6 T2（D8 防漂移）：内部服务表无 RLS ----
+# task_reservations 与配额/槽位/存储/幂等/限流同类的内部服务表（DB §3.1 内部表，
+# 由 app role 同事务直写、无 owner 隔离语义）。清单与全库 RLS 表白名单双向钉死：
+# 任何一侧漂移（给内部表加 RLS / 新增 RLS 表未扩名单）即红。
+INTERNAL_SERVICE_TABLES = (
+    "task_reservations",
+    "user_quotas",
+    "user_quota_usage",
+    "platform_slots",
+    "platform_storage",
+    "usage_daily",
+    "idempotency_records",
+    "rate_limit_events",
+)
+
+# 0001（14）+ 0003（users/user_entitlements）+ 0006（revision_tools）= 17 张
+RLS_ENABLED_TABLES = frozenset(
+    {
+        "account_action_tokens",
+        "email_outbox",
+        "expert_revisions",
+        "experts",
+        "reports",
+        "revision_tools",
+        "sessions",
+        "skill_revisions",
+        "skills",
+        "task_events",
+        "task_files",
+        "task_messages",
+        "task_rounds",
+        "tasks",
+        "user_entitlements",
+        "user_providers",
+        "users",
+    }
+)
+
+
+async def test_internal_service_tables_have_no_rls(pg: PgDb, role_engine) -> None:
+    """内部服务表 relrowsecurity/relforcerowsecurity 双假且零 policy；app role
+    无 owner 上下文可直读其中行（行为面证据——RLS 表同形态查询为 0 行）；
+    全库 relrowsecurity=true 的表集合恰为 17 张白名单。"""
+    names = ",".join(f"'{t}'" for t in INTERNAL_SERVICE_TABLES)
+    async with pg.engine.begin() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity "
+                    "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    f"WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname IN ({names})"
+                )
+            )
+        ).all()
+        policies = (
+            await conn.execute(
+                text(
+                    "SELECT count(*) FROM pg_policies "
+                    f"WHERE schemaname = 'public' AND tablename IN ({names})"
+                )
+            )
+        ).scalar_one()
+        rls_tables = {
+            r[0]
+            for r in (
+                await conn.execute(
+                    text(
+                        "SELECT c.relname FROM pg_class c "
+                        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                        "WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relrowsecurity"
+                    )
+                )
+            ).all()
+        }
+    assert {r[0] for r in rows} == set(INTERNAL_SERVICE_TABLES)
+    for relname, rls, force in rows:
+        assert (rls, force) == (False, False), relname
+    assert policies == 0
+    assert rls_tables == RLS_ENABLED_TABLES
+
+    # 行为面：superuser 造 task + task_reservations 行，app role 无 owner 上下文直读可见
+    await _seed_user_with_task(pg, "no-rls@x.com")
+    async with pg.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO task_reservations (id, task_id, user_id, kind, bytes, state) "
+                "SELECT gen_random_uuid(), t.id, t.owner_id, 'active', 0, 'held' FROM tasks t"
+            )
+        )
+    app = role_engine(APP_ROLE)
+    try:
+        async with app.connect() as conn:  # 无 set_current_owner：无 RLS 即整表可见
+            n = (await conn.execute(text("SELECT count(*) FROM task_reservations"))).scalar_one()
+            assert n == 1
+    finally:
+        await app.dispose()

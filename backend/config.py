@@ -2,12 +2,34 @@ import base64
 import binascii
 from pathlib import Path
 
-from pydantic import ValidationError, model_validator
+from pydantic import BaseModel, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+class V2TaskSettings(BaseModel):
+    """V2 任务域运行参数（Phase 6 D10）。覆盖经嵌套定界符 env（如 V2_TASK__DISPATCH_BATCH）。
+
+    storage_root 为 None 时由 v2_runtime_from_settings 派生为
+    ``<HOST_DATA_ROOT>/task-storage/``（D10 物理根；config 层无跨字段耦合）。
+    """
+
+    storage_root: Path | None = None
+    lease_ttl_seconds: int = 90
+    lease_renew_seconds: int = 30
+    round_deadline_seconds: int = 1200
+    upload_ttl_hours: int = 24
+    terminal_retention_days: int = 7
+    dispatcher_poll_seconds: float = 2.0
+    dispatch_batch: int = 16
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        env_nested_delimiter="__",  # 嵌套模型 env 覆盖（现仅 V2_TASK，不影响平铺字段）
+    )
     HOST_WORKSPACE_ROOT: Path = Path("./workspaces")
     HOST_DATA_ROOT: Path = Path("./data")
     AGENTCRAFT_WORKSPACE_ROOT: str = "/workspaces/authorized"
@@ -54,6 +76,7 @@ class Settings(BaseSettings):
     MAIL_TRANSPORT: str = "console"  # outbox 传输选择：console | mailegress（部署阶段接线）
     SESSION_COOKIE_SECURE: bool = True  # dev 经 http://localhost 浏览器豁免；LAN 调试可关
     LOG_LEVEL: str = "INFO"
+    V2_TASK: V2TaskSettings = V2TaskSettings()  # 任务域运行参数（Phase 6 D10）
 
     @model_validator(mode="after")
     def validate_secrets(self) -> "Settings":

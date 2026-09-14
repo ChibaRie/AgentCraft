@@ -413,6 +413,22 @@ async def pg(pg_template) -> PgDb:
     await _drop_db(base, name)
 
 
+def make_role_engine(pg: PgDb, role: tuple[str, str]) -> AsyncEngine:
+    """以指定 DB 角色（app/admin）建当前测试库的引擎池（Phase 6 T2 收编
+    test_v2_rls._role_engine 为共享实现；调用方负责 dispose 返回的引擎）。"""
+    return create_async_engine(pg.role_url(*role))
+
+
+@pytest.fixture
+def role_engine(pg: PgDb):
+    """工厂夹具：返回 make(role) -> AsyncEngine 闭包（T5-T8 双 role 断言复用）。"""
+
+    def make(role: tuple[str, str]) -> AsyncEngine:
+        return make_role_engine(pg, role)
+
+    return make
+
+
 @pytest.fixture
 async def pg_fresh(pg) -> PgDb:
     """Task 2-5 模型测试用：按当前模型建表并保证空库起点。

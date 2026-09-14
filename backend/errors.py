@@ -46,6 +46,13 @@ class ErrorCode(str, Enum):
     REPORT_ALREADY_RESOLVED = "REPORT_ALREADY_RESOLVED"
     ADMIN_REASON_REQUIRED = "ADMIN_REASON_REQUIRED"
     ADMIN_MFA_REQUIRED = "ADMIN_MFA_REQUIRED"
+    # —— 任务域（Phase 6 T2，D15 补登；http_status 在抛出点给定，注释为契约默认）——
+    TASK_NOT_FOUND = "TASK_NOT_FOUND"  # 404
+    # 409；assert_transition / validate_abort_reason（task_state.py 状态机原语）
+    TASK_INVALID_TRANSITION = "TASK_INVALID_TRANSITION"
+    TASK_ROUND_BUSY = "TASK_ROUND_BUSY"  # 429
+    FILE_NOT_FOUND = "FILE_NOT_FOUND"  # 404
+    TOOL_CALL_REJECTED = "TOOL_CALL_REJECTED"  # 400
     # —— V1 既有（legacy 保留）——
     PROMPT_TOO_LARGE = "PROMPT_TOO_LARGE"
 

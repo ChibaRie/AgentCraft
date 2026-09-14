@@ -3,7 +3,9 @@
 tasks / task_files / task_reservations / task_messages / task_rounds /
 task_events / idempotency_records。
 枚举值常量（TASK_STATUSES / ROUND_STATES / RESERVATION_* / FILE_STATES /
-MESSAGE_AUTHORS / EVENT_TYPES）为全仓唯一来源，供阶段 2 任务域直接消费。
+MESSAGE_AUTHORS / EVENT_TYPES）为全仓唯一来源，供阶段 2 任务域直接消费；
+pending_terminal 的词表 PENDING_TERMINAL_VALUES 唯一来源在
+backend/v2/task_state.py（8 态状态机原语，Phase 6 T2），模型经 check_enum 引用。
 
 循环 FK（use_alter=True，建表后以 ALTER TABLE 补齐）：
 - tasks.initial_message_id → task_messages.id（SET NULL）：与
@@ -44,6 +46,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.v2.models.base import Base, TimestampMixin, check_enum, pk_uuid
+from backend.v2.task_state import PENDING_TERMINAL_VALUES
 
 TASK_STATUSES = (
     "uploading",
@@ -75,6 +78,9 @@ class Task(TimestampMixin, Base):
     __tablename__ = "tasks"
     __table_args__ = (
         check_enum("tasks", "status", TASK_STATUSES),
+        # 终态意图位（Phase 6 D19）：running/queued 期间的 complete/abort/delete 请求
+        # 落此列，轮收口事务读列定终态并清列；CHECK 词表与迁移 0008 一字不差
+        check_enum("tasks", "pending_terminal", PENDING_TERMINAL_VALUES),
         Index("ix_tasks_owner_created", "owner_id", "created_at"),  # DB §5: owner_id, created_at
         Index("ix_tasks_id_owner", "id", "owner_id"),  # DB §5: id, owner_id
         Index(
@@ -107,6 +113,8 @@ class Task(TimestampMixin, Base):
     input_committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     event_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     abort_reason: Mapped[str | None] = mapped_column(String(60))
+    # 终态意图位（Phase 6 T2 迁移 0008 加列）：NULL = 无挂起终态请求
+    pending_terminal: Mapped[str | None] = mapped_column(String(20))
 
 
 class TaskFile(Base):
@@ -131,6 +139,11 @@ class TaskFile(Base):
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     state: Mapped[str] = mapped_column(String(20), nullable=False, default="staged")
+    # 产物来源轮（Phase 6 T2 迁移 0008 加列）：SET NULL——轮行删除仅解引用不连带产物；
+    # FK 与支撑索引在 0008 显式建（名字与本映射的命名约定产物一字不差）
+    produced_in_round_id: Mapped[_uuid.UUID | None] = mapped_column(
+        ForeignKey("task_rounds.id", ondelete="SET NULL"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

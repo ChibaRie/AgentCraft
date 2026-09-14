@@ -6,7 +6,8 @@
 """
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import Depends, HTTPException, Request
@@ -14,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from backend.v2.db import build_engine, session_factory
+from backend.v2.task_storage import TaskStorage
 
 
 @dataclass
@@ -21,6 +23,10 @@ class V2Runtime:
     app_factory: async_sessionmaker
     admin_factory: async_sessionmaker
     engines: tuple[AsyncEngine, AsyncEngine]
+    # V2 任务物理存储（Phase 6 D10）。默认根仅兜底既有构造点（测试 make_v2_runtime，
+    # 不触 I/O）；生产经 v2_runtime_from_settings 传入配置根（V2_TASK.storage_root →
+    # <HOST_DATA_ROOT>/task-storage/ 派生）。
+    storage: TaskStorage = field(default_factory=lambda: TaskStorage(Path("./data/task-storage")))
 
     def close(self) -> None:
         for engine in self.engines:
@@ -45,6 +51,8 @@ def v2_runtime_from_settings() -> V2Runtime:
             app_factory=session_factory(app_engine),
             admin_factory=session_factory(admin_engine),
             engines=(app_engine, admin_engine),
+            # D10：纯函数构造，目录由 TaskStorage 方法内惰性创建（无启动 I/O）
+            storage=TaskStorage(s.V2_TASK.storage_root or (s.HOST_DATA_ROOT / "task-storage")),
         )
     return _runtime
 
