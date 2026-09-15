@@ -571,6 +571,37 @@ async def test_terminal_cleanup_8d_cleaned_6d_not_and_returning_gate(pg, rt, tmp
     assert await _scalar(pg, "SELECT retained_storage_bytes FROM platform_storage") == 1000
 
 
+async def test_terminal_cleanup_removes_extension_script(pg, rt, tmp_path):
+    """终审 Important #1：终态保留期 sweep 连带删同任务扩展脚本
+    extensions/task-<id>.ts（delete_task_storage 范围不变，清理点负责）；
+    他人扩展脚本不受影响；幂等重扫不复活。"""
+    rt.storage = TaskStorage(tmp_path / "task-storage")
+    uid = await seed_task_user(pg, "d13b@x.test")
+    pid = await seed_provider(pg, uid)
+    old = str(await seed_task_for_provider(pg, uid, pid, status="queued"))
+    other = str(await seed_task_for_provider(pg, uid, pid, status="queued"))
+    async with pg.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE tasks SET status = 'completed', "
+                "created_at = now() - interval '8 days' WHERE id = :t"
+            ),
+            {"t": old},
+        )
+
+    gone = rt.storage.extension_path(old)
+    gone.write_text("old-ext", encoding="utf-8")
+    keep = rt.storage.extension_path(other)
+    keep.write_text("keep-ext", encoding="utf-8")
+    assert gone.exists() and keep.exists()
+
+    assert await sweep_terminal_cleanup(rt) == 1
+    assert not gone.exists()  # 同任务扩展脚本随 sweep 物理删
+    assert keep.exists()  # 他人扩展脚本不在圈定面
+
+    assert await sweep_terminal_cleanup(rt) == 0  # 幂等：重扫零动作
+
+
 # ---------- dispatcher_loop 生命周期 ----------
 
 

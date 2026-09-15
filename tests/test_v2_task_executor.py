@@ -750,6 +750,11 @@ async def test_round_deadline_forces_failed_round_and_task(pg, rt, monkeypatch):
     pid = await seed_provider(pg, uid)
     tid = await seed_running_task(pg, uid, pid)
     await _sync_event_watermark(pg, tid)
+    # 预置意图位（abort API 的 running 形态）：deadline 翻转须连带清列（D19 终审对齐）
+    async with pg.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE tasks SET pending_terminal = 'aborted' WHERE id = :t"), {"t": tid}
+        )
     executor, _streams, transports = _make_executor(rt, renew_seconds=0.05, deadline_seconds=0.4)
     transports[0].ignore_abort = True
     transports[0].release = threading.Event()
@@ -765,6 +770,8 @@ async def test_round_deadline_forces_failed_round_and_task(pg, rt, monkeypatch):
         pg, "SELECT state, lease_owner, attempt FROM task_rounds WHERE id = :r", r=rid
     )
     assert (rrow[0].state, rrow[0].lease_owner, rrow[0].attempt) == ("failed", None, 1)
+    # D19 清列：任务面翻转同置 pending_terminal=NULL（终审 T6b-M1）
+    assert await _scalar(pg, "SELECT pending_terminal FROM tasks WHERE id = :t", t=tid) is None
     events = await _rows(
         pg,
         "SELECT sequence, type, payload_json FROM task_events WHERE task_id = :t ORDER BY sequence",
@@ -1031,6 +1038,28 @@ async def test_terminate_tasks_hook_physical_purge(pg, rt, monkeypatch):
     assert rid not in executor.tokens
     transports[0].release.set()
     await asyncio.sleep(0.05)
+
+
+async def test_terminate_hook_cleans_extension_script(pg, rt, monkeypatch):
+    """终审 Important #1：注销钩子 ③ post-commit 物理删连带扩展脚本
+    extensions/task-<id>.ts（delete_task_storage 范围不变，清理点负责）；
+    他人扩展脚本不受影响。"""
+    monkeypatch.setattr(te, "_hook_runtime", lambda: rt)
+    uid = await seed_task_user(pg, "hook-ext@x.test")
+    pid = await seed_provider(pg, uid)
+    tid = str(await seed_task_for_provider(pg, uid, pid, status="queued"))
+    gone = rt.storage.extension_path(tid)
+    gone.write_text("ext", encoding="utf-8")
+    keep = rt.storage.extension_path(str(_uuid.uuid4()))
+    keep.write_text("keep", encoding="utf-8")
+    assert gone.exists() and keep.exists()
+
+    async with owner_session(rt, uid) as db:
+        await te.terminate_tasks_hook(db, uid)
+
+    assert not gone.exists()  # after_commit 物理删含扩展脚本
+    assert keep.exists()
+    assert await _scalar(pg, "SELECT count(*) FROM tasks WHERE owner_id = :u", u=uid) == 0
 
 
 # ---------- main.py 生产接线（T6b）----------

@@ -149,14 +149,15 @@ _SCAN_CLAIMED_SQL = text(
 
 # RIDER A（T6a 审查 I-1）deadline 收口：轮 failed（围栏 + RETURNING attempt）与
 # 任务 failed(round_failed)（系统路径条件 UPDATE；任务面谓词以轮面围栏为闸，
-# 与 reclaim _reclaim_expired_round 同型）
+# 与 reclaim _reclaim_expired_round 同型）；翻转同置 pending_terminal=NULL
+# （D19 字面「决定终态并清列」，与 _RECONCILE_FLIP_SQL 同型）
 _DEADLINE_FAIL_ROUND_SQL = text(
     "UPDATE task_rounds SET state = 'failed', lease_owner = NULL, lease_expires_at = NULL "
     "WHERE id = :rid AND lease_owner = :iid AND lease_epoch = :epoch AND state = 'running' "
     "RETURNING attempt"
 )
 _DEADLINE_FAIL_TASK_SQL = text(
-    "UPDATE tasks SET status = 'failed', abort_reason = 'round_failed' "
+    "UPDATE tasks SET status = 'failed', abort_reason = 'round_failed', pending_terminal = NULL "
     "WHERE id = :tid AND status = 'running'"
 )
 
@@ -1329,10 +1330,11 @@ def _hook_runtime() -> V2Runtime | None:
 
 
 def _schedule_storage_cleanup(db: AsyncSession, storage: TaskStorage, task_ids: list[str]) -> None:
-    """D18 ③ post-commit 物理删 task-storage：after_commit 一次性监听——仅事务
-    真提交后触发（回滚不触发，防误删未删行的物理树，如 outbox 入队失败整体
-    回滚路径）；失败仅记录（sweep_terminal_cleanup 兜底重试）。同步 rmtree 在
-    事件循环线程执行（sweep_terminal_cleanup post-commit 同型）。"""
+    """D18 ③ post-commit 物理删 task-storage（含扩展脚本 extensions/task-<id>.ts）：
+    after_commit 一次性监听——仅事务真提交后触发（回滚不触发，防误删未删行的
+    物理树，如 outbox 入队失败整体回滚路径）；失败仅记录（sweep_terminal_cleanup
+    兜底重试）。同步 rmtree 在事件循环线程执行（sweep_terminal_cleanup post-commit
+    同型）。"""
     if not task_ids:
         return
 
@@ -1340,6 +1342,8 @@ def _schedule_storage_cleanup(db: AsyncSession, storage: TaskStorage, task_ids: 
         for tid in task_ids:
             try:
                 storage.delete_task_storage(tid)
+                # 扩展脚本不在 delete_task_storage 范围，此处连带删（终审 Important #1）
+                storage.extension_path(tid).unlink(missing_ok=True)
             except Exception:  # noqa: BLE001 - 失败留 sweep 兜底
                 logger.exception("注销任务物理删失败（sweep 兜底）：task_id=%s", tid)
 

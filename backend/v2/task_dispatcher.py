@@ -454,7 +454,7 @@ _TERMINAL_CANDIDATES_SQL = text(
 async def sweep_terminal_cleanup(runtime: V2Runtime) -> int:
     """终态保留期（terminal_retention_days=7）清理：events/rounds/messages 删除 +
     残余 held reservation 释放（``RETURNING bytes`` 闸门退账，零行即零退）+
-    post-commit 物理删 task-storage（幂等）。
+    post-commit 物理删 task-storage（含扩展脚本 extensions/task-<id>.ts；幂等）。
 
     返回**有清理动作**的任务数（行删除或账退还至少其一）：无动作的重扫不计——
     物理删失败的任务行仍在圈定面内，下一轮继续兜底重试，不产生日志噪音。
@@ -481,9 +481,11 @@ async def sweep_terminal_cleanup(runtime: V2Runtime) -> int:
             if released:
                 await _apply_release_accounting(db, tid, owner_id, released, refund_storage=True)
             dirty = bool(ev.rowcount or rd.rowcount or msg.rowcount or released)
-        # post-commit 物理删（账面先行已提交；幂等 rmtree，失败留下一轮兜底）
+        # post-commit 物理删（账面先行已提交；幂等 rmtree，失败留下一轮兜底）；
+        # 扩展脚本 extensions/task-<id>.ts 不在 delete_task_storage 范围，此处连带删
         try:
             runtime.storage.delete_task_storage(tid)
+            runtime.storage.extension_path(tid).unlink(missing_ok=True)
         except Exception:
             logger.exception("terminal sweep physical delete failed: task_id=%s", tid)
         if dirty:

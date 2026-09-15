@@ -205,7 +205,7 @@ async def upload_files(
     回退：无行无文件）→ INSERT staged 行（契约时序，行最后落）。
 
     返回 ``{"files": [{id, file_name, sha256, size_bytes, state}]}``（state 恒
-    'staged'；路由层包 201 信封）。
+    'staged'；路由层包 200 信封）。
     """
     task = await _lock_uploading_task(db, task_id)
     _parse_id(owner_id, "owner_id")

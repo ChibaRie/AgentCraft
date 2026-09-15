@@ -8,7 +8,7 @@
 - run_round：容器 → 重播种拼装 → send_prompt → EventHandler 翻译为 SSE 事件流，
   以 done 收尾；轮超时（PI_ROUND_TIMEOUT_SECONDS）兜底 abort
 - request_abort 绕过 mutation lock（writer lock 保证 JSONL 不交叉，§7.2.1）
-- 任务令牌：每容器启动生成，随重建失效（阶段 6 MCP 桥使用）
+- 任务令牌：每容器启动生成，随重建失效（平台工具回调 /internal/harness/* 校验用）
 
 明确不做（阶段 7）：并发上限排队、空闲回收、崩溃恢复重试 3 次、Skill 指纹
 kill switch、看门狗巡检。
@@ -283,8 +283,8 @@ class PiEngineManager:
             )
         except Exception:  # noqa: BLE001 - proxy 启动失败不阻塞 faux/容器创建
             logger.exception("Provider Proxy 容器保障失败")
-        # dev 形态（控制面在宿主机）：确保容器可回调 /internal/mcp/call（MCP 桥）。
-        # compose 形态函数内自动跳过；faux 无工具调用无需回调
+        # dev 形态（控制面在宿主机）：确保容器可回调 /internal/harness/*（平台工具
+        # 回调经后端转发器）。compose 形态函数内自动跳过；faux 无工具调用无需回调
         try:
             await docker_ensure_backend_forwarder(
                 network_name=self._settings.PI_NETWORK_NAME,
@@ -504,7 +504,7 @@ class PiEngineManager:
             logger.info("Task %s: 已发送 abort", task_id)
 
     def get_task_token(self, task_id: int) -> str | None:
-        """当前容器实例的任务令牌（阶段 6 /internal/mcp/call 校验用）。"""
+        """当前容器实例的任务令牌（/internal/harness/* 平台工具回调校验用）。"""
         return self._task_tokens.get(task_id)
 
     # -- 消息轮 --------------------------------------------------------------
