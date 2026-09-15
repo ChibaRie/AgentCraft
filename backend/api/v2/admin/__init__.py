@@ -18,15 +18,17 @@ from backend.api.v2.admin._deps import (
 )
 from backend.api.v2.admin.audit import router as audit_router
 from backend.api.v2.admin.invitations import router as invitations_router
+from backend.api.v2.admin.reports import router as reports_router
 from backend.api.v2.admin.reviews import router as reviews_router
 from backend.api.v2.admin.users import router as users_router
 
 admin_api_router = APIRouter()
 
-# 子域路由随 Phase 7 任务逐个 include（T2 invitations、T3a/T3b users、T4 reviews
-# 已挂；T5 reports/ban、T6 工具与 kill-switch、T7 receipts、T8 审计随任务追加）。
+# 子域路由随 Phase 7 任务逐个 include（T2 invitations、T3a/T3b users、T4 reviews、
+# T5 reports/ban、T7 audit 已挂；T6 工具与 kill-switch 随任务追加）。
 # _deps 先于子模块导入：路由模块经本包取门依赖（见模块 docstring 纪律）。
 admin_api_router.include_router(invitations_router)
+admin_api_router.include_router(reports_router)
 admin_api_router.include_router(reviews_router)
 admin_api_router.include_router(users_router)
 admin_api_router.include_router(audit_router)

@@ -1,9 +1,15 @@
-"""举报域服务（Phase 4 裁决 D10/D11/D15/D16）：创建走 owner 引擎，处置走 admin 引擎。
+"""举报域服务（Phase 4 裁决 D10/D11/D15/D16；Phase 7 T5 扩展 ban_author）：
+创建走 owner 引擎，处置走 admin 引擎。
 
 create_report 门序：幂等 begin → owner_session（目标校验 → INSERT，reporter_id 由
-owner 上下文写——RLS WITH CHECK 兜底）。resolve_report（D13 冻结签名）：锁 report
-→ 状态门 → dismiss / takedown 分派；takedown 按实体当前 published_revision_id
-指针反向处置（D15），锁序与 approve 一致（先实体行 FOR UPDATE）。
+owner 上下文写——RLS WITH CHECK 兜底）。resolve_report（D13 冻结签名，T5 申报
+范围内扩展 action 词表）：锁 report → 状态门 → dismiss / ban_author / takedown
+分派；ban_author（D3 级联两段拆分的原子段）纯 admin_db：作者定位（revision→
+entity.owner_id，同 takedown 解析形态）→ suspend_user_atomic(revoke_entitlement=
+True) 复用 → report actioned + 审计 report.ban_author——无 runtime 依赖、无级联
+（级联由壳层 post-commit 调 run_suspension_cascade）；takedown 按实体当前
+published_revision_id 指针反向处置（D15），锁序与 approve 一致（先实体行
+FOR UPDATE）。
 """
 
 import uuid as _uuid
@@ -14,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.errors import AgentCraftError, ErrorCode
+from backend.v2.admin_user_service import suspend_user_atomic
 from backend.v2.author_service import _DOMAINS, _reject_invalid_uuid
 from backend.v2.idempotency import begin, store, subject_user
 from backend.v2.ids import uuid7
@@ -21,8 +28,9 @@ from backend.v2.models.content import AuditLog, Report
 from backend.v2.models.tasking import TaskMessage
 from backend.v2.runtime import V2Runtime, owner_session
 
-_VALID_ACTIONS = ("dismiss", "takedown_revision")
+_VALID_ACTIONS = ("dismiss", "takedown_revision", "ban_author")
 _MESSAGE_TAKEDOWN_MESSAGE = "message 举报不支持 takedown_revision，请使用 dismiss"
+_MESSAGE_BAN_MESSAGE = "message 举报不支持 ban_author（消息作者为 AI 角色，无作者可封）"
 
 
 @dataclass(frozen=True)
@@ -136,6 +144,66 @@ def _report_brief(report: Report) -> dict:
     }
 
 
+async def _resolve_ban_author(
+    admin_db: AsyncSession,
+    *,
+    report: Report,
+    admin_id: str,
+    reason: str,
+    request_id: str | None,
+) -> dict:
+    """ban_author 原子分支（Phase 7 T5，D3 原子段；report 已锁且 status=open）。
+
+    纯 admin_db：作者定位（revision→entity.owner_id，同 takedown 解析形态；
+    message 举报无作者可封 400）→ suspend_user_atomic(revoke_entitlement=True)
+    复用（作者状态非 active|deleting 时 409/404 透传 HTTP 面）→ report actioned
+    + 审计 report.ban_author（detail 含 report_id/target_user_id）。无 runtime
+    依赖、无级联（级联由壳层 post-commit 调 run_suspension_cascade）。
+    """
+    if report.target_type == "message":
+        # 消息作者为 AI 角色（task_messages.author 非 user FK）——无作者可封
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "VALIDATION_ERROR", "message": _MESSAGE_BAN_MESSAGE},
+        )
+    dom = _DOMAINS["experts" if report.target_type == "expert_revision" else "skills"]
+    revision = (
+        await admin_db.execute(select(dom.revision).where(dom.revision.id == report.target_id))
+    ).scalar_one_or_none()
+    if revision is None:  # 举报目标已被物理替代/不存在 → 统一 404（takedown 同形）
+        raise HTTPException(
+            status_code=404, detail={"code": "NOT_FOUND", "message": "举报目标不存在"}
+        )
+    entity = (
+        await admin_db.execute(
+            select(dom.entity).where(dom.entity.id == getattr(revision, dom.fk_field))
+        )
+    ).scalar_one()
+    target_user_id = str(entity.owner_id)
+    suspension = await suspend_user_atomic(
+        admin_db, target_user_id=target_user_id, revoke_entitlement=True
+    )
+    report.status = "actioned"
+    admin_db.add(
+        AuditLog(
+            actor_id=_uuid.UUID(admin_id),
+            action="report.ban_author",
+            target_type="report",
+            target_id=report.id,
+            reason=reason,
+            request_id=request_id,
+            detail={"report_id": str(report.id), "target_user_id": target_user_id},
+        )
+    )
+    await admin_db.flush()
+    return {
+        "report_id": str(report.id),
+        "status": "actioned",
+        "banned_user_id": target_user_id,
+        "suspension": suspension,
+    }
+
+
 async def resolve_report(
     admin_db: AsyncSession,
     *,
@@ -152,7 +220,7 @@ async def resolve_report(
             status_code=400,
             detail={
                 "code": "VALIDATION_ERROR",
-                "message": f"action 仅支持 {_VALID_ACTIONS}（ban_author 属 Phase 7）",
+                "message": f"action 仅支持 {_VALID_ACTIONS}",
             },
         )
     rid = _reject_invalid_uuid(report_id, "report_id")
@@ -177,6 +245,11 @@ async def resolve_report(
         )
         await admin_db.flush()
         return {"report_id": str(report.id), "status": "dismissed"}
+    # ---- ban_author（Phase 7 T5，D3 原子段）：纯 admin_db，无 runtime/级联 ----
+    if action == "ban_author":
+        return await _resolve_ban_author(
+            admin_db, report=report, admin_id=admin_id, reason=reason, request_id=request_id
+        )
     # ---- takedown_revision（D15）----
     if report.target_type == "message":
         raise HTTPException(
