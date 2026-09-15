@@ -316,8 +316,9 @@ async def test_create_invitation_idempotent_replay_and_payload_conflict(pg, outb
 
 
 async def test_list_invitations_filter_pagination_and_invalid_params(pg, admin_env):
-    """四态判定（consumed/revoked 终态优先于 expired；open=未消费未撤销未过期）、
-    状态过滤、created_at DESC 稳定序分页、词表外 status 与非法分页 400。"""
+    """四态判定（consumed/revoked 终态优先于 expired——终态+已过期组合行钉住 case
+    分支次序，open=未消费未撤销未过期）、状态过滤、created_at DESC 稳定序分页、
+    词表外 status 与非法分页 400。"""
     client, _csrf, _admin_id = await admin_client(pg, admin_env, email="lister@example.com")
     try:
         base = datetime.now(timezone.utc)
@@ -328,11 +329,27 @@ async def test_list_invitations_filter_pagination_and_invalid_params(pg, admin_e
             "consumed@example.com": await _seed_invitation(
                 pg, "consumed@example.com", consumed=True, created_at=base - timedelta(hours=40)
             ),
+            "consumed-exp@example.com": await _seed_invitation(
+                # 终态+已过期组合行（审查 R1）：若回归把 open/expired 分支提到
+                # consumed/revoked 之前，此行会被误标 expired 而本钉转红
+                pg,
+                "consumed-exp@example.com",
+                consumed=True,
+                expired=True,
+                created_at=base - timedelta(hours=45),
+            ),
             "expired@example.com": await _seed_invitation(
                 pg, "expired@example.com", expired=True, created_at=base - timedelta(hours=30)
             ),
             "revoked@example.com": await _seed_invitation(
                 pg, "revoked@example.com", revoked=True, created_at=base - timedelta(hours=20)
+            ),
+            "revoked-exp@example.com": await _seed_invitation(
+                pg,
+                "revoked-exp@example.com",
+                revoked=True,
+                expired=True,
+                created_at=base - timedelta(hours=15),
             ),
             "open-b@example.com": await _seed_invitation(
                 pg, "open-b@example.com", created_at=base - timedelta(hours=10)
@@ -344,13 +361,15 @@ async def test_list_invitations_filter_pagination_and_invalid_params(pg, admin_e
         resp = await client.get(_CREATE)
         assert resp.status_code == 200
         page_data = resp.json()["data"]
-        assert page_data["total"] == 6 and page_data["page"] == 1 and page_data["size"] == 20
+        assert page_data["total"] == 8 and page_data["page"] == 1 and page_data["size"] == 20
         by_email = {item["email"]: item["status"] for item in page_data["items"]}
         assert by_email == {
             "open-a@example.com": "open",
             "consumed@example.com": "consumed",
+            "consumed-exp@example.com": "consumed",  # 终态优先于 expired
             "expired@example.com": "expired",
             "revoked@example.com": "revoked",
+            "revoked-exp@example.com": "revoked",  # 终态优先于 expired
             "open-b@example.com": "open",
             "open-c@example.com": "open",
         }
@@ -368,9 +387,9 @@ async def test_list_invitations_filter_pagination_and_invalid_params(pg, admin_e
 
         for status_value, emails in (
             ("open", ["open-a@example.com", "open-b@example.com", "open-c@example.com"]),
-            ("consumed", ["consumed@example.com"]),
+            ("consumed", ["consumed@example.com", "consumed-exp@example.com"]),
             ("expired", ["expired@example.com"]),
-            ("revoked", ["revoked@example.com"]),
+            ("revoked", ["revoked@example.com", "revoked-exp@example.com"]),
         ):
             filtered = (await client.get(_CREATE, params={"status": status_value})).json()["data"]
             assert filtered["total"] == len(emails)
