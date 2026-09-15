@@ -235,22 +235,31 @@ async def test_commit_shape_replay_conflict_and_state_gate(pg, api_env):
     assert again.json()["error"]["code"] == "INPUT_COMMITTED"
 
 
-async def test_abort_running_202_shape_and_replay(pg, api_env):
-    """running 分支：202 {task, round:{state:cancelling}}；重放原响应无论当前状态。"""
-    uid = await seed_active_user(pg, "t8a-abort@example.com")
+@pytest.mark.parametrize(
+    ("endpoint", "expected_pending"),
+    [
+        ("abort", "aborted"),
+        ("complete", "completed"),
+    ],
+)
+async def test_running_terminal_202_shape_and_replay(pg, api_env, endpoint, expected_pending):
+    """running 分支（abort/complete 共用 D19 路径）：202 {task, round:{state:cancelling}}；
+    重放原响应无论当前状态。"""
+    email = f"t8a-{endpoint}@example.com"
+    uid = await seed_active_user(pg, email)
     pid = await seed_provider(pg, uid)
     # seed_running_task：running 任务全套持有物（活跃轮/running 账/slot 租约）
     task_id = str(await seed_running_task(pg, uid, pid))
-    client = await _login(pg, "t8a-abort@example.com")
+    client = await _login(pg, email)
     first = await client.post(
-        f"/api/v2/tasks/{task_id}/abort", headers={"Idempotency-Key": "t8a-ab-1"}
+        f"/api/v2/tasks/{task_id}/{endpoint}", headers={"Idempotency-Key": f"t8a-{endpoint}-1"}
     )
     assert first.status_code == 202, first.text
     data = first.json()["data"]
     assert data["task"]["status"] == "running"
     assert data["round"] == {"state": "cancelling"}
     replay = await client.post(
-        f"/api/v2/tasks/{task_id}/abort", headers={"Idempotency-Key": "t8a-ab-1"}
+        f"/api/v2/tasks/{task_id}/{endpoint}", headers={"Idempotency-Key": f"t8a-{endpoint}-1"}
     )
     assert replay.status_code == 202
     assert replay.json() == first.json()
@@ -260,7 +269,7 @@ async def test_abort_running_202_shape_and_replay(pg, api_env):
         "SELECT COALESCE(pending_terminal, '') FROM tasks WHERE id = :t",
         {"t": _uuid.UUID(task_id)},
     )
-    assert (status, pending) == ("running", "aborted")
+    assert (status, pending) == ("running", expected_pending)
     round_state = await _scalar(
         pg, "SELECT state FROM task_rounds WHERE task_id = :t", {"t": _uuid.UUID(task_id)}
     )
