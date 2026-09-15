@@ -25,7 +25,7 @@ from backend.api.v2.admin import (
     get_v2_admin_auth,
     require_admin_reason,
 )
-from backend.v2 import admin_user_service, idempotency
+from backend.v2 import admin_audit_service, admin_user_service, idempotency
 from backend.v2.idempotency import require_key_header
 from backend.v2.runtime import V2Runtime, get_v2_runtime
 from backend.v2.session_service import V2AuthContext
@@ -97,6 +97,25 @@ async def get_user_detail(
     """用户详情（配额/用量/任务计数；不含任何 Key 材料——Sup:136 红线）。"""
     async with runtime.admin_factory() as db:
         result = await admin_user_service.get_user_detail(db, user_id=user_id)
+    return JSONResponse(status_code=200, content={"data": result})
+
+
+@router.get("/users/{user_id}/tasks")
+async def list_user_tasks_admin(
+    user_id: str,
+    ctx: V2AuthContext = Depends(get_v2_admin_auth),
+    status: str | None = None,
+    page: int = _DEFAULT_PAGE,
+    size: int = _DEFAULT_PAGE_SIZE,
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """用户任务列表（Phase 8 T4 D8 元数据读，Sup §10.5）：status 词表过滤 +
+    分页，items=id/status/abort_reason/created_at；免 reason 免审计（元数据
+    读分层）。"""
+    async with runtime.admin_factory() as db:
+        result = await admin_audit_service.admin_list_user_tasks(
+            db, user_id=user_id, status=status, page=page, size=size
+        )
     return JSONResponse(status_code=200, content={"data": result})
 
 
