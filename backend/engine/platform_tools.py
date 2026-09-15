@@ -46,6 +46,9 @@ PLATFORM_TOOLS: dict[tuple[str, str], PlatformTool] = {
         },
         kind="harness",
         callback_path="/internal/harness/check-code-style",
+        # T1 随车项（Phase 7 D11）：对齐 0002:51 种子 permissions（纯元数据钉——
+        # internal.py 回调端点当前不消费本字段，零行为变化）
+        permissions={"paths": ["/task-files", "/outputs"], "network": False},
     ),
     ("read_task_file", "1"): PlatformTool(
         tool_id="read_task_file",

@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.api import api_router, internal_router
 from backend.api.v2 import v2_api_router
+from backend.api.v2.admin import admin_api_router
 from backend.config import get_settings
 from backend.database import async_session_factory
 from backend.dependencies import get_pi_engine_manager
@@ -121,6 +122,7 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api")
 app.include_router(internal_router, prefix="/internal")
 app.include_router(v2_api_router, prefix="/api/v2")
+app.include_router(admin_api_router, prefix="/api/admin")
 
 
 def _error_payload(code: str, message: str) -> dict[str, object]:

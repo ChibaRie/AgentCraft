@@ -504,7 +504,8 @@ async def test_policy_catalog_matches_rls_contract(pg: PgDb) -> None:
 async def test_app_grant_whitelist_table_count(pg: PgDb) -> None:
     """app role 表授权白名单：25 张 DML + 3 张只读 = 28 张（0003：users 新增
     SELECT/INSERT/UPDATE，user_entitlements 新增 SELECT，invitations 补 UPDATE 转 DML；
-    content_reviews/audit_logs/alembic_version 仍无授权）。"""
+    content_reviews/audit_logs/alembic_version 仍无授权）。0009 起继续守护：admin
+    写授权矩阵只动 admin role 的 policy 面，app 授权零新增（本守护即防漂移钉）。"""
     async with pg.engine.begin() as conn:
         n = (
             await conn.execute(
@@ -1185,4 +1186,117 @@ async def test_internal_service_tables_have_no_rls(pg: PgDb, role_engine) -> Non
             n = (await conn.execute(text("SELECT count(*) FROM task_reservations"))).scalar_one()
             assert n == 1
     finally:
+        await app.dispose()
+
+
+# ---- Phase 7（0009）：admin 写授权矩阵（行值真实变化断言——0006 静默 0 行陷阱的反面）----
+
+
+async def test_admin_updates_users_status_after_0009(pg: PgDb) -> None:
+    """0009 users_admin_update：admin 翻转 users.status，行值真实变化（此前无适用
+    policy → 静默 0 行）。矩阵边界一并钉死：users 仅授 UPDATE——admin INSERT 报
+    42501（RLS 默认拒绝的 INSERT 形态：新行不满足任何 policy）、DELETE 静默 0 行。"""
+    uid = await _seed_bare_user(pg, "adm-status@x.com")
+    admin = _role_engine(pg, ADMIN_ROLE)
+    try:
+        async with admin.begin() as conn:
+            updated = await conn.execute(
+                text("UPDATE users SET status = 'suspended' WHERE id = :u"), {"u": uid}
+            )
+            assert updated.rowcount == 1
+            status = (
+                await conn.execute(text("SELECT status FROM users WHERE id = :u"), {"u": uid})
+            ).scalar_one()
+            assert status == "suspended"  # 行值真实变化（非仅不抛错）
+            deleted = await conn.execute(text("DELETE FROM users"))
+            assert deleted.rowcount == 0  # 无 admin DELETE policy → RLS 默认拒绝
+        async with admin.connect() as conn:  # 负例独立连接块（单块单失败纪律）
+            with pytest.raises(Exception, match="row-level security policy") as excinfo:
+                await conn.execute(
+                    text(
+                        "INSERT INTO users (id, email, password_hash, role, status) "
+                        "VALUES (gen_random_uuid(), 'adm-ins@x.com', 'h', 'admin', 'active')"
+                    )
+                )
+            assert excinfo.value.orig.sqlstate == "42501"
+    finally:
+        await admin.dispose()
+
+
+async def test_admin_entitlement_write_paths_after_0009(pg: PgDb) -> None:
+    """0009 user_entitlements admin INSERT/UPDATE/DELETE（0003:63-64 预留兑现）：
+    行值真实变化断言——插入（server_default granted_at 落值）→ UPDATE 置
+    revoked_at（撤销语义）→ DELETE 移除（行数归零）。"""
+    uid = await _seed_bare_user(pg, "adm-ent@x.com")
+    admin = _role_engine(pg, ADMIN_ROLE)
+    try:
+        async with admin.begin() as conn:
+            ent_id = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO user_entitlements (id, user_id, entitlement) "
+                        "VALUES (gen_random_uuid(), :u, 'expert_author') RETURNING id"
+                    ),
+                    {"u": uid},
+                )
+            ).scalar_one()
+            granted = (
+                await conn.execute(
+                    text("SELECT granted_at FROM user_entitlements WHERE id = :e"), {"e": ent_id}
+                )
+            ).scalar_one()
+            assert granted is not None  # server_default now() 生效
+            revoked = await conn.execute(
+                text("UPDATE user_entitlements SET revoked_at = now() WHERE id = :e"),
+                {"e": ent_id},
+            )
+            assert revoked.rowcount == 1
+            value = (
+                await conn.execute(
+                    text("SELECT revoked_at FROM user_entitlements WHERE id = :e"), {"e": ent_id}
+                )
+            ).scalar_one()
+            assert value is not None
+            deleted = await conn.execute(
+                text("DELETE FROM user_entitlements WHERE id = :e"), {"e": ent_id}
+            )
+            assert deleted.rowcount == 1
+            remaining = (
+                await conn.execute(
+                    text("SELECT count(*) FROM user_entitlements WHERE id = :e"), {"e": ent_id}
+                )
+            ).scalar_one()
+            assert remaining == 0
+    finally:
+        await admin.dispose()
+
+
+async def test_admin_inserts_email_outbox_after_0009(pg: PgDb) -> None:
+    """0009 email_outbox_admin_insert：admin 可插 user_id=NULL 行（邀请场景——
+    app 插入路径被 email_outbox_app_insert 的 WITH CHECK (user_id =
+    current_owner_id()) 堵死，NULL 不匹配任何 owner → 42501，负例一并钉死）。"""
+    admin = _role_engine(pg, ADMIN_ROLE)
+    app = _role_engine(pg, APP_ROLE)
+    try:
+        async with admin.begin() as conn:
+            inserted = await conn.execute(
+                text(
+                    "INSERT INTO email_outbox (id, user_id, purpose, payload_ciphertext, "
+                    "state, attempts) VALUES (gen_random_uuid(), NULL, 'invitation', "
+                    "'{}', 'pending', 0)"
+                )
+            )
+            assert inserted.rowcount == 1
+        async with app.connect() as conn:  # 负例独立连接块
+            with pytest.raises(Exception, match="row-level security policy") as excinfo:
+                await conn.execute(
+                    text(
+                        "INSERT INTO email_outbox (id, user_id, purpose, payload_ciphertext, "
+                        "state, attempts) VALUES (gen_random_uuid(), NULL, 'invitation', "
+                        "'{}', 'pending', 0)"
+                    )
+                )
+            assert excinfo.value.orig.sqlstate == "42501"
+    finally:
+        await admin.dispose()
         await app.dispose()

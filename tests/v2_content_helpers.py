@@ -1,9 +1,11 @@
 """内容治理域测试共享助手（superuser 种子 + entitlement 授予）。
 
 纪律同 v2_provider_helpers：owner-RLS 表种子一律走 pg.engine（superuser）；
-user_entitlements 授予路径属 Phase 7 admin 面，Phase 4 测试 superuser 直插
-（D17：不得补 entitlement admin policy）。login/auth_client/provider_env 直接
-复用 v2_provider_helpers（provider_env 注入的 PROVIDER_KEK 对治理域无害）。
+user_entitlements 授予路径属 Phase 7 admin 面（0009 已补 admin INSERT/UPDATE/
+DELETE policy 兑现 0003:63-64 预留；D17「不得补」为 Phase 4 期测试裁决，已由
+Phase 7 T1 解除——改走 admin 面归 T3a，Phase 4 测试 superuser 直插保持）。
+login/auth_client/provider_env 直接复用 v2_provider_helpers（provider_env 注入
+的 PROVIDER_KEK 对治理域无害）。
 """
 
 from sqlalchemy import text

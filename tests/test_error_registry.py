@@ -12,6 +12,7 @@ def test_new_error_codes_registered():
         "TOOL_REVOKED",
         "ADMIN_REASON_REQUIRED",
         "ADMIN_MFA_REQUIRED",
+        "FORBIDDEN",
         "QUOTA_DAILY_EXCEEDED",
         "REVISION_NOT_PUBLISHED",
         "REPORT_ALREADY_RESOLVED",

@@ -87,8 +87,11 @@ def test_v1_transition_selector_shape(tmp_path):
 
 def test_container_descriptors_callback_and_permissions_align_seed():
     """四 container 描述符：callback_path 填参 + permissions 对齐 0002 种子
-    tool_catalog.permissions JSONB（服务端强制值源）；check_code_style 面不变。"""
+    tool_catalog.permissions JSONB（服务端强制值源）；check_code_style 的
+    permissions 由 None 改为对齐 0002:51 种子（Phase 7 T1 随车项 D11——纯元数据
+    对齐，internal.py 回调端点不消费本字段，行为面不变）。"""
     expected_permissions = {
+        ("check_code_style", "1"): {"paths": ["/task-files", "/outputs"], "network": False},
         ("read_task_file", "1"): {"paths": ["/task-files"], "network": False},
         ("write_output_file", "1"): {"paths": ["/outputs"], "network": False},
         ("list_task_files", "1"): {"paths": ["/task-files", "/outputs"], "network": False},
@@ -109,7 +112,6 @@ def test_container_descriptors_callback_and_permissions_align_seed():
         assert PLATFORM_TOOLS[key].permissions == perms
     for key, callback in expected_callbacks.items():
         assert PLATFORM_TOOLS[key].callback_path == callback
-    assert PLATFORM_TOOLS[("check_code_style", "1")].permissions is None
 
 
 def test_write_output_file_parameters_aligned():

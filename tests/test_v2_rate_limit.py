@@ -86,6 +86,8 @@ def test_limits_registry_pins_registered_scopes():
         "upload": (60, 3600),  # Phase 6 T8a（D12）：任务文件上传 60 次/小时/用户
         "send_message": (60, 3600),  # Phase 6 T8a（D12）：消息发送 60 次/小时/用户（T8b 挂接）
         "sse_connect": (60, 3600),  # Phase 6 T8a（D12）：SSE 连接 60 次/小时/用户·任务（T8b 挂接）
+        # Phase 7 T1：admin 紧急停止开关 10 次/小时/用户（T6 挂接）
+        "admin_kill_switch": (10, 3600),
     }
 
 

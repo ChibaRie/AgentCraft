@@ -46,6 +46,9 @@ class ErrorCode(str, Enum):
     REPORT_ALREADY_RESOLVED = "REPORT_ALREADY_RESOLVED"
     ADMIN_REASON_REQUIRED = "ADMIN_REASON_REQUIRED"
     ADMIN_MFA_REQUIRED = "ADMIN_MFA_REQUIRED"
+    # 403；admin 面角色门（Phase 7 T1）。字面与 login A9 的 _ADMIN_DISABLE_FORBIDDEN_DETAIL
+    # "FORBIDDEN"（login_service.py）逐字节一致——V1 约定形状（detail 硬编码不入枚举）
+    FORBIDDEN = "FORBIDDEN"
     # —— 任务域（Phase 6 T2，D15 补登；http_status 在抛出点给定，注释为契约默认）——
     TASK_NOT_FOUND = "TASK_NOT_FOUND"  # 404
     # 409；assert_transition / validate_abort_reason（task_state.py 状态机原语）

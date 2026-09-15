@@ -54,6 +54,9 @@ LIMITS: dict[str, tuple[int, int]] = {
     "send_message": (60, 3600),  # 任务消息发送（Sup §7：60 次/小时/用户），主体 [user]——Phase 6 T8b
     # SSE 连接建立（Sup §7：60 次/小时/用户·任务），主体 [user, task]——Phase 6 T8b
     "sse_connect": (60, 3600),
+    # admin 紧急停止开关（Sup §7：10 次/小时/用户），主体 [user]——Phase 7 T1 登记
+    # （scope 登记钉测试）；路由挂接归 T6
+    "admin_kill_switch": (10, 3600),
 }
 
 _HMAC_KINDS = frozenset({"email", "ip", "user", "task"})
