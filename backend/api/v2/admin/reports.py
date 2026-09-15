@@ -2,8 +2,9 @@
 
 队列（GET /api/admin/reports）：status='open' 单表分页，created_at DESC + id DESC
 稳定序（T2/T3a/T4 列表同款序）；字段复用 create_report 响应同构 brief（id/
-target_type/target_id/status/reason/created_at，report_service._report_brief——
-零复制漂移）；元数据读免 reason 免幂等（reviews 队列同款）。
+target_type/target_id/status/reason/created_at，report_service.report_brief——
+零复制漂移；Phase 8 T7 公开化，消费点不再触私有名）；元数据读免 reason 免幂等
+（reviews 队列同款）。
 
 resolve（POST /api/admin/reports/{report_id}/resolve，body ``{action, reason}``——
 note→reason 改名 D10-10）为冻结服务薄壳：门序（D6 钉死）CSRF → 认证 →
@@ -97,7 +98,7 @@ async def list_reports(
             .scalars()
             .all()
         )
-        items = [report_service._report_brief(row) for row in rows]
+        items = [report_service.report_brief(row) for row in rows]
     return JSONResponse(
         status_code=200,
         content={"data": {"items": items, "total": total, "page": page, "size": size}},

@@ -1,5 +1,7 @@
 """report_service 测试（D10 目标矩阵 / D15 takedown / D16 新码）。"""
 
+from datetime import datetime, timezone
+
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import text
@@ -9,6 +11,7 @@ from backend.errors import AgentCraftError, ErrorCode
 from backend.v2 import idempotency, report_service
 from backend.v2.content_hash import content_sha256
 from backend.v2.ids import uuid7
+from backend.v2.models.content import Report
 from tests.v2_content_helpers import (
     EXPERT_CONTENT,
     seed_entitlement,
@@ -596,3 +599,33 @@ async def test_resolve_ban_author_suspended_author_409_no_side_effects(pg, provi
             )
         ).scalar_one() == "open"
         assert (await conn.execute(text("SELECT count(*) FROM audit_logs"))).scalar_one() == 0
+
+
+# ---------- Phase 8 T7：report_brief 公开化直测（Progress §5.6 转办）----------
+
+
+def test_report_brief_public_direct_shape():
+    """report_brief 模块级公开直测：admin 队列（backend/api/v2/admin/reports.py）
+    跨模块消费点改走公开函数（不再触私有名 _report_brief）；brief 字段形状冻结
+    ——与 create_report 响应体同构（id/target_type/target_id/status/reason/
+    created_at）。纯函数直测，无 DB 依赖。"""
+    report = Report(
+        id=uuid7(),
+        reporter_id=uuid7(),
+        target_type="expert_revision",
+        target_id=uuid7(),
+        target_revision_hash=None,
+        status="open",
+        reason="内容违规",
+    )
+    report.created_at = datetime(2026, 9, 15, 12, 0, 0, tzinfo=timezone.utc)
+    assert report_service.report_brief(report) == {
+        "id": str(report.id),
+        "target_type": "expert_revision",
+        "target_id": str(report.target_id),
+        "status": "open",
+        "reason": "内容违规",
+        "created_at": "2026-09-15T12:00:00+00:00",
+    }
+    # 公开化完成证据：模块命名空间不再有旧私有名（跨模块消费已切换）
+    assert not hasattr(report_service, "_report_brief")

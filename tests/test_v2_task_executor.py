@@ -113,13 +113,22 @@ async def _run_round(rt, executor, task_id: str, *, timeout: float = 20.0) -> in
 
 
 async def _wait_prompt(transport: FakePiTransport, *, timeout: float = 10.0) -> None:
-    """等待 prompt 已送达假引擎（recheck 已过、装配完成）。"""
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        if transport.written:
-            return
-        await asyncio.sleep(0.02)
-    raise AssertionError("prompt 未在时限内送达")
+    """等待 prompt 已送达假引擎（recheck 已过、装配完成）——事件驱动（T7 §5.6
+    sleep 清理：write_line 置位 prompt_written，零轮询；超时护栏保留）。"""
+    try:
+        await asyncio.wait_for(transport.prompt_written.wait(), timeout)
+    except asyncio.TimeoutError as exc:
+        raise AssertionError("prompt 未在时限内送达") from exc
+
+
+async def _drain_round_tasks(transport: FakePiTransport, *, timeout: float = 5.0) -> None:
+    """等待假引擎的 detached 轮任务真实退出（T7 §5.6 sleep 清理）：release 置位
+    后 parked 在门上的轮任务下一节拍即收尾——await 真实完成替代固定尾部 sleep
+    （遗漏 release 时经 wait_for 5s 超时显式失败，不静默吞过）。"""
+    pending = [t for t in transport.round_tasks if not t.done()]
+    if not pending:
+        return
+    await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout)
 
 
 async def _sync_event_watermark(pg, task_id: str) -> None:
@@ -687,7 +696,7 @@ async def test_stop_round_graceful_when_round_closes(pg, rt):
     assert await _scalar(pg, "SELECT status FROM tasks WHERE id = :t", t=tid) == "ready"
     assert rid not in executor._rounds  # 登记面随收口弹出
     transports[0].release.set()
-    await asyncio.sleep(0.05)
+    await _drain_round_tasks(transports[0])
 
 
 async def test_stop_round_forced_on_timeout_calls_engine_stop(pg, rt):
@@ -712,7 +721,7 @@ async def test_stop_round_forced_on_timeout_calls_engine_stop(pg, rt):
     await asyncio.wait_for(run_task, timeout=20)  # _EngineDied → finally 资源收口
     assert rid not in executor._rounds
     transports[0].release.set()
-    await asyncio.sleep(0.05)
+    await _drain_round_tasks(transports[0])
 
 
 async def test_stop_round_abstains_when_round_not_executing(pg, rt):
@@ -781,17 +790,15 @@ async def test_round_deadline_forces_failed_round_and_task(pg, rt, monkeypatch):
         ("status_changed", {"status": "failed", "reason": "round_failed"}),
         ("round_failed", {"round_id": rid, "attempt": 1}),
     ]
-    # grant 失效（令牌弹出）+ 续约强制终局（协程退出 + 登记弹出）
+    # grant 失效（令牌弹出）+ 续约强制终局（协程退出；登记弹出由执行链 finally
+    # 承载——run_task join 事件驱动等待，替代 _renewals 清空轮询，T7 §5.6）
     assert rid not in executor.tokens
     assert renewal.done() is True
-    deadline_wait = asyncio.get_running_loop().time() + 5.0
-    while asyncio.get_running_loop().time() < deadline_wait and executor._renewals:
-        await asyncio.sleep(0.05)
-    assert rid not in executor._renewals
     assert transports[0].closed is True  # forced engine.stop 已调用
     await asyncio.wait_for(run_task, timeout=20)
+    assert rid not in executor._renewals
     transports[0].release.set()
-    await asyncio.sleep(0.05)
+    await _drain_round_tasks(transports[0])
     # 终态档对称释放：running + active 双释放、槽位 free、双账归零
     assert (
         await _scalar(
@@ -896,7 +903,7 @@ async def test_terminator_running_task_stop_round_and_abort(pg, rt):
     )
     await asyncio.wait_for(run_task, timeout=20)  # 执行链 _EngineDied 收口
     transports[0].release.set()
-    await asyncio.sleep(0.05)
+    await _drain_round_tasks(transports[0])
 
 
 async def test_terminator_reentry_already_in_state_idempotent(pg, rt):
@@ -1037,7 +1044,7 @@ async def test_terminate_tasks_hook_physical_purge(pg, rt, monkeypatch):
     await asyncio.wait_for(run_task, timeout=20)
     assert rid not in executor.tokens
     transports[0].release.set()
-    await asyncio.sleep(0.05)
+    await _drain_round_tasks(transports[0])
 
 
 async def test_terminate_hook_cleans_extension_script(pg, rt, monkeypatch):

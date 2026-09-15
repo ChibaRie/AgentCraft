@@ -27,7 +27,12 @@ from backend.v2.runtime import owner_session
 from backend.v2.session_service import COOKIE_NAME, create_session
 from backend.v2.task_storage import TaskStorage
 from tests import v2_admin_helpers as _vah
-from tests.test_v2_task_executor import _make_executor, _seed_task_tool, _wait_prompt
+from tests.test_v2_task_executor import (
+    _drain_round_tasks,
+    _make_executor,
+    _seed_task_tool,
+    _wait_prompt,
+)
 from tests.v2_admin_helpers import admin_client
 from tests.v2_provider_helpers import catalog_id_by_host, seed_provider, seed_task_for_provider
 from tests.v2_task_helpers import seed_running_task, seed_task_user
@@ -303,6 +308,37 @@ async def test_put_provider_models_whitelist_and_audit(pg, admin_env):
     await client.aclose()
 
 
+async def test_put_provider_enabled_and_models_combined_single_audit(pg, admin_env):
+    """enabled+models 同请求组合（Phase 8 T7，Progress §5.6 转办）：单事务双变更
+    ——两字段同 PUT 原子落位（行值同翻）+ 审计**单行**（detail 四键 before/after
+    齐备；_one 用 .one()，若审计落两行即抛 MultipleResultsFound，行数双证）。"""
+    client, _csrf, _admin_id = await admin_client(pg, admin_env, email="prov-combo@x.test")
+    cid = await catalog_id_by_host(pg, "api.openai.com")
+    resp = await _put_provider(
+        client, cid, enabled=False, models=["gpt-4o-mini"], key="k-prov-combo"
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["enabled"] is False
+    assert data["models"] == ["gpt-4o-mini"]
+    row = await _one(
+        pg,
+        "SELECT enabled, models FROM provider_catalog WHERE id = CAST(:c AS uuid)",
+        {"c": cid},
+    )
+    assert row == {"enabled": False, "models": ["gpt-4o-mini"]}
+    audit = await _one(pg, "SELECT detail FROM audit_logs WHERE action = 'catalog.provider.update'")
+    assert audit["detail"] == {
+        "provider_id": cid,
+        "display_name": "OpenAI",
+        "enabled_before": True,
+        "enabled_after": False,
+        "models_before": ["gpt-4o-mini", "gpt-4o"],
+        "models_after": ["gpt-4o-mini"],
+    }
+    await client.aclose()
+
+
 async def test_put_provider_whitelist_shrink_no_retroaction(pg, admin_env):
     """白名单收缩不回溯存量：存量 user_providers 行（含模型/状态）零联动。"""
     client, _csrf, _admin_id = await admin_client(pg, admin_env, email="prov-shrink@x.test")
@@ -463,7 +499,7 @@ async def test_kill_switch_running_task_stop_round_and_abort(pg, admin_env, tmp_
     )
     await asyncio.wait_for(run_task, timeout=20)  # 执行链 _EngineDied 收口
     transports[0].release.set()
-    await asyncio.sleep(0.05)
+    await _drain_round_tasks(transports[0])
     await client.aclose()
 
 

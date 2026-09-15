@@ -92,6 +92,11 @@ class FakePiTransport:
         self._prompt_seen = 0
         self.release: threading.Event | None = None
         self.on_round_start = None
+        # Phase 8 T7（§5.6 转办「running 用例 sleep 清理」）：事件驱动等待面——
+        # prompt_written 供测试零轮询等待装配完成；round_tasks 登记 detached 轮
+        # 任务（测试收尾 await 真实退出，替代固定 sleep）。纯加法：V1 消费面不变。
+        self.prompt_written = asyncio.Event()
+        self.round_tasks: set[asyncio.Task] = set()
         self._lines: asyncio.Queue[str | None] = asyncio.Queue()
 
     def emit(self, frame: dict) -> None:
@@ -104,6 +109,7 @@ class FakePiTransport:
         cmd = json.loads(line)
         self.written.append(cmd)
         if cmd.get("type") == "prompt":
+            self.prompt_written.set()
             self.emit({"id": cmd["id"], "type": "response", "command": "prompt", "success": True})
             self._prompt_seen += 1
             if self.crash_on_prompts and self._prompt_seen <= self.crash_on_prompts:
@@ -178,7 +184,9 @@ class FakePiTransport:
                 )
             self.emit({"type": "agent_settled"})
 
-        asyncio.get_running_loop().create_task(run())
+        task = asyncio.get_running_loop().create_task(run())
+        self.round_tasks.add(task)
+        task.add_done_callback(self.round_tasks.discard)
 
     async def readline(self) -> str | None:
         return await self._lines.get()

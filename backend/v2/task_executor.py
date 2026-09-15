@@ -1328,7 +1328,11 @@ def build_terminator(
                         str(row.id), reason="tool_revoked", timeout=stop_timeout
                     )
                     receipt["stop"] = stop
-                    if stop.get("stopped"):
+                    # T7 显式字段读取（Phase 7 §5.6 转办「鸭子型判别/stop.get None
+                    # 防御局部化」）：stop_round 回执恒含 stopped 键（本模块冻结形状
+                    # {round_id, mode, stopped}）——.get 的 None 兜底会把「回执缺键」
+                    # 静默当 False 吞掉，收敛为下标读取让契约破坏在此 fast-fail
+                    if stop["stopped"]:
                         stopped += 1
             frames: list[dict] = []
             async with owner_session(runtime, str(owner_id)) as db:

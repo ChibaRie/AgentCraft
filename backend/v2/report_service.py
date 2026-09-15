@@ -82,7 +82,7 @@ async def create_report(
         db.add(report)
         await db.flush()
         await db.refresh(report)  # server_default created_at 落地后再出参
-        body = {"data": _report_brief(report)}
+        body = {"data": report_brief(report)}
         await store(
             db,
             subject_hash=subject_user(reporter_id),
@@ -133,7 +133,13 @@ async def _validate_target(db, target_type: str, target_id: _uuid.UUID) -> None:
         )
 
 
-def _report_brief(report: Report) -> dict:
+def report_brief(report: Report) -> dict:
+    """举报摘要（create_report 响应体与 admin 队列表项的同构 brief）。
+
+    Phase 8 T7（Progress §5.6 转办）：私有 `_report_brief` 公开化为模块级函数——
+    admin 队列（backend/api/v2/admin/reports.py）跨模块消费点不再触私有名；
+    字段形状冻结：id/target_type/target_id/status/reason/created_at。
+    """
     return {
         "id": str(report.id),
         "target_type": report.target_type,

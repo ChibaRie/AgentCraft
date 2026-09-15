@@ -696,6 +696,44 @@ async def test_grant_idempotent_replay_and_payload_conflict(pg, admin_env):
         await client.aclose()
 
 
+async def test_revoke_idempotent_replay_direct_delete_face(pg, admin_env):
+    """DELETE 幂等重放直测（Phase 8 T7，Progress §5.6 转办「revoke 幂等重放
+    直测」，纯测试侧零实现改动）：同 key 同 body 重放 → 200 原响应体；幂等命中
+    先于状态门——活跃行已硬删的重放照放，对照组（异 key 同 body）同状态 404，
+    两相对照即 200 出自重放分支的证据；重放零新审计；同 key 异 body（kind 变位
+    参与哈希）→ 409 IDEMPOTENCY_CONFLICT。"""
+    client, _csrf, _admin_id = await admin_client(pg, admin_env, email="rv-direct@example.com")
+    try:
+        uid = await _seed_user(pg, "rv-direct-victim@example.com")
+        granted = await _grant(client, uid, key="k-rv-dir-g")
+        assert granted.status_code == 201
+
+        first = await _revoke(client, uid, key="k-rv-dir")
+        assert first.status_code == 200
+        body = first.json()
+
+        # 同 key 同 body 重放：200 原响应（行已删也照放）
+        replay = await _revoke(client, uid, key="k-rv-dir")
+        assert replay.status_code == 200
+        assert replay.json() == body
+        # 对照组：异 key 同 body（走状态门非重放）→ 404 NOT_FOUND
+        fresh = await _revoke(client, uid, key="k-rv-dir-fresh")
+        assert fresh.status_code == 404
+        assert fresh.json()["error"]["code"] == "NOT_FOUND"
+        # 重放零新副作用：审计仍 1 行、被删行仍不在
+        assert await _count(pg, "audit_logs", "action = 'user.entitlement.revoke'") == 1
+        ent_id = body["data"]["entitlement_id"]
+        assert await _count(pg, "user_entitlements", "id = CAST(:i AS uuid)", {"i": ent_id}) == 0
+
+        # 同 key 异 body（kind 变位）→ 409；审计不增
+        conflict = await _revoke(client, uid, kind="skill_author", key="k-rv-dir")
+        assert conflict.status_code == 409
+        assert conflict.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
+        assert await _count(pg, "audit_logs", "action = 'user.entitlement.revoke'") == 1
+    finally:
+        await client.aclose()
+
+
 # ---------- 门与壳负例（四端点全挂三重门）----------
 
 
