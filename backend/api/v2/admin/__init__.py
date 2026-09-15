@@ -16,12 +16,14 @@ from backend.api.v2.admin._deps import (
     get_v2_admin_auth,
     require_admin_reason,
 )
+from backend.api.v2.admin.invitations import router as invitations_router
 
 admin_api_router = APIRouter()
 
-# 子域路由随 Phase 7 任务逐个 include（T2 invitations、T3 users、T4 reviews、
-# T5 reports/ban、T6 工具与 kill-switch、T7 receipts、T8 审计）。本任务（T1）
-# 仅交付骨架：空 router + 门依赖，挂载后无路由（404 由框架兜底，无行为面）。
+# 子域路由随 Phase 7 任务逐个 include（T2 invitations 已挂；T3 users、T4 reviews、
+# T5 reports/ban、T6 工具与 kill-switch、T7 receipts、T8 审计随任务追加）。
+# _deps 先于子模块导入：路由模块经本包取门依赖（见模块 docstring 纪律）。
+admin_api_router.include_router(invitations_router)
 
 __all__ = [
     "admin_api_router",
