@@ -1,10 +1,12 @@
 """V2 作者面路由（Phase 4 裁决 D6/D7；A1 前缀 /api/v2，Phase 8 切契约路径）。
 
-端点：POST/GET /{experts|skills}、GET/PUT /{experts|skills}/{id}、
-POST /{experts|skills}/{id}/revisions/{revision_id}/submit。
+端点：POST/GET /{experts|skills}、GET/PUT/DELETE /{experts|skills}/{id}、
+POST /{experts|skills}/{id}/offline、POST /{experts|skills}/{id}/revisions/
+{revision_id}/submit（offline/DELETE 属 Phase 8 D3a，Sup §10.6）。
 写端点：Idempotency-Key 必带 + CSRF（get_v2_auth）+ 服务层 expert_author 门；
 读端点：get_v2_auth + owner_session（owner RLS）。
 Replay 分流形态照抄 api/v2/providers.py:63-65（重放不带 Set-Cookie）。
+offline/DELETE 无请求体：request_hash(None)（revoke_provider 同款）。
 """
 
 from fastapi import APIRouter, Depends, Query
@@ -114,6 +116,42 @@ def _register(domain: str, payload_model, path_prefix: str, tag: str) -> None:
             tools=body["tools"],
             idem_key=idem_key,
             idem_hash=idempotency.request_hash(body),
+        )
+        return _replay_or(outcome)
+
+    @router.post(f"{path_prefix}/{{entity_id}}/offline", tags=[tag])
+    async def _offline(
+        entity_id: str,
+        user_ctx: V2AuthContext = Depends(get_v2_auth),
+        idem_key: str = Depends(require_key_header),
+        runtime: V2Runtime = Depends(get_v2_runtime),
+    ) -> JSONResponse:
+        """下架（Sup §10.6，D3a）：published→draft，指针保留；draft=幂等成功。"""
+        outcome = await author_service.offline_entity(
+            runtime,
+            user_id=str(user_ctx.user.id),
+            target=domain,
+            entity_id=entity_id,
+            idem_key=idem_key,
+            idem_hash=idempotency.request_hash(None),
+        )
+        return _replay_or(outcome)
+
+    @router.delete(f"{path_prefix}/{{entity_id}}", tags=[tag])
+    async def _delete(
+        entity_id: str,
+        user_ctx: V2AuthContext = Depends(get_v2_auth),
+        idem_key: str = Depends(require_key_header),
+        runtime: V2Runtime = Depends(get_v2_runtime),
+    ) -> JSONResponse:
+        """物理删除（Sup §10.6，D3a）：无引用才可删；被引用 409 ENTITY_IN_USE。"""
+        outcome = await author_service.delete_entity(
+            runtime,
+            user_id=str(user_ctx.user.id),
+            target=domain,
+            entity_id=entity_id,
+            idem_key=idem_key,
+            idem_hash=idempotency.request_hash(None),
         )
         return _replay_or(outcome)
 

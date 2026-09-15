@@ -502,10 +502,12 @@ async def test_policy_catalog_matches_rls_contract(pg: PgDb) -> None:
 
 
 async def test_app_grant_whitelist_table_count(pg: PgDb) -> None:
-    """app role 表授权白名单：25 张 DML + 3 张只读 = 28 张（0003：users 新增
-    SELECT/INSERT/UPDATE，user_entitlements 新增 SELECT，invitations 补 UPDATE 转 DML；
-    content_reviews/audit_logs/alembic_version 仍无授权）。0009 起继续守护：admin
-    写授权矩阵只动 admin role 的 policy 面，app 授权零新增（本守护即防漂移钉）。"""
+    """app role 表授权白名单：25 张 DML + 3 张只读 + 1 张限权写 = 29 张（0003：
+    users 新增 SELECT/INSERT/UPDATE，user_entitlements 新增 SELECT，invitations
+    补 UPDATE 转 DML；0009 起 admin 写授权矩阵只动 admin role 的 policy 面；
+    0011 起 audit_logs 新增 INSERT 全表 + SELECT 限 created_at 单列——作者面
+    offline/DELETE 的同事务审计（Sup §10.6「物理毁灭必须有审计痕」），整行审计
+    读仍 app 不可见；content_reviews/alembic_version 仍无授权。本守护即防漂移钉）。"""
     async with pg.engine.begin() as conn:
         n = (
             await conn.execute(
@@ -516,7 +518,7 @@ async def test_app_grant_whitelist_table_count(pg: PgDb) -> None:
                 )
             )
         ).scalar_one()
-    assert n == 28
+    assert n == 29
 
 
 async def test_owner_tables_have_rls_enabled_and_forced(pg: PgDb) -> None:

@@ -47,6 +47,9 @@ class ErrorCode(str, Enum):
     REPORT_INVALID_TARGET = "REPORT_INVALID_TARGET"
     # 409；同一 report 已被处置后再次 resolve（Phase 4 T6）
     REPORT_ALREADY_RESOLVED = "REPORT_ALREADY_RESOLVED"
+    # 409；作者面 DELETE 命中任务/绑定引用（Sup §10.6 预布登记；文案仅引用计数，
+    # 零他人标识——收口并入 §7 正文时升格，字面码先例：MFA_NOT_CONFIGURED）
+    ENTITY_IN_USE = "ENTITY_IN_USE"
     ADMIN_REASON_REQUIRED = "ADMIN_REASON_REQUIRED"
     ADMIN_MFA_REQUIRED = "ADMIN_MFA_REQUIRED"
     # 403；admin 面角色门（Phase 7 T1）。字面与 login A9 的 _ADMIN_DISABLE_FORBIDDEN_DETAIL

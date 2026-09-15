@@ -4,7 +4,10 @@
 + 0007（revision_tools 冻结护栏触发器——非 draft 父行工具集 owner 不可变）
 + 0008（Phase 6 任务域：任务域部分索引/终态意图位/产物轮次列）
 + 0009（Phase 7 admin 写授权矩阵：users UPDATE + entitlements INSERT/UPDATE/DELETE
-+ email_outbox INSERT）。
++ email_outbox INSERT）
++ 0011（Phase 8 T6 owner 护栏生命周期放行：实体 published→draft / 删除级联
+内部写 pg_trigger_depth()>1 / audit_logs INSERT 授 app；0010 未落地——T4 核验
+0001 owner_tables 循环已含 task_messages admin_read，无需迁移）。
 
 直接对 testcontainer PG 建一次性库跑 alembic 子进程（不经模板库克隆），
 验证 upgrade/downgrade/upgrade 往返幂等与种子/角色齐备。
@@ -75,7 +78,7 @@ def test_seeds_and_roles_present(pg_url_base):
                 ver = (
                     await conn.execute(text("SELECT version_num FROM alembic_version"))
                 ).scalar_one()
-                assert ver == "0009"
+                assert ver == "0011"
                 slots = (
                     await conn.execute(text("SELECT count(*) FROM platform_slots"))
                 ).scalar_one()

@@ -93,10 +93,10 @@ async def test_full_flow_create_edit_submit(pg, provider_env):
     )
     assert put.status_code == 200
     assert put.json()["data"]["revision"]["revision_id"] == revision_id
-    # submit
+    # submit（harness-kind 自 T6 起提审 400——用 container-kind 工具）
     submitted = await client.post(
         f"/api/v2/experts/{entity_id}/revisions/{revision_id}/submit",
-        json={"tools": [{"tool_id": "check_code_style", "version": "1"}]},
+        json={"tools": [{"tool_id": "read_task_file", "version": "1"}]},
         headers={"Idempotency-Key": "f3"},
     )
     assert submitted.status_code == 200, submitted.text

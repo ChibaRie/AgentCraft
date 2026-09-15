@@ -548,10 +548,11 @@ async def test_submit_draft_to_pending_review(pg, provider_env):
         target="experts",
         entity_id=detail["entity"]["id"],
         revision_id=detail["revision"]["revision_id"],
-        tools=[{"tool_id": "check_code_style", "version": "1"}],
+        # harness-kind（check_code_style）自 T6 起提审 400——用 container-kind 工具
+        tools=[{"tool_id": "read_task_file", "version": "1"}],
         idem_key="k2",
         idem_hash=idempotency.request_hash(
-            {"tools": [{"tool_id": "check_code_style", "version": "1"}]}
+            {"tools": [{"tool_id": "read_task_file", "version": "1"}]}
         ),
     )
     assert out["revision"]["status"] == "pending_review"
