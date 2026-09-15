@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { request } from "../api/client.js";
+import { useAuth } from "../auth/AuthContext.jsx";
+import { newIdempotencyKey, requestV2 } from "../api/v2/client.js";
+import { V2_AUTHORING_SKILLS } from "../api/v2/routes.js";
 
+// 字段边界照 §9.8.2 skill content_json（与后端 SkillContentPayload 一致；
+// 写模型 extra=forbid——请求体只含下列九字段，永不携带 hash 字段）
 const FIELD_RULES = {
   name: { min: 2, max: 30, trim: true, rangeMessage: "名称需为 2-30 个字符" },
   description: { min: 10, max: 200, trim: true, rangeMessage: "描述需为 10-200 个字符" },
@@ -72,16 +76,53 @@ export function validateSkillField(name, value) {
 }
 
 /**
- * Skill 创建/编辑弹窗（P08 SkillEditor）。`skill` 为 null 时是创建模式。
- * draft/offline 可保存任意满足字段规则的内容；published 的内容级校验由后端执行。
+ * Skill 创建/编辑弹窗（V2 作者面）。`skillId` 为 null 时是创建模式；
+ * 编辑模式自取 detail（GET /api/v2/skills/{id}）以最新 revision 的 content_json 回填。
+ * 保存 = POST/PUT 全量 content_json（draft 覆写 / 自动新 draft 由服务端两段式裁决），
+ * 幂等键必带（Sup §9.8.1 写端点家族）；提审在列表页卡片上进行，弹窗只管内容。
  */
-export default function SkillEditorModal({ skill, onClose, onSaved }) {
-  const [form, setForm] = useState(skill ? { ...EMPTY_FORM, ...skill } : EMPTY_FORM);
+export default function SkillEditorModal({ skillId, onClose, onSaved }) {
+  const { v2User } = useAuth();
+  const isAuthor = Boolean(v2User?.entitlements?.includes("expert_author"));
+  const isEdit = Boolean(skillId);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [isLoadingSkill, setIsLoadingSkill] = useState(isEdit);
   const [errors, setErrors] = useState({});
   const [formAlert, setFormAlert] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const isSavingRef = useRef(false);
   const dialogRef = useRef(null);
+
+  useEffect(() => {
+    if (!isEdit || !isAuthor) {
+      return;
+    }
+    let cancelled = false;
+    async function load() {
+      try {
+        const result = await requestV2(`${V2_AUTHORING_SKILLS}/${skillId}`);
+        if (cancelled) {
+          return;
+        }
+        const revisions = result.data?.revisions ?? [];
+        const latest = revisions.length > 0 ? revisions[revisions.length - 1] : null;
+        const content = latest?.content_json ?? {};
+        setForm({ ...EMPTY_FORM, ...content });
+      } catch (error) {
+        if (!cancelled) {
+          setFormAlert(error.message || "加载 Skill 失败");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingSkill(false);
+        }
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [isEdit, isAuthor, skillId]);
 
   useEffect(() => {
     dialogRef.current?.querySelector("input, textarea")?.focus();
@@ -122,19 +163,31 @@ export default function SkillEditorModal({ skill, onClose, onSaved }) {
     setSaving(true);
     setFormAlert("");
     try {
-      // 只提交表单字段，避免把 id/status/created_at 等行数据带进请求体
+      // 只提交表单九字段（content_json 全量替换语义）；input_requirements 空串归 null
       const body = Object.fromEntries(FIELDS.map((field) => [field.name, form[field.name] ?? ""]));
       body.input_requirements = body.input_requirements || null;
-      const payload = skill
-        ? await request(`/api/skills/${skill.id}`, { method: "PUT", body: JSON.stringify(body) })
-        : await request("/api/skills", { method: "POST", body: JSON.stringify(body) });
-      onSaved(payload.data);
+      if (isEdit) {
+        await requestV2(`${V2_AUTHORING_SKILLS}/${skillId}`, {
+          method: "PUT",
+          body,
+          idempotencyKey: newIdempotencyKey(),
+        });
+      } else {
+        await requestV2(V2_AUTHORING_SKILLS, {
+          method: "POST",
+          body,
+          idempotencyKey: newIdempotencyKey(),
+        });
+      }
+      onSaved();
     } catch (error) {
       setFormAlert(error.message || "保存失败，请稍后重试");
     } finally {
       setSaving(false);
     }
   }
+
+  const loadedForm = !isEdit || !isLoadingSkill;
 
   return (
     <div
@@ -149,11 +202,13 @@ export default function SkillEditorModal({ skill, onClose, onSaved }) {
         className="modal"
         role="dialog"
         aria-modal="true"
-        aria-label={skill ? "编辑 Skill" : "新建 Skill"}
+        aria-label={isEdit ? "编辑 Skill" : "新建 Skill"}
         ref={dialogRef}
       >
         <header className="modal-header">
-          <h2 className="modal-title">{skill ? `编辑「${skill.name}」` : "新建 Skill"}</h2>
+          <h2 className="modal-title">
+            {isEdit ? (form.name ? `编辑「${form.name}」` : "编辑 Skill") : "新建 Skill"}
+          </h2>
           <button
             type="button"
             className="modal-close"
@@ -164,47 +219,55 @@ export default function SkillEditorModal({ skill, onClose, onSaved }) {
             ×
           </button>
         </header>
-        <form className="modal-body" onSubmit={handleSubmit} noValidate>
-          <div className="form-alert" role="alert" hidden={!formAlert}>
-            {formAlert}
+        {!loadedForm ? (
+          <div className="modal-body">
+            <p className="detail-prose">正在加载 Skill 内容…</p>
           </div>
-          {FIELDS.map((field) => (
-            <div className="field" key={field.name}>
-              <label className="field-label">
-                {field.label}
-                {field.kind === "input" ? (
-                  <input
-                    className="field-input"
-                    value={form[field.name] ?? ""}
-                    placeholder={field.placeholder}
-                    aria-invalid={Boolean(errors[field.name])}
-                    onChange={(event) => setField(field.name, event.target.value)}
-                  />
-                ) : (
-                  <textarea
-                    className="field-input field-textarea"
-                    rows={field.name === "steps" ? 4 : 3}
-                    value={form[field.name] ?? ""}
-                    placeholder={field.placeholder}
-                    aria-invalid={Boolean(errors[field.name])}
-                    onChange={(event) => setField(field.name, event.target.value)}
-                  />
-                )}
-              </label>
-              <div className="field-error" role="alert">
-                {errors[field.name]}
-              </div>
+        ) : (
+          <form className="modal-body" onSubmit={handleSubmit} noValidate>
+            <div className="form-alert" role="alert" hidden={!formAlert}>
+              {formAlert}
             </div>
-          ))}
-          <footer className="modal-footer">
-            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={isSaving}>
-              取消
-            </button>
-            <button type="submit" className="btn btn-primary" disabled={isSaving}>
-              {isSaving ? "保存中…" : "保存"}
-            </button>
-          </footer>
-        </form>
+            {FIELDS.map((field) => (
+              <div className="field" key={field.name}>
+                <label className="field-label">
+                  {field.label}
+                  {field.kind === "input" ? (
+                    <input
+                      className="field-input"
+                      value={form[field.name] ?? ""}
+                      placeholder={field.placeholder}
+                      aria-invalid={Boolean(errors[field.name])}
+                      onChange={(event) => setField(field.name, event.target.value)}
+                    />
+                  ) : (
+                    <textarea
+                      className="field-input field-textarea"
+                      rows={field.name === "steps" ? 4 : 3}
+                      value={form[field.name] ?? ""}
+                      placeholder={field.placeholder}
+                      aria-invalid={Boolean(errors[field.name])}
+                      onChange={(event) => setField(field.name, event.target.value)}
+                    />
+                  )}
+                </label>
+                {errors[field.name] && (
+                  <div className="field-error" role="alert">
+                    {errors[field.name]}
+                  </div>
+                )}
+              </div>
+            ))}
+            <footer className="modal-footer">
+              <button type="button" className="btn btn-ghost" onClick={onClose} disabled={isSaving}>
+                取消
+              </button>
+              <button type="submit" className="btn btn-primary" disabled={isSaving}>
+                {isSaving ? "保存中…" : "保存"}
+              </button>
+            </footer>
+          </form>
+        )}
       </div>
     </div>
   );

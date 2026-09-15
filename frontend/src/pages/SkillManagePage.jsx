@@ -1,28 +1,42 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle, Warning } from "@phosphor-icons/react";
+import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext.jsx";
-import { request } from "../api/client.js";
+import { newIdempotencyKey, requestV2 } from "../api/v2/client.js";
+import { V2_AUTHORING_SKILLS } from "../api/v2/routes.js";
 import { formatDateTime } from "../lib/datetime.js";
 import SkillEditorModal from "../components/SkillEditorModal.jsx";
 
-const STATUS_LABELS = { draft: "草稿", published: "已发布", offline: "已下架" };
+// V2 状态词表（本页局部定义：lib/categories.js 为 V1 面，Phase 8 期间不动）
+const STATUS_LABELS = {
+  draft: "草稿",
+  published: "已发布",
+  pending_review: "审核中",
+  rejected: "已驳回",
+};
 
-function StatusBadge({ status }) {
-  return <span className={`skill-status is-${status}`}>{STATUS_LABELS[status] || status}</span>;
+function deriveStatus(row) {
+  const latestStatus = row.latest_revision?.status;
+  if (latestStatus === "pending_review" || latestStatus === "rejected") {
+    return latestStatus;
+  }
+  return row.status;
 }
 
-function IssueList({ issues }) {
+function StatusBadge({ status }) {
   return (
-    <ul className="issue-list">
-      {issues.map((issue, index) => (
-        <li className={`issue-row is-${issue.level.toLowerCase()}`} key={index}>
-          <span className="issue-level">{issue.level}</span>
-          <span className="issue-text">
-            <strong>{issue.field}</strong> {issue.message}
-          </span>
-        </li>
-      ))}
-    </ul>
+    <span className={`skill-status is-${status}`}>{STATUS_LABELS[status] || status}</span>
+  );
+}
+
+/** 非 expert_author 整页 403 引导面（与 MyExpertsPage/ExpertEditPage 同构）。 */
+function AuthorGate() {
+  return (
+    <main className="app-main">
+      <div className="empty-state rise" role="alert">
+        <strong>403 · 无专家作者权限</strong>
+        作者面需要 expert_author 权益：当前账号未获得授权。
+        请使用已受邀并开通该权益的账号登录，或联系平台管理员授予。
+      </div>
+    </main>
   );
 }
 
@@ -36,28 +50,28 @@ function SkeletonCard() {
   );
 }
 
-function SkillCard({ skill, busy, validation, binding, onAction }) {
-  const isPublished = skill.status === "published";
-  const report = validation?.skillId === skill.id ? validation : null;
-  const experts = binding?.skillId === skill.id ? binding.experts : null;
-
+function SkillCard({ skill, busy, confirmOpen, onAction }) {
+  const status = deriveStatus(skill);
+  const canSubmit = skill.latest_revision?.status === "draft";
   return (
     <article className="skill-card rise">
       <header className="skill-card-head">
         <div className="skill-card-title">
           <h3>{skill.name}</h3>
-          <StatusBadge status={skill.status} />
+          <StatusBadge status={status} />
         </div>
         <div className="skill-card-actions">
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            disabled={busy}
-            onClick={() => onAction("validate", skill)}
-          >
-            校验
-          </button>
-          {isPublished ? (
+          {canSubmit && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={busy}
+              onClick={() => onAction("submit", skill)}
+            >
+              提交审核
+            </button>
+          )}
+          {skill.status === "published" && (
             <button
               type="button"
               className="btn btn-ghost btn-sm"
@@ -65,15 +79,6 @@ function SkillCard({ skill, busy, validation, binding, onAction }) {
               onClick={() => onAction("offline", skill)}
             >
               下架
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              disabled={busy}
-              onClick={() => onAction("publish", skill)}
-            >
-              发布
             </button>
           )}
           <button
@@ -86,14 +91,6 @@ function SkillCard({ skill, busy, validation, binding, onAction }) {
           </button>
           <button
             type="button"
-            className="btn btn-ghost btn-sm"
-            disabled={busy}
-            onClick={() => onAction("binding", skill)}
-          >
-            绑定情况
-          </button>
-          <button
-            type="button"
             className="btn btn-ghost btn-sm is-danger"
             disabled={busy}
             onClick={() => onAction("delete", skill)}
@@ -102,12 +99,15 @@ function SkillCard({ skill, busy, validation, binding, onAction }) {
           </button>
         </div>
       </header>
-      <p className="skill-card-desc">{skill.description}</p>
-      <p className="skill-card-meta">更新于 {formatDateTime(skill.updated_at)}</p>
+      <p className="skill-card-meta">
+        共 {skill.revision_count} 个版本 · 更新于 {formatDateTime(skill.latest_revision?.updated_at)}
+      </p>
 
-      {skill.confirmDelete && (
+      {confirmOpen && (
         <div className="confirm-strip" role="alert">
-          <span>确认删除「{skill.name}」？已绑定到专家的 Skill 无法删除。</span>
+          <span>
+            确认删除「{skill.name}」？全部历史版本将一并移除；被专家引用时无法删除。
+          </span>
           <span className="confirm-strip-actions">
             <button
               type="button"
@@ -127,88 +127,28 @@ function SkillCard({ skill, busy, validation, binding, onAction }) {
           </span>
         </div>
       )}
-
-      {report && (
-        <div
-          className={`validate-report ${report.valid ? "is-valid" : "is-invalid"}`}
-          role="status"
-        >
-          <div className="validate-report-head">
-            {report.valid ? (
-              <CheckCircle size={15} weight="fill" aria-hidden="true" />
-            ) : (
-              <Warning size={15} weight="fill" aria-hidden="true" />
-            )}
-            {report.valid ? "校验通过，可发布或进入绑定流程" : "校验未通过，请修正以下问题"}
-          </div>
-          {report.issues.length > 0 && <IssueList issues={report.issues} />}
-        </div>
-      )}
-
-      {experts && (
-        <div className="binding-strip" role="status">
-          {experts.length === 0
-            ? "尚未绑定到任何专家。发布后可在专家编辑页绑定。"
-            : `已绑定 ${experts.length} 个专家：${experts.map((expert) => expert.name).join("、")}`}
-        </div>
-      )}
     </article>
   );
 }
 
 export default function SkillManagePage() {
-  const { isReady, isAuthenticated } = useAuth();
+  const { v2User } = useAuth();
+  const isAuthor = Boolean(v2User?.entitlements?.includes("expert_author"));
   const [skills, setSkills] = useState([]);
-  const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [pageNotice, setPageNotice] = useState("");
-  const [editorSkill, setEditorSkill] = useState(null); // null=关闭, {}=新建, {…}=编辑
-  const [validation, setValidation] = useState(null);
-  const [binding, setBinding] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
-  const fileInputRef = useRef(null);
-
-  async function handleImportFile(event) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) {
-      return;
-    }
-    clearInline();
-    setIsImporting(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const payload = await request("/api/skills/import", {
-        method: "POST",
-        body: formData,
-      });
-      const imported = payload.data.skill;
-      setSkills((current) => [imported, ...current]);
-      setTotal((current) => current + 1);
-      setPageNotice(
-        payload.data.files.length > 0
-          ? `已导入「${imported.name}」草稿（${payload.data.files.length} 个包文件已存档）；请检查各栏目后保存。`
-          : `已导入「${imported.name}」草稿；请检查 LLM 拆解结果后保存。`
-      );
-      setEditorSkill(imported); // 打开编辑器预审 LLM 填充结果
-    } catch (error) {
-      setPageNotice(error.message || "导入失败，请稍后重试");
-    } finally {
-      setIsImporting(false);
-    }
-  }
+  const [confirmId, setConfirmId] = useState(null);
+  // null=关闭, {}=新建, {id}=编辑（弹窗自取 detail 以最新 revision 回填）
+  const [editorSkill, setEditorSkill] = useState(null);
 
   const loadSkills = useCallback(async () => {
     setIsLoading(true);
     setLoadError("");
     try {
-      // 课程级数据量：一次取 100 条上限；计数展示服务端 total
-      const payload = await request("/api/skills?page=1&size=100");
-      setSkills(payload.data);
-      setTotal(payload.total);
+      const result = await requestV2(V2_AUTHORING_SKILLS);
+      setSkills(result.data ?? []);
     } catch (error) {
       setLoadError(error.message || "加载失败，请稍后重试");
     } finally {
@@ -217,97 +157,95 @@ export default function SkillManagePage() {
   }, []);
 
   useEffect(() => {
-    if (isReady && isAuthenticated) {
+    if (isAuthor) {
       loadSkills();
     }
-  }, [isReady, isAuthenticated, loadSkills]);
+  }, [isAuthor, loadSkills]);
 
-  function patchSkill(updated) {
+  function patchSkill(entity) {
     setSkills((current) =>
-      current.map((skill) => (skill.id === updated.id ? { ...skill, ...updated } : skill))
+      current.map((row) =>
+        row.id === entity.id
+          ? {
+              ...row,
+              status: entity.status,
+              published_revision_id: entity.published_revision_id,
+              updated_at: entity.updated_at,
+            }
+          : row
+      )
     );
   }
 
-  function clearInline() {
-    setValidation(null);
-    setBinding(null);
-    setPageNotice("");
-    // 删除确认条是瞬时状态：任何后续动作都不应让它在别的流程里残留
-    setSkills((current) => current.map(({ confirmDelete: _flag, ...rest }) => rest));
-  }
-
   async function handleAction(action, skill) {
-    clearInline();
+    setPageNotice("");
     if (action === "edit") {
-      setEditorSkill(skill);
+      setEditorSkill(skill.id ? { id: skill.id } : {});
       return;
     }
     if (action === "delete") {
-      setSkills((current) =>
-        current.map((item) => ({ ...item, confirmDelete: item.id === skill.id }))
-      );
+      setConfirmId(skill.id);
       return;
     }
     if (action === "delete-cancel") {
-      patchSkill({ id: skill.id, confirmDelete: false });
+      setConfirmId(null);
       return;
     }
 
     setBusy(true);
     try {
       if (action === "delete-confirm") {
-        await request(`/api/skills/${skill.id}`, { method: "DELETE" });
-        setSkills((current) => current.filter((item) => item.id !== skill.id));
-        setTotal((current) => Math.max(0, current - 1));
-      } else if (action === "validate") {
-        const payload = await request(`/api/skills/${skill.id}/validate`, { method: "POST" });
-        setValidation({ skillId: skill.id, ...payload.data });
-      } else if (action === "publish") {
-        const payload = await request(`/api/skills/${skill.id}/publish`, { method: "POST" });
-        patchSkill(payload.data);
-        setPageNotice(`「${skill.name}」已发布，可绑定到专家并启用。`);
+        await requestV2(`${V2_AUTHORING_SKILLS}/${skill.id}`, {
+          method: "DELETE",
+          idempotencyKey: newIdempotencyKey(),
+        });
+        setSkills((current) => current.filter((row) => row.id !== skill.id));
+        setConfirmId(null);
+      } else if (action === "submit") {
+        // skill 域 submit 载荷固定 {tools:[]}（工具集属专家域，skill 传 tools 400）
+        const result = await requestV2(
+          `${V2_AUTHORING_SKILLS}/${skill.id}/revisions/${skill.latest_revision.revision_id}/submit`,
+          {
+            method: "POST",
+            body: { tools: [] },
+            idempotencyKey: newIdempotencyKey(),
+          }
+        );
+        const revision = result.data.revision;
+        setSkills((current) =>
+          current.map((row) =>
+            row.id === skill.id ? { ...row, latest_revision: { ...row.latest_revision, ...revision } } : row
+          )
+        );
+        setPageNotice(`「${skill.name}」已提交审核（第 ${revision.revision_no} 版）。`);
       } else if (action === "offline") {
-        const payload = await request(`/api/skills/${skill.id}/offline`, { method: "POST" });
-        patchSkill(payload.data);
-        setPageNotice(`「${skill.name}」已下架，不再接受新的绑定。`);
-      } else if (action === "binding") {
-        const payload = await request(`/api/skills/${skill.id}`);
-        setBinding({ skillId: skill.id, experts: payload.data.bound_experts });
+        const result = await requestV2(`${V2_AUTHORING_SKILLS}/${skill.id}/offline`, {
+          method: "POST",
+          idempotencyKey: newIdempotencyKey(),
+        });
+        patchSkill(result.data.entity);
+        setPageNotice(`「${skill.name}」已下架，不再被专家引用候选。`);
       }
     } catch (error) {
-      if (error.code === "SKILL_INVALID") {
-        setValidation({
-          skillId: skill.id,
-          valid: false,
-          issues: [
-            {
-              field: "发布",
-              rule: "invalid",
-              level: "ERROR",
-              message: error.message,
-            },
-          ],
-        });
-      } else {
-        setPageNotice(error.message || "操作失败，请稍后重试");
+      setPageNotice(error.message || "操作失败，请稍后重试");
+      if (error?.code === "ENTITY_IN_USE") {
+        // 引用计数是确定性拒绝（不可重试），关闭确认条避免「再点一次」误导
+        setConfirmId(null);
       }
     } finally {
       setBusy(false);
     }
   }
 
-  function handleSaved(saved) {
+  function handleSaved() {
     setEditorSkill(null);
-    if (skills.some((skill) => skill.id === saved.id)) {
-      // 以服务端返回为准重建该行，避免残留 confirmDelete 等本地瞬时字段
-      setSkills((current) =>
-        current.map((skill) => (skill.id === saved.id ? saved : skill))
-      );
-    } else {
-      setSkills((current) => [saved, ...current]);
-      setTotal((current) => current + 1);
-    }
-    setPageNotice(`「${saved.name}」已保存。`);
+    // 列表行形状（list item）与 create/PUT 响应（entity+revision）不同构：
+    // 整体 refetch 保证行形状单一来源
+    loadSkills();
+  }
+
+  if (!isAuthor) {
+    return <AuthorGate />;
   }
 
   return (
@@ -315,41 +253,22 @@ export default function SkillManagePage() {
       <header className="page-header rise">
         <h1 className="page-title">Skill 管理</h1>
         <p className="page-sub">
-          把能力封装为可复用的 Skill：校验通过后发布，才能绑定到你的专家。
+          把能力封装为可复用的 Skill：保存草稿、提交审核，通过后即可被专家引用。
         </p>
       </header>
 
       <div className="manage-toolbar rise" style={{ "--rise-index": 1 }}>
-        <span className="manage-count">{isLoading ? "" : `共 ${total} 个 Skill`}</span>
-        <div className="manage-toolbar-actions">
-          <button
-            type="button"
-            className="btn btn-ghost"
-            disabled={isImporting}
-            onClick={() => fileInputRef.current?.click()}
-            title="上传 .md 由 LLM 拆解填充，或 .zip 包（scripts/assets/references）"
-          >
-            {isImporting ? "导入中…" : "导入 Skill"}
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => {
-              clearInline();
-              setEditorSkill({});
-            }}
-          >
-            新建 Skill
-          </button>
-        </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".md,.markdown,.zip"
-          style={{ display: "none" }}
-          aria-label="选择要导入的 Skill 文件"
-          onChange={handleImportFile}
-        />
+        <span className="manage-count">{isLoading ? "" : `共 ${skills.length} 个 Skill`}</span>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => {
+            setPageNotice("");
+            setEditorSkill({});
+          }}
+        >
+          新建 Skill
+        </button>
       </div>
 
       <div className="form-alert" role="alert" hidden={!pageNotice} style={{ marginBottom: 16 }}>
@@ -368,8 +287,8 @@ export default function SkillManagePage() {
       ) : skills.length === 0 ? (
         <div className="empty-state rise">
           <strong>还没有 Skill</strong>
-          点击「新建 Skill」创建第一个能力包：定义角色、目标、步骤与约束，校验通过后发布，
-          才能绑定到专家。
+          点击「新建 Skill」创建第一个能力包：定义角色、目标、步骤与约束，保存草稿并提交审核，
+          通过后即可被专家引用。
         </div>
       ) : (
         <div className="skill-list">
@@ -378,8 +297,7 @@ export default function SkillManagePage() {
               key={skill.id}
               skill={skill}
               busy={busy}
-              validation={validation}
-              binding={binding}
+              confirmOpen={confirmId === skill.id}
               onAction={handleAction}
             />
           ))}
@@ -388,7 +306,7 @@ export default function SkillManagePage() {
 
       {editorSkill !== null && (
         <SkillEditorModal
-          skill={editorSkill.id ? editorSkill : null}
+          skillId={editorSkill.id ?? null}
           onClose={() => setEditorSkill(null)}
           onSaved={handleSaved}
         />
