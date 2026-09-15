@@ -220,6 +220,12 @@ export default function NavBar() {
               {label}
             </NavLink>
           ))}
+          {/* T12a：管理控制台入口——仅 V2 admin 可见（V1 role 与 admin 面无关） */}
+          {v2User?.role === "admin" && (
+            <NavLink to="/admin" className="navbar-link">
+              管理
+            </NavLink>
+          )}
         </nav>
         <div className="navbar-actions">
           <ThemeToggle />

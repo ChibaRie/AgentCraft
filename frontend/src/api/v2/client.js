@@ -38,6 +38,21 @@ export const V2_IDEMPOTENCY_REQUIRED = [
   /^\/api\/v2\/auth\/password-reset\/confirm$/,
   /^\/api\/v2\/account\/deletion\/request$/,
   /^\/api\/v2\/account\/deletion\/cancel$/,
+  // —— admin 面 13 写端点（Phase 8 T12a；Sup §6 + §10.5，勘察报告 R10）——
+  // entitlements POST/DELETE 同路径共用一模式（12 条模式覆盖 13 端点）。
+  // 读端点（元数据/内容读、审计查询、产物下载）不入表：warn 仅对写方法生效。
+  /^\/api\/admin\/invitations$/,
+  /^\/api\/admin\/invitations\/[^/]+\/revoke$/,
+  /^\/api\/admin\/users\/[^/]+\/suspend$/,
+  /^\/api\/admin\/users\/[^/]+\/unsuspend$/,
+  /^\/api\/admin\/users\/[^/]+\/quotas$/,
+  /^\/api\/admin\/users\/[^/]+\/entitlements$/,
+  /^\/api\/admin\/reviews\/[^/]+\/approve$/,
+  /^\/api\/admin\/reviews\/[^/]+\/reject$/,
+  /^\/api\/admin\/reports\/[^/]+\/resolve$/,
+  /^\/api\/admin\/catalog\/providers\/[^/]+$/,
+  /^\/api\/admin\/catalog\/tools$/,
+  /^\/api\/admin\/tools\/[^/]+\/kill-switch$/,
 ];
 
 /**

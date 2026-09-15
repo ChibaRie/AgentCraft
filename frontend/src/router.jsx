@@ -1,8 +1,12 @@
 import { Navigate, Outlet, Route, Routes, useParams } from "react-router-dom";
 import NavBar from "./components/NavBar.jsx";
 import PendingVerificationBanner from "./components/PendingVerificationBanner.jsx";
+import RequireAdmin from "./components/RequireAdmin.jsx";
 import RequireAuth from "./components/RequireAuth.jsx";
 import AccountDeletingPage from "./pages/AccountDeletingPage.jsx";
+import AdminLayout from "./pages/admin/AdminLayout.jsx";
+import InvitationsPage from "./pages/admin/InvitationsPage.jsx";
+import UsersPage from "./pages/admin/UsersPage.jsx";
 import DeletionCancelPage from "./pages/DeletionCancelPage.jsx";
 import EmailVerificationPage from "./pages/EmailVerificationPage.jsx";
 import ExpertCenterPage from "./pages/ExpertCenterPage.jsx";
@@ -150,6 +154,21 @@ export default function AppRoutes() {
             </RequireAuth>
           }
         />
+        {/* admin 控制台（Phase 8 T12a）：软门 RequireAdmin（v2User.role==='admin'，
+            MFA 不预检——403 数据面由 gate.reportAdminError 分流）+ 子导航壳；
+            治理四页（reviews/reports/catalog/audit，T12b）落位后在此追加子路由。 */}
+        <Route
+          path="/admin"
+          element={
+            <RequireAdmin>
+              <AdminLayout />
+            </RequireAdmin>
+          }
+        >
+          <Route index element={<Navigate to="/admin/invitations" replace />} />
+          <Route path="invitations" element={<InvitationsPage />} />
+          <Route path="users" element={<UsersPage />} />
+        </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
