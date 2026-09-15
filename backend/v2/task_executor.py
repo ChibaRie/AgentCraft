@@ -83,7 +83,12 @@ from backend.v2.runtime import V2Runtime, owner_session, v2_runtime_from_setting
 from backend.v2.task_release import release_task_holdings
 from backend.v2.task_service import _add_event, _allocate_event_sequence
 from backend.v2.task_storage import TaskStorage
-from backend.v2.task_streams import TaskStreamRegistry
+from backend.v2.task_streams import (
+    TaskStreamRegistry,
+    done_frame,
+    publish_runtime_frames,
+    status_frame,
+)
 from backend.v2.task_token import create_v2_task_token
 from backend.v2.task_views import _parse_id
 from backend.v2.tool_service import KillTerminator
@@ -1031,6 +1036,9 @@ class RoundExecutor:
         轮面围栏 rowcount=0（轮已并发收口/任务行已删除）→ 静默弃权；任务面翻转
         落空（并发终态化/D18）→ 轮 failed 成立、事件与释放由该路径负责。本方法
         运行于续约协程——返回即协程退出（deadline 后不再续约）。
+
+        写位事务提交后推帧（Phase 8 T5，§9.10.10）：status_changed(failed) +
+        done(error)——commit 失败/围栏弃权路径不达推帧（无幻影帧）。
         """
         logger.warning(
             "Task %s: 轮级 hard deadline 到期（round=%s deadline=%ss）——bounded-stop 收尾",
@@ -1045,6 +1053,7 @@ class RoundExecutor:
         except Exception:  # noqa: BLE001 - 停止失败不阻塞 failed 写位
             logger.exception("deadline bounded-stop 失败（继续写位）：round_id=%s", ctx.round_id)
         try:
+            frames: list[dict] = []
             async with owner_session(self.runtime, ctx.owner_id) as db:
                 flipped = await db.execute(
                     _DEADLINE_FAIL_ROUND_SQL,
@@ -1078,8 +1087,12 @@ class RoundExecutor:
                     payload={"round_id": ctx.round_id, "attempt": attempt},
                     round_id=ctx.round_uuid,
                 )
+                frames = [status_frame(seq, "failed", "round_failed"), done_frame("error")]
                 await db.flush()
                 await release_task_holdings(db, task_id=ctx.task_id, owner_id=ctx.owner_id)
+            # post-commit 推帧（D16 会话边界外；事务内推帧在回滚时留幻影帧）
+            for frame in frames:
+                self.streams.publish(ctx.task_id, frame)
         except Exception:  # noqa: BLE001 - 收尾失败仅记录（lease 过期 reclaim 兜底）
             logger.exception("deadline failed 写位失败：round_id=%s", ctx.round_id)
 
@@ -1224,10 +1237,16 @@ class RoundExecutor:
 # ---------------------------------------------------------------------------
 
 
-async def _terminate_one(db: AsyncSession, *, task_id: str, owner_id: str) -> dict:
+async def _terminate_one(
+    db: AsyncSession, *, task_id: str, owner_id: str, frames: list[dict] | None = None
+) -> dict:
     """terminator 单任务事务体（owner_session 已设 GUC）：fresh 状态锁定读分支 →
     活跃轮条件收口 + 任务 aborted(tool_revoked)（终结类条件 UPDATE，同态=幂等
-    成功不抛）+ status_changed/round_cancelled 事件 + 终态档释放。"""
+    成功不抛）+ status_changed/round_cancelled 事件 + 终态档释放。
+
+    ``frames``（Phase 8 T5，§9.10.10）：推帧收集位（status_changed + 每取消轮一帧
+    done(aborted)）——调用方在事务提交后 publish；不传则不收集（回执形状不变）。
+    """
     fresh = (await db.execute(_TERMINATOR_TASK_READ_SQL, {"tid": task_id})).scalar_one_or_none()
     if fresh not in ("queued", "running"):
         # already_in_state 重入幂等（D4）：已终态/已翻转/行已消失——同态成功
@@ -1258,6 +1277,10 @@ async def _terminate_one(db: AsyncSession, *, task_id: str, owner_id: str) -> di
             payload={"round_id": str(round_id), "reason": "tool_revoked"},
             round_id=round_id,
         )
+    if frames is not None:
+        frames.append(status_frame(seq, "aborted", "tool_revoked"))
+        for _round_id in cancelled_rounds:
+            frames.append(done_frame("aborted"))
     await db.flush()
     await release_task_holdings(db, task_id=task_id, owner_id=owner_id)
     return {"flipped": True, "round_cancelled": [str(r) for r in cancelled_rounds]}
@@ -1307,8 +1330,13 @@ def build_terminator(
                     receipt["stop"] = stop
                     if stop.get("stopped"):
                         stopped += 1
+            frames: list[dict] = []
             async with owner_session(runtime, str(owner_id)) as db:
-                receipt.update(await _terminate_one(db, task_id=task_id, owner_id=str(owner_id)))
+                receipt.update(
+                    await _terminate_one(db, task_id=task_id, owner_id=str(owner_id), frames=frames)
+                )
+            # post-commit 推帧（Phase 8 T5，§9.10.10；注册表缺位 no-op）
+            publish_runtime_frames(runtime, task_id, *frames)
             if receipt["flipped"]:
                 aborted_task_ids.append(task_id)
             receipts.append(receipt)
@@ -1395,7 +1423,8 @@ async def reconcile_pending_terminal(runtime: V2Runtime) -> int:
     deleted 对应 T3 _finalize_terminal 语义的条件 UPDATE 等价）+ 任务级释放。
 
     aborted 意图位的 abort_reason 取 user_cancel（该意图位唯一生产者是 abort
-    API，D19）；返回本轮终态化的任务数。
+    API，D19）；返回本轮终态化的任务数。写位事务提交后推帧（Phase 8 T5，
+    §9.10.10：status_changed 帧——围栏弃权路径不达推帧）。
     """
     async with runtime.admin_factory() as session:
         candidates = (await session.execute(_PENDING_TERMINAL_CANDIDATES_SQL)).all()
@@ -1423,6 +1452,9 @@ async def reconcile_pending_terminal(runtime: V2Runtime) -> int:
             )
             await db.flush()
             await release_task_holdings(db, task_id=str(task_id), owner_id=str(owner_id))
+            frame = status_frame(seq, terminal, reason)
+        # post-commit 推帧（D16 会话边界外）
+        publish_runtime_frames(runtime, str(task_id), frame)
         finalized += 1
     return finalized
 

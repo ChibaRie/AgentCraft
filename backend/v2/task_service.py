@@ -23,7 +23,7 @@ import logging
 import uuid as _uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import event, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +46,7 @@ from backend.v2.models import (
 )
 from backend.v2.task_release import release_task_holdings
 from backend.v2.task_state import assert_transition
+from backend.v2.task_streams import TaskStreamRegistry, queued_frame, status_frame
 from backend.v2.task_views import (
     _ACTIVE_ROUND_STATES,
     _load_task_view,
@@ -721,7 +722,29 @@ def _is_active_round_conflict(exc: IntegrityError) -> bool:
     return "one_active_round_per_task" in (name or str(orig or exc))
 
 
-async def send_message(db: AsyncSession, *, owner_id: str, task_id: str, content: str) -> dict:
+def _publish_frames_after_commit(
+    db: AsyncSession, streams: TaskStreamRegistry, task_id: str, frames: list[dict]
+) -> None:
+    """send_message 三事件 post-commit 推帧（Phase 8 T5，§9.10.10）：
+    after_commit 一次性监听（task_executor._schedule_storage_cleanup 同型）——
+    事务内只捕获帧载荷不动 streams；publish 在调用方 owner_session COMMIT 成功
+    后触发，回滚不触发（无幻影帧，D16 会话边界纪律）。"""
+
+    def _publish(*_args) -> None:
+        for frame in frames:
+            streams.publish(task_id, frame)
+
+    event.listen(db.sync_session, "after_commit", _publish, once=True)
+
+
+async def send_message(
+    db: AsyncSession,
+    *,
+    owner_id: str,
+    task_id: str,
+    content: str,
+    streams: TaskStreamRegistry | None = None,
+) -> dict:
     """发送下一条用户消息（Sup §1.2:25，Phase 6 T8b）。
 
     门序（幂等由路由层先裁——命中重放无论当前状态，见 tasks.py 模块注记）：
@@ -735,6 +758,10 @@ async def send_message(db: AsyncSession, *, owner_id: str, task_id: str, content
     one_active_round_per_task 部分唯一索引即并发闸门：预检漏网的并发双发在
     flush 处以 IntegrityError 浮出，按约束名映射同一 429（事务随 owner_session
     回滚——无半账、不落幂等记录，客户端可原 key 重试）。
+
+    ``streams``（Phase 8 T5）：实时注册表在位时，三事件
+    （message_saved/status_changed/round_queued）经 after_commit 监听在事务提交
+    后推帧（本函数不 commit——publish 由提交边界触发；本服务不直接触碰 streams）。
 
     返回 ``{"message": {"id", "event_sequence"}, "event_sequence": round_queued
     序, "round_id"}``（路由层包 202 ``{data: ...}`` 信封）。
@@ -821,6 +848,22 @@ async def send_message(db: AsyncSession, *, owner_id: str, task_id: str, content
         round_id=round_id,
     )
     await db.flush()
+    if streams is not None:
+        _publish_frames_after_commit(
+            db,
+            streams,
+            str(task.id),
+            [
+                {
+                    "type": "message_saved",
+                    "message_id": str(mid),
+                    "event_sequence": seq_m,
+                    "author": "user",
+                },
+                status_frame(seq_r, "queued"),
+                queued_frame(seq_r + 1, round_id),
+            ],
+        )
     return {
         "message": {"id": str(mid), "event_sequence": seq_m},
         "event_sequence": seq_r + 1,

@@ -54,6 +54,7 @@ from backend.v2.rate_limit import enforce, hmac_subject
 from backend.v2.runtime import V2Runtime, get_v2_runtime, owner_session
 from backend.v2.session_service import V2AuthContext, get_v2_auth
 from backend.v2.task_artifacts import download_headers, list_artifacts, resolve_download
+from backend.v2.task_streams import runtime_streams
 from backend.v2.task_views import _parse_id, _require_live_task, get_task_quota_view
 
 router = APIRouter()
@@ -546,7 +547,11 @@ async def send_task_message(
     await _enforce_send_message_limit(runtime, uid)
     async with owner_session(runtime, uid) as db:
         result = await task_service.send_message(
-            db, owner_id=uid, task_id=task_id, content=payload.content
+            db,
+            owner_id=uid,
+            task_id=task_id,
+            content=payload.content,
+            streams=runtime_streams(runtime),
         )
         await _idem_store(
             db,

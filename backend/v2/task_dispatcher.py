@@ -27,6 +27,10 @@
   退还以残余 held→released 的 ``RETURNING bytes`` 汇总为闸门（零行即零退，幂等
   不二次退账）；物理删 task-storage 在事务 post-commit（账面先行，幂等 rmtree，
   失败留下一轮兜底）。
+- **post-commit 推帧（Phase 8 T5，§9.10.10 实时保真）**：各写点事务体返回实时帧
+  载荷，调用方在 owner_session 提交后经 ``publish_runtime_frames`` 投递（注册表
+  缺位 no-op；沿执行器泵先例裸调用）——事务内只落库不动 streams，回滚路径不达
+  推帧（无幻影帧）。
 - 测试必须经 make_v2_runtime 真实双 role（D16 意义即防「测试全绿生产空转」）。
 """
 
@@ -50,6 +54,12 @@ from backend.v2.task_release import (
     release_task_holdings,
 )
 from backend.v2.task_service import _add_event, _allocate_event_sequence
+from backend.v2.task_streams import (
+    done_frame,
+    publish_runtime_frames,
+    queued_frame,
+    status_frame,
+)
 
 logger = logging.getLogger("agentcraft.task.dispatcher")
 
@@ -141,7 +151,7 @@ async def dispatch_once(runtime: V2Runtime) -> int:
     for round_id, task_id, owner_id in candidates:
         try:
             async with owner_session(runtime, str(owner_id)) as db:
-                await _claim_round(
+                frames = await _claim_round(
                     db,
                     round_id=round_id,
                     task_id=task_id,
@@ -152,6 +162,8 @@ async def dispatch_once(runtime: V2Runtime) -> int:
         except _CandidateDropped:
             continue  # 并发仲裁败者/配额满/无空闲槽：分文不写，轮留待下一轮
         claimed += 1
+        # post-commit 推帧（§9.10.10）：领槽 status_changed 实时到达，不待轮事件
+        publish_runtime_frames(runtime, str(task_id), *frames)
         try:
             await executor.notify(str(task_id))
         except Exception:
@@ -167,8 +179,10 @@ async def _claim_round(
     owner_id: _uuid.UUID,
     instance_id: str,
     ttl_seconds: int,
-) -> None:
-    """单候选领取事务体（调用方 owner_session 已设 GUC）：任一步 rowcount=0 即弃。"""
+) -> list[dict]:
+    """单候选领取事务体（调用方 owner_session 已设 GUC）：任一步 rowcount=0 即弃。
+
+    返回待推帧载荷（调用方提交后 publish；round_running 无独立帧——D11）。"""
     flipped = await db.execute(
         _CLAIM_ROUND_SQL, {"rid": round_id, "iid": instance_id, "ttl": ttl_seconds}
     )
@@ -209,6 +223,7 @@ async def _claim_round(
         payload={"round_id": str(round_id), "attempt": int(attempt)},
         round_id=round_id,
     )
+    return [status_frame(seq, "running")]
 
 
 # ---------------------------------------------------------------------------
@@ -289,16 +304,17 @@ async def reclaim_once(runtime: V2Runtime) -> int:
                 continue  # 容器仍在：等 executor 正常收口，不与 settle 竞写
             try:
                 async with owner_session(runtime, str(owner_id)) as db:
-                    await _cancel_cancelling_round(
+                    frames = await _cancel_cancelling_round(
                         db, round_id=round_id, task_id=task_id, owner_id=owner_id
                     )
             except _CandidateDropped:
                 continue
             reclaimed += 1
+            publish_runtime_frames(runtime, str(task_id), *frames)  # post-commit
             continue
         try:
             async with owner_session(runtime, str(owner_id)) as db:
-                await _reclaim_expired_round(
+                frames = await _reclaim_expired_round(
                     db,
                     round_id=round_id,
                     task_id=task_id,
@@ -309,6 +325,7 @@ async def reclaim_once(runtime: V2Runtime) -> int:
         except _CandidateDropped:
             continue
         reclaimed += 1
+        publish_runtime_frames(runtime, str(task_id), *frames)  # post-commit
     return reclaimed
 
 
@@ -320,8 +337,11 @@ async def _reclaim_expired_round(
     owner_id: _uuid.UUID,
     lease_owner: str | None,
     lease_epoch: int,
-) -> None:
-    """过期 lease 轮回收（围栏仲裁 → 按 attempt 分档 pending/failed + 对称释放）。"""
+) -> list[dict]:
+    """过期 lease 轮回收（围栏仲裁 → 按 attempt 分档 pending/failed + 对称释放）。
+
+    返回待推帧载荷（调用方提交后 publish）：failed 档 status_changed+done(error)；
+    requeue 档 status_changed(queued)+queued 帧。"""
     fenced = await db.execute(
         _FENCE_EXPIRED_SQL, {"rid": round_id, "lo": lease_owner, "le": lease_epoch}
     )
@@ -360,18 +380,25 @@ async def _reclaim_expired_round(
         payload={"round_id": str(round_id), "attempt": attempt},
         round_id=round_id,
     )
+    frames = (
+        [status_frame(seq, "failed", "round_failed"), done_frame("error")]
+        if to_failed
+        else [status_frame(seq, "queued"), queued_frame(seq + 1, round_id)]
+    )
     # 任务面已落位：release_task_holdings 按 status 分档——queued 只回收轮账（槽位
     # free + running_tasks-1）；failed 为终态另释放 active（task_root 保留 7 天）
     await release_task_holdings(db, task_id=str(task_id), owner_id=str(owner_id))
+    return frames
 
 
 async def _cancel_cancelling_round(
     db: AsyncSession, *, round_id: _uuid.UUID, task_id: _uuid.UUID, owner_id: _uuid.UUID
-) -> None:
+) -> list[dict]:
     """cancelling 轮幂等收口（容器确认已死）：round→cancelled + 轮账释放。
 
     任务保持 running + pending_terminal（终态化属 T6a settle/termination 面——
-    本作业只对轮负责，与 settle 竞写面隔离）。
+    本作业只对轮负责，与 settle 竞写面隔离）。返回待推帧载荷（孤写
+    round_cancelled 重放为 done(aborted) 无伴随 status_changed——§9.10.8）。
     """
     flipped = await db.execute(_CANCEL_ROUND_SQL, {"rid": round_id})
     if flipped.rowcount == 0:
@@ -387,6 +414,7 @@ async def _cancel_cancelling_round(
         round_id=round_id,
     )
     await release_task_holdings(db, task_id=str(task_id), owner_id=str(owner_id))
+    return [done_frame("aborted")]
 
 
 # ---------------------------------------------------------------------------
@@ -433,8 +461,10 @@ async def sweep_upload_ttl(runtime: V2Runtime) -> int:
                     payload={"status": "failed", "reason": "upload_expired"},
                 )
                 await release_task_holdings(db, task_id=str(task_id), owner_id=str(owner_id))
+                frames = [status_frame(seq, "failed", "upload_expired")]
         except _CandidateDropped:
             continue
+        publish_runtime_frames(runtime, str(task_id), *frames)  # post-commit
         processed += 1
     return processed
 

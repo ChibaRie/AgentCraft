@@ -13,6 +13,11 @@ executor 事件泵把每一条翻译帧（瞬态流式增量 + 事实帧 + done�
 
 帧形态：``{"type": <name>, **payload}``（message_saved 事实帧额外携带
 event_sequence/author；done/瞬态帧无 sequence，不做水位过滤）。
+
+Phase 8 T5（§9.10.10 实时保真）：执行器泵之外的系统写点（send/dispatcher/
+reclaim/terminator/deadline/sweep/reconcile）经本模块的 ``publish_runtime_frames``
+在事务提交后补推帧——帧构造助手（status_frame/queued_frame/done_frame）与运行时
+解析（runtime_streams）亦在此单点收口。
 """
 
 from __future__ import annotations
@@ -84,3 +89,52 @@ class TaskStreamRegistry:
                     task_id,
                     frame.get("type"),
                 )
+
+
+# ---------------------------------------------------------------------------
+# 系统写点 post-commit 推帧（Phase 8 T5，Sup §9.10.10 实时保真义务）
+# ---------------------------------------------------------------------------
+
+
+def runtime_streams(runtime):
+    """运行时实时面注册表解析（executor 未接线 → None；鸭子型访问防导入环，
+    task_sse._stream_registry 同型语义）。"""
+    return getattr(getattr(runtime, "executor", None), "streams", None)
+
+
+def publish_runtime_frames(runtime, task_id: str, *frames: dict) -> None:
+    """系统写点 post-commit 推帧入口（send/dispatcher/reclaim/terminator/deadline/
+    sweep/reconcile 各写点）。
+
+    调用点必须在 owner_session 事务提交之后（D16 会话边界外）——事务内推帧会在
+    回滚时留下幻影帧（帧已投递而事实未落库）；调用处沿执行器泵先例（task_executor
+    事件泵）裸调用、不做 try/except 吞噬（publish 自身有界：空注册表零开销、队列
+    满丢弃不阻塞）。executor 未接线 → no-op（实时面缺席不影响落库权威）。
+    """
+    streams = runtime_streams(runtime)
+    if streams is not None:
+        for frame in frames:
+            streams.publish(str(task_id), frame)
+
+
+def status_frame(sequence: int, status: str, reason: str | None = None) -> dict:
+    """status_changed 实时帧：D11 重放形状（status/abort_reason）+ event_sequence
+    水位键——持久帧携带序号才吃合并去重与 ``id:`` 行（注册→重放双见窗口按序去重、
+    断线重连游标推进；message_saved 泵先例同语义）。"""
+    return {
+        "type": "status_changed",
+        "status": status,
+        "abort_reason": reason,
+        "event_sequence": int(sequence),
+    }
+
+
+def queued_frame(sequence: int, round_id: str) -> dict:
+    """round_queued → queued 实时帧（D11 持久帧 + 水位键，同 status_frame）。"""
+    return {"type": "queued", "round_id": str(round_id), "event_sequence": int(sequence)}
+
+
+def done_frame(finish_reason: str) -> dict:
+    """done 实时帧：瞬态语义与执行器泵 done 同形（无水位键——终态帧不推进游标，
+    断线重连经 /events 事实面补拉对账；usage 恒空——失败/取消轮无用量权威）。"""
+    return {"type": "done", "finish_reason": finish_reason, "usage": {}}
