@@ -33,6 +33,7 @@ from backend.v2.models.content import (
     SkillRevision,
     ToolCatalog,
 )
+from backend.v2.reason_gate import require_reason
 
 RESULT_APPROVED = "approved"  # D23：词表服务层常量，不加 CHECK
 RESULT_REJECTED = "rejected"
@@ -41,14 +42,6 @@ _REVIEW_DOMAINS = {
     "expert_revision": _DOMAINS["experts"],
     "skill_revision": _DOMAINS["skills"],
 }
-
-
-def _reason_gate(reason: str) -> str:
-    if not isinstance(reason, str) or not reason.strip():
-        raise AgentCraftError(
-            ErrorCode.ADMIN_REASON_REQUIRED, "管理员操作必须提供 reason", http_status=400
-        )
-    return reason.strip()
 
 
 def _domain_of(target_type: str):
@@ -76,7 +69,7 @@ async def approve_revision(
     request_id: str | None,
 ) -> dict:
     reviewer_id = str(reviewer_id)  # D26 归一（种子实返 UUID 对象）
-    reason = _reason_gate(reason)
+    reason = require_reason(reason)
     dom = _domain_of(target_type)
     rid = _parse_uuid(revision_id, "revision_id")
     # 锁序第 1 步（D14）：无锁读仅用于解析实体 id；真正的串行化点是实体行
@@ -189,7 +182,7 @@ async def reject_revision(
     request_id: str | None,
 ) -> dict:
     reviewer_id = str(reviewer_id)  # D26 归一
-    reason = _reason_gate(reason)
+    reason = require_reason(reason)
     dom = _domain_of(target_type)
     rid = _parse_uuid(revision_id, "revision_id")
     revision = (

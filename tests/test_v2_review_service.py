@@ -427,3 +427,40 @@ async def test_approve_rejects_cross_owner_revision(pg, provider_env):
         await _approve(pg, provider_env, "expert_revision", poisoned_rev)
     assert excinfo.value.code == ErrorCode.REVIEW_PENDING
     assert excinfo.value.http_status == 409
+
+
+# ---------- T4 重构回归：_reason_gate 收敛至 backend.v2.reason_gate（行为不变）----------
+
+
+@pytest.mark.usefixtures("provider_env")
+@pytest.mark.asyncio
+async def test_approve_reason_stripped_into_audit(pg, provider_env):
+    """reason 门 strip 语义经共享 require_reason 保持：带首尾空白的合法 reason 照常
+    过门，审计 reason 为 strip 后值（重构前后行为一致——12 例既有零变化之外的行为钉）。"""
+    _, _, revision_id = await _seed_pending(pg)
+    out = await _approve(pg, provider_env, "expert_revision", revision_id, reason="  两端空白  ")
+    assert out["entity_status"] == "published"
+    async with pg.engine.begin() as conn:
+        assert (
+            await conn.execute(
+                text("SELECT reason FROM audit_logs WHERE action = 'expert.approve_publish'")
+            )
+        ).scalar_one() == "两端空白"
+
+
+def test_require_reason_shared_gate_behavior():
+    """require_reason 单元行为（=原 review_service._reason_gate 逐字迁移）：
+    None/非 str/空白 → AgentCraftError(ADMIN_REASON_REQUIRED, 400)；合法值 strip 返回。"""
+    from backend.v2.reason_gate import require_reason
+
+    with pytest.raises(AgentCraftError) as excinfo:
+        require_reason(None)
+    assert excinfo.value.code == ErrorCode.ADMIN_REASON_REQUIRED
+    assert excinfo.value.http_status == 400
+    with pytest.raises(AgentCraftError) as excinfo:
+        require_reason(123)  # type: ignore[arg-type]
+    assert excinfo.value.code == ErrorCode.ADMIN_REASON_REQUIRED
+    with pytest.raises(AgentCraftError) as excinfo:
+        require_reason("   \t")
+    assert excinfo.value.code == ErrorCode.ADMIN_REASON_REQUIRED
+    assert require_reason("  合规理由  ") == "合规理由"
