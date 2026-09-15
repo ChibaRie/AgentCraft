@@ -34,12 +34,13 @@ async function openMenu() {
   await flush();
 }
 
-function mockSession({ user, v2User, logoutV2 }) {
+function mockSession({ user, v2User, logoutV2, isExpert }) {
   useAuth.mockReturnValue({
     user,
     v2User,
     isAuthenticated: Boolean(user),
-    isExpert: user?.role === "expert",
+    // 上下文汇流值可显式注入（T11 ④：V2 entitlement 分支）；缺省按 V1 role 推导
+    isExpert: isExpert ?? user?.role === "expert",
     logout: vi.fn(),
     logoutV2,
   });
@@ -71,6 +72,49 @@ describe("「退出账户会话」入口 gating", () => {
 
     expect(screen.getByRole("menuitem", { name: "退出账户会话" })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: "登出" })).toBeTruthy();
+  });
+});
+
+describe("任务域入口不再置灰（T11 ⑤：任务面即将全 V2）", () => {
+  it("无任何会话：三个任务域链接照常渲染，无 aria-disabled / 提示 / 拦截", () => {
+    mockSession({ user: null, v2User: null, logoutV2: vi.fn() });
+    render(
+      <MemoryRouter>
+        <NavBar />
+      </MemoryRouter>
+    );
+
+    for (const label of ["专家中心", "任务", "技能管理"]) {
+      const link = screen.getByRole("link", { name: label });
+      expect(link.getAttribute("aria-disabled")).toBeNull();
+      expect(link.getAttribute("title")).toBeNull();
+      expect(link.style.pointerEvents).toBe("");
+    }
+    // 无会话仍保留普通登录引导
+    expect(screen.getByRole("link", { name: "登录" })).toBeTruthy();
+  });
+});
+
+describe("isExpert 汇流：徽标与菜单统一（T11 ④）", () => {
+  it("V2-only expert_author（entitlement 分支）：菜单含我的专家，徽标显示专家", async () => {
+    mockSession({
+      user: null,
+      v2User: { ...V2_USER, entitlements: ["expert_author"] },
+      logoutV2: vi.fn(),
+      isExpert: true,
+    });
+    await openMenu();
+
+    expect(screen.getByRole("menuitem", { name: "我的专家" })).toBeTruthy();
+    expect(screen.getByText("专家")).toBeTruthy();
+  });
+
+  it("V2-only 非 expert：菜单无我的专家、无专家徽标", async () => {
+    mockSession({ user: null, v2User: V2_USER, logoutV2: vi.fn() });
+    await openMenu();
+
+    expect(screen.queryByRole("menuitem", { name: "我的专家" })).toBeNull();
+    expect(screen.queryByText("专家")).toBeNull();
   });
 });
 

@@ -1,11 +1,15 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAuth } from "../auth/AuthContext.jsx";
+import { useAuth, V2_LOGIN_FROM_STORAGE_KEY } from "../auth/AuthContext.jsx";
 import LoginPage from "./LoginPage.jsx";
 
-// 只 mock useAuth 出口：login/loginV2/loginV2Mfa 由用例编排（网络在 AuthContext 层，T2 已覆盖）
-vi.mock("../auth/AuthContext.jsx", () => ({ useAuth: vi.fn() }));
+// mock useAuth 出口（login/loginV2/loginV2Mfa 由用例编排，网络在 AuthContext 层
+// T2 已覆盖），但保留模块真实导出（V2_LOGIN_FROM_STORAGE_KEY 常量被本文件消费）
+vi.mock("../auth/AuthContext.jsx", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, useAuth: vi.fn() };
+});
 
 const loginMock = vi.fn();
 const loginV2Mock = vi.fn();
@@ -38,6 +42,7 @@ function renderLogin(entry = "/login") {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/tasks" element={<div>任务页落点</div>} />
+        <Route path="/profile" element={<div>个人中心落点</div>} />
         <Route path="/" element={<div>首页落点</div>} />
       </Routes>
     </MemoryRouter>
@@ -74,6 +79,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  window.sessionStorage.clear();
   vi.restoreAllMocks();
 });
 
@@ -270,5 +276,60 @@ describe("V2 账户登录 + MFA 挑战态机", () => {
     });
     expect(screen.getByRole("button", { name: "登录" }).disabled).toBe(false);
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("V2 登录成功恢复 401 暂存 from（T11 ⑥ / D13 / I-4）", () => {
+  it("sessionStorage 有合法 from → V2 登录成功 navigate 回原路径，暂存消费即清除", async () => {
+    window.sessionStorage.setItem(V2_LOGIN_FROM_STORAGE_KEY, "/tasks");
+    renderLogin("/login?v2=1");
+    loginV2Mock.mockResolvedValueOnce({ user: V2_USER });
+    fillV2Form();
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    await flush();
+
+    expect(screen.getByText("任务页落点")).toBeTruthy();
+    expect(window.sessionStorage.getItem(V2_LOGIN_FROM_STORAGE_KEY)).toBeNull();
+  });
+
+  it("MFA 挑战完成路径同样恢复 from", async () => {
+    window.sessionStorage.setItem(V2_LOGIN_FROM_STORAGE_KEY, "/profile");
+    renderLogin("/login?v2=1");
+    loginV2Mock.mockResolvedValueOnce({ mfaRequired: true, challengeId: "chal-9" });
+    fillV2Form();
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    await flush();
+
+    loginV2MfaMock.mockResolvedValueOnce({ user: V2_USER });
+    fireEvent.change(screen.getByLabelText("两步验证码"), { target: { value: "654321" } });
+    fireEvent.click(screen.getByRole("button", { name: "验证并登录" }));
+    await flush();
+
+    expect(screen.getByText("个人中心落点")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "验证并登录" })).toBeNull();
+    expect(window.sessionStorage.getItem(V2_LOGIN_FROM_STORAGE_KEY)).toBeNull();
+  });
+
+  it("暂存值为协议相对串 //evil.com（I-4 绕过形态）→ 拒绝恢复，回落 /", async () => {
+    window.sessionStorage.setItem(V2_LOGIN_FROM_STORAGE_KEY, "//evil.com");
+    renderLogin("/login?v2=1");
+    loginV2Mock.mockResolvedValueOnce({ user: V2_USER });
+    fillV2Form();
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    await flush();
+
+    expect(screen.getByText("首页落点")).toBeTruthy();
+    expect(screen.queryByText("任务页落点")).toBeNull();
+  });
+
+  it("无暂存时回落 location.state?.from（RequireAuth 弹回场景不回归）", async () => {
+    renderLogin({ pathname: "/login", state: { from: "/tasks" } });
+    fireEvent.click(screen.getByRole("button", { name: "账户登录" }));
+    loginV2Mock.mockResolvedValueOnce({ user: V2_USER });
+    fillV2Form();
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    await flush();
+
+    expect(screen.getByText("任务页落点")).toBeTruthy();
   });
 });

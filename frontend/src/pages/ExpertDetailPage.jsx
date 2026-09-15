@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { CheckCircle, UserCircle } from "@phosphor-icons/react";
-import { request } from "../api/client.js";
+import { requestV2 } from "../api/v2/client.js";
+import { V2_DISCOVER } from "../api/v2/routes.js";
 import { CATEGORY_LABELS } from "../lib/categories.js";
 
 export default function ExpertDetailPage({ expertId }) {
@@ -17,9 +18,11 @@ export default function ExpertDetailPage({ expertId }) {
       setIsLoading(true);
       setLoadError("");
       try {
-        const payload = await request(`/api/discover/experts/${expertId}`);
+        // V2 discover 详情（Sup §10.2）：published_revision_id 直作召唤专家的
+        // expert_revision_id，不再二次解析
+        const result = await requestV2(`${V2_DISCOVER}/experts/${expertId}`);
         if (!cancelled) {
-          setExpert(payload.data);
+          setExpert(result.data);
         }
       } catch (error) {
         if (!cancelled) {
@@ -107,7 +110,16 @@ export default function ExpertDetailPage({ expertId }) {
               type="button"
               className="btn btn-primary detail-summon"
               title="创建任务并开始对话"
-              onClick={() => navigate(`/tasks/new?expert=${expert.id}`)}
+              onClick={() => {
+                // Sup §10.2：published_revision_id 作 rid 查询参数（TaskCreatePage
+                // 可选消费，直用为 POST /tasks 的 expert_revision_id）；缺失
+                // （防御，published 实体恒非空）时不带 rid——创建页回退选择流
+                const params = new URLSearchParams({ expert: expert.id });
+                if (expert.published_revision_id) {
+                  params.set("rid", expert.published_revision_id);
+                }
+                navigate(`/tasks/new?${params.toString()}`);
+              }}
             >
               召唤专家
             </button>
@@ -148,10 +160,12 @@ export default function ExpertDetailPage({ expertId }) {
               <p className="detail-prose">这位专家暂未启用 Skill，将直接以人设与方法论完成任务。</p>
             ) : (
               <ul className="skill-mini-list">
+                {/* V2 详情 skill 项形状 {skill_id, name, revision_no}——无 description，
+                    有则渲染（cutover 后仅 V2 形状） */}
                 {expert.skills.map((skill) => (
-                  <li className="skill-mini" key={skill.id}>
+                  <li className="skill-mini" key={skill.skill_id ?? skill.id ?? skill.name}>
                     <strong>{skill.name}</strong>
-                    <span>{skill.description}</span>
+                    {skill.description ? <span>{skill.description}</span> : null}
                   </li>
                 ))}
               </ul>

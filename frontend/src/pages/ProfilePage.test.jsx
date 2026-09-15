@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { request } from "../api/client.js";
 import { requestV2 } from "../api/v2/client.js";
+import { V2_TASKS } from "../api/v2/routes.js";
 import AccountDeletingPage from "./AccountDeletingPage.jsx";
 import ProfilePage from "./ProfilePage.jsx";
 
@@ -158,5 +159,117 @@ describe("注销受理导航终态（T7 终审：冻结页独立路由 /account/
 
     expect(screen.getByText(/旧版工作区账户/)).toBeTruthy();
     expect(screen.getByText(/不受影响/)).toBeTruthy();
+  });
+});
+
+describe("任务列表双轨门控（T11 ③：V1 优先/否则 V2_TASKS）", () => {
+  const V2_ONLY_USER = {
+    ...BASE_AUTH,
+    v2User: { id: "u-2", email: "v2@example.com", role: "user", mfaEnabled: false },
+  };
+
+  function routeV2(items) {
+    requestV2.mockImplementation((path) => {
+      if (path.startsWith(V2_TASKS)) {
+        return Promise.resolve(
+          ok({ items, total: items.length, page: 1, size: 20 })
+        );
+      }
+      // 其余挂载卡片（SessionsCard 会话列表等）按各自测试语义回空
+      return Promise.resolve(ok([]));
+    });
+  }
+
+  it("V2-only：任务列表走 V2_TASKS，零 V1 调用（此前必 401 的断链）", async () => {
+    routeV2([
+      {
+        id: "t-1",
+        status: "running",
+        created_at: "2026-09-15T00:00:00Z",
+        expert: { name: "架构评审官", avatar_url: null },
+        provider: { display_name: "gpt-4o", model: "gpt-4o" },
+      },
+    ]);
+    useAuth.mockReturnValue(V2_ONLY_USER);
+    await renderProfile();
+
+    const taskCalls = requestV2.mock.calls.filter(([path]) => path.startsWith(V2_TASKS));
+    expect(taskCalls).toHaveLength(1);
+    expect(taskCalls[0][0]).toBe(`${V2_TASKS}?page=1&size=20`);
+    expect(request).not.toHaveBeenCalled();
+    // §10.3 行形状渲染：expert.name 主行 + 状态词表 + 创建时间（归一 createdAt）
+    expect(screen.getByText("架构评审官")).toBeTruthy();
+    expect(screen.getByText("进行中")).toBeTruthy();
+    expect(screen.getByText(/gpt-4o · 2026/)).toBeTruthy();
+  });
+
+  it("V1-only：任务列表保持 V1 /api/tasks，零 V2 任务调用", async () => {
+    request.mockResolvedValue({
+      data: [
+        {
+          id: 3,
+          status: "completed",
+          title: "季度盘点",
+          expert_name_snapshot: "数据分析师",
+          created_at: "2026-09-01T00:00:00Z",
+        },
+      ],
+    });
+    useAuth.mockReturnValue({
+      ...BASE_AUTH,
+      user: { id: 1, username: "alice", email: "a@example.com", role: "user" },
+    });
+    await renderProfile();
+
+    expect(request).toHaveBeenCalledWith("/api/tasks?page=1&size=20");
+    expect(requestV2).not.toHaveBeenCalled();
+    expect(screen.getByText("季度盘点")).toBeTruthy();
+    // V1 行形状：expert_name_snapshot · created_at 渲染不回归
+    expect(screen.getByText(/数据分析师 · 2026/)).toBeTruthy();
+  });
+});
+
+describe("专家身份 CTA 收敛（T11 ③：V2-only 移除申请 CTA，改 entitlement 文案）", () => {
+  it("V2-only 非专家：无申请按钮，显示管理员授予说明", async () => {
+    requestV2.mockResolvedValue(ok([]));
+    useAuth.mockReturnValue({
+      ...BASE_AUTH,
+      v2User: { id: "u-2", email: "v2@example.com", role: "user", mfaEnabled: false },
+    });
+    await renderProfile();
+
+    expect(screen.queryByRole("button", { name: "申请专家身份" })).toBeNull();
+    expect(screen.getByText(/管理员授予/)).toBeTruthy();
+  });
+
+  it("V1-only 非专家：申请 CTA 保留（V1 轨行为不动）", async () => {
+    request.mockResolvedValue({ data: [] });
+    useAuth.mockReturnValue({
+      ...BASE_AUTH,
+      user: { id: 1, username: "alice", email: "a@example.com", role: "user" },
+    });
+    await renderProfile();
+
+    expect(screen.getByRole("button", { name: "申请专家身份" })).toBeTruthy();
+    expect(screen.getByText(/成为专家用户后/)).toBeTruthy();
+  });
+
+  it("V2-only + entitlement 专家：已获身份文案（无需申请）", async () => {
+    requestV2.mockResolvedValue(ok([]));
+    useAuth.mockReturnValue({
+      ...BASE_AUTH,
+      v2User: {
+        id: "u-2",
+        email: "v2@example.com",
+        role: "user",
+        mfaEnabled: false,
+        entitlements: ["expert_author"],
+      },
+      isExpert: true,
+    });
+    await renderProfile();
+
+    expect(screen.getByText(/你已是专家用户/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "申请专家身份" })).toBeNull();
   });
 });

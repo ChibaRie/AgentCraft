@@ -10,6 +10,33 @@ import { V2_AUTH, V2_USERS } from "../api/v2/routes.js";
 
 const AuthContext = createContext(null);
 
+/**
+ * V2 会话过期 401 时暂存来源路径的 sessionStorage 键（D13）；恢复由 LoginPage
+ * 的 V2 登录成功路径承接（消费即清除）。
+ */
+export const V2_LOGIN_FROM_STORAGE_KEY = "agentcraft_v2_login_from";
+
+/**
+ * from 白名单（安全审查 I-4）：仅站内根相对路径——`/` 开头且非 `//` 开头
+ * （`//evil.com` 是协议相对 URL，恢复时会被解析为跨源导航）。写侧（401 handler
+ * 暂存 location.pathname）与读侧（LoginPage 恢复）双侧过滤；读侧防御存储被
+ * 篡改或历史遗留脏值。
+ */
+export function isSafeInternalPath(value) {
+  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//");
+}
+
+function stashLoginFrom(pathname) {
+  if (!isSafeInternalPath(pathname)) {
+    return;
+  }
+  try {
+    window.sessionStorage.setItem(V2_LOGIN_FROM_STORAGE_KEY, pathname);
+  } catch {
+    // sessionStorage 不可用（隐私模式等）→ 退化为无 from 恢复（登录后回落 /）
+  }
+}
+
 const SNAKE_KEY_PATTERN = /_([a-z0-9])/g;
 
 function toCamelKey(key) {
@@ -126,14 +153,17 @@ export function AuthProvider({ children }) {
   }, []);
 
   // V2 会话过期事件（requestV2 非 silent 401 SESSION_EXPIRED 派发）：
-  // 先 pathname 守卫防 /login 同页重载循环，再清态 + 跳转（绕开 router 依赖；
-  // 丢失 state.from 为已知行为，E13）
+  // 先 pathname 守卫防 /login 同页重载循环，再清态 + 暂存 from + 跳转（绕开
+  // router 依赖）。D13/I-4：全页跳转丢 router state，改 sessionStorage 暂存
+  // 来源路径（白名单见 isSafeInternalPath），恢复由 LoginPage 登录成功后的
+  // navigate() 承接——恢复路径一律 react-router navigate，禁 location.assign。
   useEffect(() => {
     function handleSessionExpired() {
       if (window.location.pathname === "/login") {
         return;
       }
       setV2User(null);
+      stashLoginFrom(window.location.pathname);
       window.location.assign("/login?v2=1");
     }
     window.addEventListener(V2_SESSION_EXPIRED_EVENT, handleSessionExpired);
@@ -278,7 +308,15 @@ export function AuthProvider({ children }) {
       v2Ready,
       authReady: v1Ready && v2Ready,
       isAuthenticated: Boolean(user),
-      isExpert: user?.role === "expert",
+      // isExpert 双判据（T11 汇流，cutover 前并存）：V2 entitlement（expert_author，
+      // users/me 载荷）**或** V1 user.role === "expert"。**T14 收敛为 V2
+      // entitlement 单判据**（届时删除 V1 role 分支与各页双轨探测）。已知限制：
+      // 登录信封的 user 不含 entitlements（login_service._login_body 仅
+      // id/email/role/status），刚登录的 V2 专家要等启动探测/refreshV2User
+      // 刷新后专家面才点亮。
+      isExpert:
+        Boolean(v2User?.entitlements?.includes("expert_author")) ||
+        user?.role === "expert",
       login,
       register,
       applyExpert,

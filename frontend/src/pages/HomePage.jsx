@@ -4,14 +4,10 @@ import { ArrowRight, ChatCenteredDots, Plus, Wrench } from "@phosphor-icons/reac
 import { useAuth } from "../auth/AuthContext.jsx";
 import { displayName } from "../auth/displayName.js";
 import { request } from "../api/client.js";
+import { requestV2 } from "../api/v2/client.js";
+import { V2_DISCOVER, V2_TASKS } from "../api/v2/routes.js";
 import { CATEGORY_LABELS, CATEGORY_OPTIONS } from "../lib/categories.js";
-
-const TASK_STATUS_LABELS = {
-  created: "待开始",
-  running: "进行中",
-  completed: "已结束",
-  failed: "异常",
-};
+import { TASK_STATUS_LABELS, toDisplayTask } from "../lib/taskDisplay.js";
 
 function greeting() {
   const hour = new Date().getHours();
@@ -19,6 +15,17 @@ function greeting() {
   if (hour < 12) return "早上好";
   if (hour < 18) return "下午好";
   return "晚上好";
+}
+
+/** V2 discover 列表（Sup §10.2 信封 {items,total,page,page_size}；分页参数
+ *  page_size 语义对齐 V2——V1 为 size）。 */
+async function fetchFeaturedExperts(category) {
+  const params = new URLSearchParams({ page: "1", page_size: "6" });
+  if (category) {
+    params.set("category", category);
+  }
+  const result = await requestV2(`${V2_DISCOVER}/experts?${params.toString()}`);
+  return { items: result.data?.items ?? [], total: result.data?.total ?? 0 };
 }
 
 function HeroInkPanel({ stats }) {
@@ -55,7 +62,7 @@ function TaskDigest({ tasks }) {
               <span className={`status-chip is-${task.status}`}>
                 {TASK_STATUS_LABELS[task.status] || task.status}
               </span>
-              <span className="context-tool-desc">{task.expert_name_snapshot}</span>
+              <span className="context-tool-desc">{task.expertLabel}</span>
             </span>
           </Link>
         </li>
@@ -89,11 +96,16 @@ function ExpertCard({ expert, index }) {
 }
 
 /** P02 首页（仿智能体中心的信息架构）：问候 + 工作台速览 + 最近任务 +
- *  精选专家（分类筛选）。数据全部来自既有公开/本人接口。 */
+ *  精选专家（分类筛选）。精选/discover 走 V2（匿名可达）；最近任务按双轨
+ *  会话门控（cutover 前并存，T14 收敛）。 */
 export default function HomePage() {
   const { user, v2User, isExpert } = useAuth();
   // 身份源统一（终审修复）：V2 权威会话优先（NavBar 同向），V1-only 用户回退
   const displayUser = v2User ?? user;
+  // 双轨任务列表门控（T11 ②）：V1 会话在 → V1 优先；否则 V2 会话 → V2_TASKS。
+  // V2-only 用户此前直调 V1 /api/tasks 必 401——全局错误横幅与「最近的任务」
+  // 永停加载态的根源。
+  const hasV1Session = Boolean(user);
   const [recentTasks, setRecentTasks] = useState(null);
   const [stats, setStats] = useState({ runningTasks: "—", publishedExperts: "—", mySkills: "—" });
   const [experts, setExperts] = useState([]);
@@ -104,26 +116,36 @@ export default function HomePage() {
 
   useEffect(() => {
     let cancelled = false;
+    async function loadRecentTasks() {
+      if (hasV1Session) {
+        const payload = await request("/api/tasks?page=1&size=3");
+        return payload.data.map(toDisplayTask);
+      }
+      if (v2User) {
+        const result = await requestV2(`${V2_TASKS}?page=1&size=3`);
+        return (result.data?.items ?? []).map(toDisplayTask);
+      }
+      return [];
+    }
     async function load() {
       try {
-        const tasksReq = request("/api/tasks?page=1&size=3");
-        const discoverReq = request("/api/discover/experts?page=1&size=6");
-        const skillReq = isExpert ? request("/api/skills?page=1&size=1") : null;
-        const [tasksPayload, discoverPayload, skillPayload] = await Promise.all([
-          tasksReq,
-          discoverReq,
+        const skillReq =
+          hasV1Session && isExpert ? request("/api/skills?page=1&size=1") : null;
+        const [tasks, featured, skillPayload] = await Promise.all([
+          loadRecentTasks(),
+          fetchFeaturedExperts(""),
           skillReq?.catch(() => null) ?? Promise.resolve(null),
         ]);
         if (cancelled) {
           return;
         }
-        setRecentTasks(tasksPayload.data);
-        setExperts(discoverPayload.data);
-        setExpertTotal(discoverPayload.total);
+        setRecentTasks(tasks);
+        setExperts(featured.items);
+        setExpertTotal(featured.total);
         setStats({
-          runningTasks: tasksPayload.data.filter((task) => task.status === "running").length,
-          publishedExperts: discoverPayload.total,
-          mySkills: isExpert && skillPayload ? skillPayload.total : "—",
+          runningTasks: tasks.filter((task) => task.status === "running").length,
+          publishedExperts: featured.total,
+          mySkills: hasV1Session && isExpert && skillPayload ? skillPayload.total : "—",
         });
       } catch (error) {
         if (!cancelled) {
@@ -139,21 +161,17 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [isExpert]);
+  }, [hasV1Session, v2User, isExpert]);
 
   // 分类筛选切换：重新拉取精选（首页每类只展示前 6 个）
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const params = new URLSearchParams({ page: "1", size: "6" });
-        if (category) {
-          params.set("category", category);
-        }
-        const payload = await request(`/api/discover/experts?${params.toString()}`);
+        const featured = await fetchFeaturedExperts(category);
         if (!cancelled) {
-          setExperts(payload.data);
-          setExpertTotal(payload.total);
+          setExperts(featured.items);
+          setExpertTotal(featured.total);
         }
       } catch {
         // 精选区失败不打断首屏（顶部已有全局错误提示）

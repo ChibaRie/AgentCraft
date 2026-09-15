@@ -1,10 +1,28 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext.jsx";
+import { isSafeInternalPath, useAuth, V2_LOGIN_FROM_STORAGE_KEY } from "../auth/AuthContext.jsx";
 import AuthBrandPanel from "../components/AuthBrandPanel.jsx";
 import FormField from "../components/FormField.jsx";
 import OtpInput from "../components/OtpInput.jsx";
 import { useRetryAfter } from "../hooks/useRetryAfter.js";
+
+/**
+ * 读取并消费 401 会话过期时暂存的来源路径（D13/I-4）：消费即清除（防陈旧值
+ * 滞留到下次登录）；读侧同白名单过滤（isSafeInternalPath）——存储可被篡改或
+ * 存历史遗留脏值，`//evil.com` 协议相对串必须拒绝、回落 /。
+ */
+function readLoginFrom() {
+  try {
+    const raw = window.sessionStorage.getItem(V2_LOGIN_FROM_STORAGE_KEY);
+    window.sessionStorage.removeItem(V2_LOGIN_FROM_STORAGE_KEY);
+    if (isSafeInternalPath(raw)) {
+      return raw;
+    }
+  } catch {
+    // sessionStorage 不可用 → 忽略（回落 location.state?.from ?? "/"）
+  }
+  return null;
+}
 
 function RetryHint({ retryAfter }) {
   if (retryAfter <= 0) {
@@ -21,7 +39,9 @@ function RetryHint({ retryAfter }) {
  * 登录页双轨重写（FE-T3）：
  * - 双 Tab：「工作区登录」= V1 既有登录逻辑原样（token 存 localStorage + login()）；
  *   「账户登录」= V2（loginV2 → mfa_required 就地切换挑战卡片 → loginV2Mfa）。
- * - URL ?v2=1（V2 会话过期 401 事件跳转落点）默认激活 V2 Tab。
+ * - URL ?v2=1（V2 会话过期 401 事件跳转落点）默认激活 V2 Tab；V2 登录成功
+ *   （含 MFA 挑战完成路径）恢复 401 时 sessionStorage 暂存的 from（D13/I-4：
+ *   白名单站内根相对路径、消费即清除、恢复一律 navigate()），回落 state.from，再回落 /。
  * - E5：注册 Tab 删除（V2 注册走邀请制，不在登录页）。
  * - E11：/login 不设路由守卫——双轨 R1 下任一单侧会话用户都可能经 /login
  *   补建另一轨会话，已登录访问不弹回。
@@ -171,14 +191,17 @@ export default function LoginPage() {
     try {
       const result = await loginV2(email, v2Fields.password);
       if (result.mfaRequired) {
-        // 就地切换挑战卡片（不离开 /login）
+        // 就地切换挑战卡片（不离开 /login；from 暂存留在原地，由挑战完成路径消费）
         setChallengeId(result.challengeId);
         setOtp("");
         setV2Alert("");
         setV2Stage("challenge");
         return;
       }
-      navigate(location.state?.from || "/", { replace: true });
+      // D13/I-4：优先消费 401 暂存 from（v2:session-expired 全页跳转丢 router
+      // state 的恢复通道），回落 state.from，再回落 /；恢复一律 navigate()
+      //（禁 location.assign）
+      navigate(readLoginFrom() ?? location.state?.from ?? "/", { replace: true });
     } catch (error) {
       applyV2Error(error);
     } finally {
@@ -194,7 +217,8 @@ export default function LoginPage() {
     setV2Submitting(true);
     try {
       await loginV2Mfa(challengeId, otp);
-      navigate(location.state?.from || "/", { replace: true });
+      // MFA 挑战完成路径同享 from 恢复（暂存未被 mfa_required 分支消费）
+      navigate(readLoginFrom() ?? location.state?.from ?? "/", { replace: true });
     } catch (error) {
       applyV2Error(error);
     } finally {

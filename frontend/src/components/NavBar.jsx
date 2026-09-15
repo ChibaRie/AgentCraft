@@ -38,14 +38,13 @@ function ThemeToggle() {
   );
 }
 
-/** V1 任务域入口（E1 降级可见）：无 V1 会话时禁用（V2 会话不解锁任务域）。 */
+/** 任务域入口（T11 移除 E12 置灰降级：任务面即将全 V2，V1 会话不再是
+ *  可用性前提；无会话用户走普通登录引导）。 */
 const TASK_DOMAIN_LINKS = [
   { to: "/discover", label: "专家中心" },
   { to: "/tasks", label: "任务" },
   { to: "/skills", label: "技能管理" },
 ];
-
-const TASK_DOMAIN_DISABLED_HINT = "任务域尚未接入新登录体系";
 
 function UserMenu() {
   const { user, v2User, isExpert, logout, logoutV2 } = useAuth();
@@ -105,10 +104,10 @@ function UserMenu() {
     }
   }
 
-  // 双轨渲染源（E12）：V2 会话优先展示；无 username 时 displayName 取 email 前缀
+  // 双轨渲染源（E12）：V2 会话优先展示；无 username 时 displayName 取 email 前缀。
+  // 专家徽标与菜单同源消费上下文汇流值 isExpert（T11 ④，双判据见 AuthContext）。
   const displayUser = v2User ?? user;
   const name = displayName(displayUser);
-  const isDisplayExpert = displayUser?.role === "expert";
 
   return (
     <div className="usermenu" ref={menuRef}>
@@ -135,7 +134,7 @@ function UserMenu() {
         <div className="usermenu-header">
           <div className="usermenu-name">
             {name}
-            {isDisplayExpert && <span className="role-badge is-expert">专家</span>}
+            {isExpert && <span className="role-badge is-expert">专家</span>}
           </div>
           <div className="usermenu-email">{displayUser.email}</div>
         </div>
@@ -202,15 +201,8 @@ function UserMenu() {
 }
 
 export default function NavBar() {
-  const { isAuthenticated, user, v2User } = useAuth();
+  const { isAuthenticated, v2User } = useAuth();
   const hasAnySession = isAuthenticated || Boolean(v2User);
-  const hasV1Session = Boolean(user);
-
-  // E12 任务域入口降级：无 V1 会话时禁用（aria-disabled + 提示 + pointer-events:none），
-  // onClick 兜底拦截键盘激活
-  function handleBlockedNav(event) {
-    event.preventDefault();
-  }
 
   return (
     <header className="navbar">
@@ -224,15 +216,7 @@ export default function NavBar() {
             首页
           </NavLink>
           {TASK_DOMAIN_LINKS.map(({ to, label }) => (
-            <NavLink
-              key={to}
-              to={to}
-              className="navbar-link"
-              aria-disabled={hasV1Session ? undefined : true}
-              title={hasV1Session ? undefined : TASK_DOMAIN_DISABLED_HINT}
-              style={hasV1Session ? undefined : { pointerEvents: "none" }}
-              onClick={hasV1Session ? undefined : handleBlockedNav}
-            >
+            <NavLink key={to} to={to} className="navbar-link">
               {label}
             </NavLink>
           ))}

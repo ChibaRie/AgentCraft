@@ -10,18 +10,14 @@ import {
 import { useAuth } from "../auth/AuthContext.jsx";
 import { displayName } from "../auth/displayName.js";
 import { request } from "../api/client.js";
+import { requestV2 } from "../api/v2/client.js";
+import { V2_TASKS } from "../api/v2/routes.js";
 import { formatDateTime } from "../lib/datetime.js";
+import { TASK_STATUS_LABELS, toDisplayTask } from "../lib/taskDisplay.js";
 import PasswordChangeCard from "../components/PasswordChangeCard.jsx";
 import MfaCard from "../components/MfaCard.jsx";
 import SessionsCard from "../components/SessionsCard.jsx";
 import DangerZone from "../components/DangerZone.jsx";
-
-const TASK_STATUS_LABELS = {
-  created: "待开始",
-  running: "进行中",
-  completed: "已结束",
-  failed: "异常",
-};
 
 export default function ProfilePage() {
   const { user, v2User, isExpert, applyExpert } = useAuth();
@@ -33,6 +29,9 @@ export default function ProfilePage() {
   // 安全区块为 V2 会话语义（password-change / mfa/* 均走 cookie 会话）：
   // 仅在存在 V2 会话时渲染，V1-only 用户不暴露必 401 的操作面
   const hasV2Session = Boolean(v2User);
+  // 双轨任务列表门控（T11 ③，同 HomePage）：V1 会话在 → V1 优先；否则 V2 会话
+  // → V2_TASKS（V2-only 用户此前直调 V1 /api/tasks 必 401 的断链）。
+  const hasV1Session = Boolean(user);
   const [isApplying, setIsApplying] = useState(false);
   const [applyError, setApplyError] = useState("");
   const [justApplied, setJustApplied] = useState(false);
@@ -43,10 +42,19 @@ export default function ProfilePage() {
     let cancelled = false;
     async function load() {
       try {
-        // §8.2 P05 TaskList：仅本人任务（服务端按 token 归属过滤）
-        const payload = await request("/api/tasks?page=1&size=20");
-        if (!cancelled) {
-          setTasks(payload.data);
+        // 仅本人任务（服务端按会话归属过滤）；V2-only 不再直调 V1 端点
+        if (hasV1Session) {
+          const payload = await request("/api/tasks?page=1&size=20");
+          if (!cancelled) {
+            setTasks(payload.data.map(toDisplayTask));
+          }
+        } else if (v2User) {
+          const result = await requestV2(`${V2_TASKS}?page=1&size=20`);
+          if (!cancelled) {
+            setTasks((result.data?.items ?? []).map(toDisplayTask));
+          }
+        } else if (!cancelled) {
+          setTasks([]);
         }
       } catch (error) {
         if (!cancelled) {
@@ -58,7 +66,7 @@ export default function ProfilePage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [hasV1Session, v2User]);
 
   async function handleApplyExpert() {
     setIsApplying(true);
@@ -153,7 +161,9 @@ export default function ProfilePage() {
                 {justApplied ? " " : ""}
                 你已是专家用户，可以创建并发布自己的专家，为其装配 Skill。
               </p>
-            ) : (
+            ) : hasV1Session ? (
+              // V1 工作区轨保留自助申请（POST /users/me/expert）；
+              // V2-only 用户不渲染（V2 entitlement 由 admin 授予，T11 ③）
               <div className="profile-expert-cta">
                 <p className="profile-expert-desc">
                   成为专家用户后，你可以创建自己的专家：定义人设与方法论、装配
@@ -171,6 +181,14 @@ export default function ProfilePage() {
                   {isApplying ? "申请中…" : "申请专家身份"}
                 </button>
               </div>
+            ) : (
+              // V2-only：申请端点不存在于 V2 面——专家身份由管理员授予
+              // （expert_author entitlement），展示说明文案而非 CTA
+              <p className="profile-expert-desc">
+                V2
+                账户的专家身份由平台管理员授予（expert_author 权限）。获得授权后即可创建自己的专家、装配
+                Skill 并发布到专家中心；如需开通，请联系管理员。
+              </p>
             )}
           </div>
         </section>
@@ -201,8 +219,14 @@ export default function ProfilePage() {
                       <div className="binding-row-main">
                         <Link to={`/tasks/${task.id}`} className="binding-row-link">
                           <strong>{task.title || `任务 #${task.id}`}</strong>
+                          {/* 双轨归一辅行：expert/provider 标签 · 创建时间（双轨 created_at 同为 ISO 串） */}
                           <span className="context-tool-desc">
-                            {task.expert_name_snapshot} · {formatDateTime(task.created_at)}
+                            {[
+                              task.expertLabel,
+                              task.createdAt ? formatDateTime(task.createdAt) : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
                           </span>
                         </Link>
                       </div>

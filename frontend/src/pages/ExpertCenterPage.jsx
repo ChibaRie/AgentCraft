@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { MagnifyingGlass, Plus, UserCircle } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
-import { request } from "../api/client.js";
+import { requestV2 } from "../api/v2/client.js";
+import { V2_DISCOVER } from "../api/v2/routes.js";
 import { CATEGORY_LABELS, CATEGORY_OPTIONS } from "../lib/categories.js";
 
 function ExpertCard({ expert, index }) {
@@ -53,13 +54,15 @@ export default function ExpertCenterPage() {
       setIsLoading(true);
       setLoadError("");
       try {
-        const params = new URLSearchParams({ page: String(page), size: String(pageSize) });
+        // V2 discover（匿名可达；Sup §10.2 信封 {items,total,page,page_size}，
+        // 分页参数 page_size 语义对齐 V2——V1 为 size）
+        const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
         if (search) params.set("search", search);
         if (category) params.set("category", category);
-        const payload = await request(`/api/discover/experts?${params.toString()}`);
+        const result = await requestV2(`${V2_DISCOVER}/experts?${params.toString()}`);
         if (!cancelled) {
-          setCards(payload.data);
-          setTotal(payload.total);
+          setCards(result.data?.items ?? []);
+          setTotal(result.data?.total ?? 0);
         }
       } catch (error) {
         if (!cancelled) {

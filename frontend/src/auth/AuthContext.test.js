@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getToken, request, setToken } from "../api/client.js";
 import { V2_SESSION_EXPIRED_EVENT, V2ApiError, requestV2, setCsrfToken } from "../api/v2/client.js";
 import { V2_AUTH, V2_USERS } from "../api/v2/routes.js";
-import { AuthProvider, useAuth } from "./AuthContext.jsx";
+import { AuthProvider, useAuth, V2_LOGIN_FROM_STORAGE_KEY } from "./AuthContext.jsx";
 import { displayName } from "./displayName.js";
 
 vi.mock("../api/client.js", () => ({
@@ -88,6 +88,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  window.sessionStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -470,5 +471,117 @@ describe("displayName", () => {
   it("null / undefined 安全", () => {
     expect(displayName(null)).toBe("");
     expect(displayName(undefined)).toBe("");
+  });
+});
+
+describe("isExpert 双判据汇流（T11 ④；T14 收敛为 V2 entitlement 单判据）", () => {
+  /** V2 users/me 信封 user 形状（entitlements 仅 users/me 载荷携带） */
+  const V2_USER_RAW = { id: "u-2", email: "v2@example.com", role: "user", status: "active" };
+
+  it("V2-only + entitlements 含 expert_author → isExpert true", async () => {
+    requestV2.mockResolvedValueOnce({
+      status: 200,
+      data: { ...V2_USER_RAW, entitlements: ["expert_author"] },
+      headers: new Headers(),
+    });
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+
+    expect(result.current.isExpert).toBe(true);
+  });
+
+  it("V2-only + entitlements 空 + V1 无会话 → isExpert false", async () => {
+    requestV2.mockResolvedValueOnce({
+      status: 200,
+      data: { ...V2_USER_RAW, entitlements: [] },
+      headers: new Headers(),
+    });
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+
+    expect(result.current.isExpert).toBe(false);
+  });
+
+  it("V1 role=expert（V2 未登录）→ isExpert true（双判据 V1 分支回归）", async () => {
+    getToken.mockReturnValue("v1-token");
+    request.mockResolvedValueOnce({ data: { ...V1_USER, role: "expert" } });
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.authReady).toBe(true));
+
+    expect(result.current.isExpert).toBe(true);
+  });
+
+  it("双会话：V2 entitlements 空 + V1 role=user → isExpert false", async () => {
+    getToken.mockReturnValue("v1-token");
+    request.mockResolvedValueOnce({ data: V1_USER });
+    requestV2.mockResolvedValueOnce({
+      status: 200,
+      data: { ...V2_USER_RAW, entitlements: [] },
+      headers: new Headers(),
+    });
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.authReady).toBe(true));
+
+    expect(result.current.isExpert).toBe(false);
+  });
+
+  it("登录信封 user 无 entitlements（_login_body 形状）→ V2 分支不误判", async () => {
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 启动探测：匿名
+    requestV2.mockResolvedValueOnce(loginOk({ user: V2_USER_RAW, csrf_token: "t" }));
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await act(async () => {
+      await result.current.loginV2("v2@example.com", "secret");
+    });
+
+    // 刚登录的 v2User 无 entitlements 键 → V2 分支不点亮（已知限制，见实现注释）
+    expect(result.current.isExpert).toBe(false);
+  });
+});
+
+describe("401 会话过期 from 暂存（T11 ⑥ / D13 / 安全审查 I-4）", () => {
+  it("非 /login 页 401：sessionStorage 暂存 pathname + assign /login?v2=1", async () => {
+    const location = stubLocation("/profile");
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+
+    fireSessionExpired();
+
+    expect(window.sessionStorage.getItem(V2_LOGIN_FROM_STORAGE_KEY)).toBe("/profile");
+    expect(location.assign).toHaveBeenCalledWith("/login?v2=1");
+  });
+
+  it("pathname 为协议相对串 //evil.com：白名单拒绝暂存，跳转仍收敛 /login", async () => {
+    const location = stubLocation("//evil.com");
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+
+    fireSessionExpired();
+
+    expect(window.sessionStorage.getItem(V2_LOGIN_FROM_STORAGE_KEY)).toBeNull();
+    expect(location.assign).toHaveBeenCalledWith("/login?v2=1");
+  });
+
+  it("已在 /login：pathname 守卫既不跳转也不暂存", async () => {
+    const location = stubLocation("/login");
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+
+    fireSessionExpired();
+
+    expect(location.assign).not.toHaveBeenCalled();
+    expect(window.sessionStorage.getItem(V2_LOGIN_FROM_STORAGE_KEY)).toBeNull();
   });
 });
