@@ -8,7 +8,9 @@
 
 - 视图字段钉死 D14：排除 lease_owner/lease_epoch（红线）；round 摘要仅
   id/state/attempt；``_strip_lease_fields`` 构造器为回调响应面（T7
-  query_task_state）提供同红线剥除式防线；
+  query_task_state）提供同红线剥除式防线；Phase 8 T2（Sup §10.3）键集增
+  expert/provider 两枚展示字段——**不加 skills 键**（skills 经 discover 详情
+  二次拉取，不进任务视图）；
 - deleted 任务统一 404（Sup §7「越权、不存在、已删除资源一律 404」）；
 - 服务函数不 begin 不 commit；调用方会话必须已 set_current_owner（RLS 生效
   前提），本模块不重复设置；
@@ -23,12 +25,15 @@ get_task_view/list_tasks/get_quota_view 经 ``task_service`` 再导出（冻结�
 import uuid as _uuid
 
 from fastapi import HTTPException
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.errors import AgentCraftError, ErrorCode
 from backend.v2.author_service import _reject_invalid_uuid as _parse_uuid
 from backend.v2.models import (
+    Expert,
+    ExpertRevision,
+    ProviderCatalog,
     Task,
     TaskEvent,
     TaskFile,
@@ -80,11 +85,13 @@ def _strip_lease_fields(node, excluded: frozenset[str] = frozenset()):
 
 
 async def _load_task_views(db: AsyncSession, task_ids: list[_uuid.UUID]) -> list[dict]:
-    """D14 任务视图批量装配（rounds/counts 各一条集合查询，避免分页 N+1）。
+    """D14 任务视图批量装配（rounds/counts/expert/provider 各一条集合查询，避免
+    分页 N+1）。
 
     counts 排除 state='deleted' 墓碑行；active_round 取活跃态（部分唯一索引保证
     至多一条）；initial_round 取 source_message_id = initial_message_id 的轮
-    （round_source_message 唯一）。
+    （round_source_message 唯一）。expert/provider 展示字段为 Sup §10.3（Phase 8
+    T2）增量，null 语义见 ``_expert_brief_by_revision``。
     """
     if not task_ids:
         return []
@@ -99,6 +106,9 @@ async def _load_task_views(db: AsyncSession, task_ids: list[_uuid.UUID]) -> list
                 Task.input_manifest_sha256,
                 Task.event_sequence,
                 Task.initial_message_id,
+                Task.expert_revision_id,
+                Task.provider_catalog_id,
+                Task.provider_model_id,
             ).where(Task.id.in_(task_ids))
         )
     ).all()
@@ -128,6 +138,19 @@ async def _load_task_views(db: AsyncSession, task_ids: list[_uuid.UUID]) -> list
     for r in rounds:
         rounds_by_task.setdefault(r.task_id, []).append(r)
 
+    experts_by_rev = await _expert_brief_by_revision(db, [t.expert_revision_id for t in tasks])
+    catalog_ids = {t.provider_catalog_id for t in tasks}
+    display_by_catalog: dict[_uuid.UUID, str] = {}
+    if catalog_ids:
+        catalog_rows = (
+            await db.execute(
+                select(ProviderCatalog.id, ProviderCatalog.display_name).where(
+                    ProviderCatalog.id.in_(catalog_ids)
+                )
+            )
+        ).all()
+        display_by_catalog = {row.id: row.display_name for row in catalog_rows}
+
     views_by_id: dict[_uuid.UUID, dict] = {}
     for t in tasks:
         task_rounds = rounds_by_task.get(t.id, [])
@@ -140,6 +163,7 @@ async def _load_task_views(db: AsyncSession, task_ids: list[_uuid.UUID]) -> list
             if t.initial_message_id is not None
             else None
         )
+        display_name = display_by_catalog.get(t.provider_catalog_id)
         views_by_id[t.id] = {
             "id": str(t.id),
             "status": t.status,
@@ -154,8 +178,55 @@ async def _load_task_views(db: AsyncSession, task_ids: list[_uuid.UUID]) -> list
                 "inputs": counts.get(t.id, {}).get("input", 0),
                 "outputs": counts.get(t.id, {}).get("output", 0),
             },
+            # Sup §10.3 展示字段（Phase 8 T2）：expert 为 published_read 可见时
+            # 的 {name, avatar_url}，不可见（takedown/指针前移）为 null；
+            # provider.catalog 行缺失 → 整 provider=null（model 直取快照）。
+            "expert": experts_by_rev.get(t.expert_revision_id),
+            "provider": (
+                {"display_name": display_name, "model": t.provider_model_id}
+                if display_name is not None
+                else None
+            ),
         }
     return [views_by_id[tid] for tid in task_ids if tid in views_by_id]
+
+
+async def _expert_brief_by_revision(
+    db: AsyncSession, revision_ids: list[_uuid.UUID | None]
+) -> dict[_uuid.UUID, dict]:
+    """Sup §10.3（Phase 8 T2）：expert 展示字段批量装配（一条集合查询防 N+1）。
+
+    可见性钉「实体当前 published 指针」（契约原文：join 走 published_read、仅认
+    实体当前 published 指针——历史任务不回溯旧版内容）：join experts ON
+    published_revision_id 指针相等且 status='published'。status 条件不可省——
+    experts RLS 对 owner 本人放行 draft 行（0001:1074-1077 的 OR owner 分支），
+    缺它则 takedown（status→draft、指针不清，§10.6）后作者本人的任务视图仍能
+    读出旧内容，违背「takedown 后均为 null」。不可见面（takedown/作者再发布
+    新版/revision 行 RLS 不可见）→ 该 revision 无条目 → 视图侧取 null 不抛。
+    """
+    ids = {rid for rid in revision_ids if rid is not None}
+    if not ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(ExpertRevision.id, ExpertRevision.content_json)
+            .join(
+                Expert,
+                and_(
+                    Expert.published_revision_id == ExpertRevision.id,
+                    Expert.status == "published",
+                ),
+            )
+            .where(ExpertRevision.id.in_(ids))
+        )
+    ).all()
+    return {
+        row.id: {
+            "name": (row.content_json or {}).get("name"),
+            "avatar_url": (row.content_json or {}).get("avatar_url"),
+        }
+        for row in rows
+    }
 
 
 async def _load_task_view(db: AsyncSession, task_id: _uuid.UUID) -> dict:

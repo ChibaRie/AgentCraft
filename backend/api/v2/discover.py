@@ -4,6 +4,10 @@
 放行 status='published' 行（0001:1075-1079 + 行为测试 test_v2_rls.py:375-402）；
 revision 经 published_read 可见。无 get_v2_auth（无 cookie 即 401，不可用）；
 GET 豁免 CSRF/幂等；限流 discover [ip]（60/h，D12）。
+
+Sup §10.2（Phase 8 T2）：列表项与详情均暴露 published_revision_id——前端召唤
+专家直用作 POST /tasks 的 expert_revision_id，不再二次解析。WHERE 实体
+status='published'（或裸会话 RLS 等效过滤）→ 字段恒为 UUID 非空。
 """
 
 import uuid as _uuid
@@ -130,6 +134,7 @@ async def discover_expert_detail(
         content={
             "data": {
                 "id": str(expert.id),
+                "published_revision_id": str(expert.published_revision_id),
                 "name": content.get("name"),
                 "description": content.get("description"),
                 "avatar_url": content.get("avatar_url"),
@@ -149,6 +154,7 @@ def _card(expert, revision) -> dict:
     content = revision.content_json
     return {
         "id": str(expert.id),
+        "published_revision_id": str(expert.published_revision_id),
         "name": content.get("name"),
         "description": content.get("description"),
         "avatar_url": content.get("avatar_url"),

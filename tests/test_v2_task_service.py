@@ -7,6 +7,7 @@ app 角色会话（owner_tx，GUC 已设）执行——禁 superuser 直跑（�
 
 import asyncio
 import hashlib
+import json
 import uuid as _uuid
 
 import pytest
@@ -15,7 +16,7 @@ from sqlalchemy import text
 
 from backend.config import get_settings
 from backend.errors import AgentCraftError, ErrorCode
-from backend.v2.content_hash import canonical_json
+from backend.v2.content_hash import canonical_json, content_sha256
 from backend.v2.task_service import (
     abort_task,
     commit_input,
@@ -48,6 +49,8 @@ _D14_VIEW_KEYS = {
     "active_round",
     "initial_round",
     "counts",
+    "expert",
+    "provider",
 }
 _FAKE_CATALOG_ID = "00000000-0000-0000-0000-00000000000c"
 
@@ -996,6 +999,101 @@ async def test_get_task_view_d14_shape_and_excludes_lease(pg, app_engine, domain
     assert view["counts"] == {"inputs": 2, "outputs": 0}
     assert view["created_at"].endswith("+00:00")
     assert "lease_owner" not in str(view) and "lease_epoch" not in str(view)
+
+
+async def test_get_task_view_expert_and_provider_display_fields(pg, app_engine, domain):
+    """Sup §10.3（Phase 8 T2）：视图键集增 expert{name,avatar_url}/provider
+    {display_name,model} 展示字段。display_name 经 provider_catalog join（任务快照
+    四键无 display_name），model 直取任务快照；契约键集约束：不加 skills 键
+    （skills 经 discover 详情二次拉取，不进任务视图）。"""
+    uid, pid, _rid, _cid = domain
+    tid = await seed_task_for_provider(pg, uid, pid, status="uploading")
+    content = {"name": "唤起专家", "avatar_url": "https://cdn.example.com/a.png"}
+    async with pg.engine.begin() as conn:  # superuser 回填 content（冻结触发器仅拦 app 上下文）
+        rev_id = (
+            await conn.execute(
+                text("SELECT expert_revision_id FROM tasks WHERE id = CAST(:t AS uuid)"),
+                {"t": tid},
+            )
+        ).scalar_one()
+        await conn.execute(
+            text(
+                "UPDATE expert_revisions SET content_json = CAST(:c AS jsonb), "
+                "content_sha256 = :h WHERE id = CAST(:r AS uuid)"
+            ),
+            {
+                "c": json.dumps(content, ensure_ascii=False),
+                "h": content_sha256(content),
+                "r": str(rev_id),
+            },
+        )
+    async with owner_tx(app_engine, uid) as db:
+        view = await get_task_view(db, owner_id=uid, task_id=tid)
+    assert view["expert"] == {"name": "唤起专家", "avatar_url": "https://cdn.example.com/a.png"}
+    # 0002 种子目录行：api.openai.com → display_name 'OpenAI'；快照 model 直取
+    assert view["provider"] == {"display_name": "OpenAI", "model": "m"}
+    assert "skills" not in view
+
+
+async def test_get_task_view_expert_null_after_takedown_and_republish(pg, app_engine, domain):
+    """Sup §10.3 null 语义（契约审查 I4）：takedown（实体 status→draft、指针不清，
+    §10.6 offline 同语义）后 expert=null 不抛；作者再发布新版（指针前移）后旧
+    revision 脱离「实体当前 published 指针」→ 仍 null（历史任务不回溯旧版内容）。
+    provider 展示不受内容治理影响。"""
+    uid, pid, _rid, _cid = domain
+    tid = await seed_task_for_provider(pg, uid, pid, status="uploading")
+    async with pg.engine.begin() as conn:  # superuser：0006 guard 仅拦 app 上下文
+        await conn.execute(
+            text(
+                "UPDATE experts SET status = 'draft' WHERE id = "
+                "(SELECT expert_id FROM expert_revisions WHERE id = "
+                "(SELECT expert_revision_id FROM tasks WHERE id = CAST(:t AS uuid)))"
+            ),
+            {"t": tid},
+        )
+    async with owner_tx(app_engine, uid) as db:
+        view = await get_task_view(db, owner_id=uid, task_id=tid)
+    assert view["expert"] is None
+    assert view["provider"] is not None
+    # 作者再发布新版：指针前移至 revision_no=2 → 旧 revision 仍不可见
+    async with pg.engine.begin() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT r.expert_id AS expert_id, r.owner_id AS owner_id "
+                    "FROM expert_revisions r JOIN tasks t ON t.expert_revision_id = r.id "
+                    "WHERE t.id = CAST(:t AS uuid)"
+                ),
+                {"t": tid},
+            )
+        ).one()
+        new_rev = (
+            await conn.execute(
+                text(
+                    "INSERT INTO expert_revisions (id, expert_id, owner_id, revision_no, "
+                    "content_json, content_sha256, status) VALUES (gen_random_uuid(), "
+                    "CAST(:e AS uuid), CAST(:o AS uuid), 2, CAST(:c AS jsonb), :h, 'published') "
+                    "RETURNING id"
+                ),
+                {
+                    "e": str(row.expert_id),
+                    "o": str(row.owner_id),
+                    "c": json.dumps({"name": "新版专家"}),
+                    "h": "b" * 64,
+                },
+            )
+        ).scalar_one()
+        await conn.execute(
+            text(
+                "UPDATE experts SET status = 'published', published_revision_id = "
+                "CAST(:r AS uuid) WHERE id = CAST(:e AS uuid)"
+            ),
+            {"r": str(new_rev), "e": str(row.expert_id)},
+        )
+    async with owner_tx(app_engine, uid) as db:
+        after = await get_task_view(db, owner_id=uid, task_id=tid)
+    assert after["expert"] is None
+    assert after["provider"] == view["provider"]
 
 
 async def test_get_task_view_other_owner_404(pg, app_engine, domain):

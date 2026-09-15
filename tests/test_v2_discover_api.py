@@ -210,3 +210,35 @@ async def test_page_size_capped(pg, provider_env):
     client = auth_client()
     resp = await client.get("/api/v2/discover/experts", params={"page_size": 51})
     assert resp.status_code == 400  # Query le=50 → 统一 handler 渲染 VALIDATION_ERROR 信封
+
+
+@pytest.mark.usefixtures("provider_env")
+@pytest.mark.asyncio
+async def test_list_and_detail_expose_published_revision_id(pg, provider_env):
+    """Sup §10.2（Phase 8 T2）：列表项与详情均含 published_revision_id（前端召唤
+    专家直用作 POST /tasks 的 expert_revision_id，免二次解析）；draft 实体不入
+    列表（既有行为回归）。discover WHERE 实体 status='published' → 恒为 UUID 非空。"""
+    author = await seed_active_user(pg, "disc-rev-id@x.com")
+    content = dict(EXPERT_CONTENT, name="指针暴露专家")
+    _, revision_id = await seed_entity_with_revision(
+        pg,
+        author,
+        "experts",
+        entity_status="published",
+        revision_status="published",
+        content_json=content,
+        content_sha256=content_sha256(content),
+        with_pointer=True,
+    )
+    draft_author = await seed_active_user(pg, "disc-rev-id-draft@x.com")
+    await seed_entity_with_revision(pg, draft_author, "experts")  # draft 不可见
+    client = auth_client()
+    listing = await client.get("/api/v2/discover/experts")
+    assert listing.status_code == 200
+    items = listing.json()["data"]["items"]
+    assert [i["name"] for i in items] == ["指针暴露专家"]
+    assert items[0]["published_revision_id"] == revision_id
+    entity_id = await _entity_id_by_revision(pg, revision_id)
+    detail = await client.get(f"/api/v2/discover/experts/{entity_id}")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["published_revision_id"] == revision_id

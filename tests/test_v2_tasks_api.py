@@ -40,6 +40,8 @@ _D14_VIEW_KEYS = {
     "active_round",
     "initial_round",
     "counts",
+    "expert",
+    "provider",
 }
 
 
