@@ -1,4 +1,4 @@
-"""平台工具回调面（Phase 5 收窄后 + Phase 6 T7 全回调四端点）：
+"""平台工具回调面（Phase 5 收窄后 + Phase 6 T7 全回调四端点 + Phase 8 T5b grant）：
 
 - /internal/harness/check-code-style：X-Task-Token 三重校验 +
   tool_catalog.enabled 第二校验（V1 面，零改动）；
@@ -11,18 +11,25 @@
   （403 TOOL_REVOKED）→ permissions 服务端强制（TOOL_CALL_REJECTED 400）。
   permissions 形态闸（含请求形态/content_base64 解码）在 owner 会话内 fence
   之后执行——fenced 旧令牌即便携带畸形请求体也一律 401。
-  用户 MCP 语义已下线（/internal/mcp/call 删除）。
+  用户 MCP 语义已下线（/internal/mcp/call 删除）；
+- /internal/provider-grant：provider-proxy 专用 Key 兑换（Phase 8 T5b，
+  Sup §10.10 D16① 六钉）——proxy 专用凭据（env PROXY_GRANT_SECRET）+
+  V2 任务令牌（仅定位 round）+ epoch fence 同构断言，响应仅从已验 claims
+  派生，审计先行（fail-closed），响应 no-store。
 """
 
 import base64
+import hmac
 import logging
 import uuid as _uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import Settings, get_settings
 from backend.database import get_db
 from backend.dependencies import get_pi_engine_manager
 from backend.engine.pi_engine_manager import PiEngineManager
@@ -31,7 +38,9 @@ from backend.errors import AgentCraftError, ErrorCode
 from backend.models.task import Task
 from backend.services import harness_service
 from backend.services.task_token import TaskTokenInvalid, decode_task_token
-from backend.v2.models import TaskRound
+from backend.v2.models import AuditLog, ProviderCatalog, TaskRound, UserProvider
+from backend.v2.models import Task as V2Task  # V2 任务行（owner_id 语义；V1 Task 属 sqlite 面）
+from backend.v2.provider_crypto import key_sealer
 from backend.v2.runtime import V2Runtime, get_optional_v2_runtime, get_v2_runtime, owner_session
 from backend.v2.task_artifacts import register_output
 from backend.v2.task_file_service import list_input_meta, read_input_bytes
@@ -334,3 +343,111 @@ async def query_task_state_tool(
         excluded = frozenset(str(k) for k in (perms.get("exclude") or ()))
         view = await get_task_view(db, owner_id=claims["owner_id"], task_id=claims["task_id"])
     return {"data": {"task": _strip_lease_fields(view, excluded)}}
+
+
+# ---------------------------------------------------------------------------
+# provider-grant（Phase 8 T5b，Sup §10.10 D16① 六钉）——provider-proxy 专用
+# ---------------------------------------------------------------------------
+
+_GRANT_AUDIT_ACTION = "provider.grant.issue"
+
+
+def _require_proxy_grant_credential(request: Request, settings: Settings) -> None:
+    """钉一：proxy 专用凭据——X-Proxy-Grant-Secret 必须等于 env PROXY_GRANT_SECRET。
+
+    独立 secret 仅注入 provider-proxy env（task 容器 env 禁出现，测试以常量
+    清单钉）；compare_digest 恒定时间比较；服务端未配置/请求缺失/不符统一
+    401，与令牌失败同信封（不区分校验层，internal 纪律）。观测只记层名，
+    不记任何凭据值（红线 §4.7）。
+    """
+    expected = settings.PROXY_GRANT_SECRET
+    provided = request.headers.get("X-Proxy-Grant-Secret", "")
+    if (
+        not expected
+        or not provided
+        or not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
+    ):
+        logger.warning("provider-grant 校验失败 layer=proxy-credential")
+        raise TaskTokenUnauthorized()
+
+
+@router.post("/provider-grant")
+async def provider_grant(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    rt: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """provider-proxy 专用 Key 兑换（Sup §10.10；内部端点，不入公开 API 面）。
+
+    校验链（全部失败统一 401 同信封，不分层）：proxy 凭据（钉一）→
+    decode_v2_task_token（X-Task-Token 仅定位 round，非授权因子）→ epoch
+    fence 复用 /internal/tools 同构断言（钉三：lease_epoch==当前值且轮
+    running，settle 后同令牌自然 401）→ 任务/Provider 行按 fence 后 claims
+    经 owner 会话（RLS 圈定）定位。响应 {model, provider:{api_key,
+    base_target}} 仅从已验 claims 派生（钉二，无 client 可覆写位）；Key
+    解密 AAD 绑定 claims 定位的 provider 行（钉五）；发 Key 先经 admin 会话
+    审计（钉六，audit_logs app role 零授权；audit 失败不发 Key——fail-closed）；
+    响应 no-store（缓存钉）。明文 Key 仅存活于本协程内存，禁缓存禁日志。
+    """
+    _require_proxy_grant_credential(request, settings)
+    try:
+        claims = decode_v2_task_token(request.headers.get("X-Task-Token", ""))
+    except V2TaskTokenInvalid as exc:
+        logger.warning("provider-grant 校验失败 layer=signature")
+        raise TaskTokenUnauthorized() from exc
+
+    async with owner_session(rt, claims["owner_id"]) as db:
+        await _assert_round_live(db, claims)  # 钉三 fence（/internal/tools 同构断言）
+        task = (
+            await db.execute(select(V2Task).where(V2Task.id == _uuid.UUID(claims["task_id"])))
+        ).scalar_one_or_none()
+        if task is None:
+            logger.warning(
+                "provider-grant 校验失败 layer=task-missing task_id=%s", claims["task_id"]
+            )
+            raise TaskTokenUnauthorized()
+        provider = (
+            await db.execute(select(UserProvider).where(UserProvider.id == task.provider_id))
+        ).scalar_one_or_none()
+        catalog = (
+            await db.execute(
+                select(ProviderCatalog).where(ProviderCatalog.id == task.provider_catalog_id)
+            )
+        ).scalar_one_or_none()
+        if provider is None or provider.status != "active" or catalog is None:
+            logger.warning(
+                "provider-grant 校验失败 layer=provider-unusable task_id=%s", claims["task_id"]
+            )
+            raise TaskTokenUnauthorized()
+        # 钉二：响应字段全部取自行数据，行定位全部来自已验 claims（RLS 圈定）
+        model = task.provider_model_id
+        provider_id = str(provider.id)
+        key_ciphertext = provider.key_ciphertext
+        dek_wrapped = provider.dek_wrapped
+        base_target = f"https://{catalog.allowed_host}{catalog.path_prefix}"
+
+    # 钉六：发 Key 先审计（admin 会话独立事务——audit_logs 无 RLS 且 app role
+    # 零授权）；审计失败异常向上 → 500，Key 不出控制面（fail-closed）
+    async with rt.admin_factory() as admin_db:
+        async with admin_db.begin():
+            admin_db.add(
+                AuditLog(
+                    action=_GRANT_AUDIT_ACTION,
+                    target_type="task",
+                    target_id=_uuid.UUID(claims["task_id"]),
+                    reason="provider grant issued for running round",
+                    actor_id=None,
+                    detail={
+                        "task_id": claims["task_id"],
+                        "round_id": claims["round_id"],
+                        "provider_id": provider_id,
+                    },
+                )
+            )
+
+    # 钉五：解密 AAD 绑定 claims 定位的 provider 行（key_sealer 双层解封）
+    api_key = key_sealer().open(key_ciphertext, dek_wrapped, provider_id=provider_id)
+    return JSONResponse(
+        {"model": model, "provider": {"api_key": api_key, "base_target": base_target}},
+        headers={"Cache-Control": "no-store"},
+    )

@@ -23,6 +23,9 @@ services:
       - "8080"
     networks:
       - internal
+    environment:
+      # Sup §10.10 钉一：grant 兑换专用凭据（.env 供给；task 容器 env 禁出现）
+      PROXY_GRANT_SECRET: ${PROXY_GRANT_SECRET:-}
 
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy
