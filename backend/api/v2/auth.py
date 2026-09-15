@@ -14,8 +14,10 @@ Idempotency-Key 必带）以及 ``POST /auth/password-change``（认证端点：
 补端点）；Task 14 增加 ``POST /auth/logout``（认证端点：豁免幂等 A5，撤销当前
 会话 + 清双 cookie）、``GET /auth/sessions``（认证端点：设备会话列表信封）与
 ``DELETE /auth/sessions/{session_id}``（认证端点：Idempotency-Key 必带 A5，
-subject=user、route=含资源 ID 的具体路径；rowcount 0 统一 404，绝不 403）。
-依赖统一定义于 backend.v2.runtime / idempotency / session_service，此处仅消费。
+subject=user、route=含资源 ID 的具体路径；rowcount 0 统一 404，绝不 403）；
+Phase 8 T3 增加 ``POST /auth/mfa/verify``（认证端点：step-up MFA 续期，幂等豁免
+Sup §10.4）。依赖统一定义于 backend.v2.runtime / idempotency / session_service，
+此处仅消费。
 """
 
 import uuid
@@ -29,6 +31,7 @@ from backend.api.v2.schemas import (
     LoginRequest,
     MfaActivateRequest,
     MfaChallengeRequest,
+    MfaVerifyRequest,
     PasswordChangeRequest,
     PasswordResetConfirmRequest,
     PasswordResetRequestRequest,
@@ -299,6 +302,28 @@ async def activate_mfa(
 ) -> JSONResponse:
     """TOTP 注册第二步（认证端点）：验证码正确 → 信封加密落库 + 当前会话盖 MFA 戳。"""
     body = await login_service.activate_mfa(
+        runtime,
+        user_id=str(user_ctx.user.id),
+        session_id=str(user_ctx.session.id),
+        totp_code=payload.totp_code,
+    )
+    return JSONResponse(status_code=200, content=body)
+
+
+@router.post("/auth/mfa/verify")
+async def verify_mfa(
+    payload: MfaVerifyRequest,
+    user_ctx: V2AuthContext = Depends(get_v2_auth),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """step-up MFA 续期（认证端点，Sup §10.4）：重验 TOTP 刷新当前会话 12h MFA 窗。
+
+    认证走 get_v2_auth 门序（会话 cookie → CSRF → 状态门），普通用户即可（非
+    admin 门）；未配置 TOTP 400 MFA_NOT_CONFIGURED，码错 401 MFA_INVALID（失败
+    限流 mfa_failure 在服务层收口，429 优先于 401）。幂等豁免（§10.4 豁免清单
+    追加路径）：不接幂等 begin，响应不入幂等记录。
+    """
+    body = await login_service.verify_mfa(
         runtime,
         user_id=str(user_ctx.user.id),
         session_id=str(user_ctx.session.id),

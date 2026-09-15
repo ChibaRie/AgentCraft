@@ -15,6 +15,9 @@ class ErrorCode(str, Enum):
     ACCOUNT_DELETING = "ACCOUNT_DELETING"
     # —— 会话 ——
     MFA_INVALID = "MFA_INVALID"
+    # 400；step-up MFA verify 未配置 TOTP（Sup §10.4 预布登记，收口并入 §7 正文时
+    # 升格——字面码先例：ENTITLEMENT_ACTIVE/USER_STATUS_CONFLICT/FORBIDDEN）
+    MFA_NOT_CONFIGURED = "MFA_NOT_CONFIGURED"
     CSRF_INVALID = "CSRF_INVALID"
     SESSION_EXPIRED = "SESSION_EXPIRED"
     # 401 语义：登录/再认证凭据校验失败（T12/T13 使用；T15 补遗修订记录登记）

@@ -62,6 +62,16 @@ class MfaActivateRequest(V2BaseModel):
     totp_code: str = Field(min_length=6, max_length=8)
 
 
+class MfaVerifyRequest(V2BaseModel):
+    """POST /auth/mfa/verify 请求体（Phase 8 T3，Sup §10.4）：6-8 位 TOTP 码。
+
+    step-up MFA 续期：认证态重验 TOTP 刷新当前会话 12h MFA 时效（admin 门③）。
+    边界与 MfaActivateRequest 同形（min 6 / max 8）。
+    """
+
+    totp_code: str = Field(min_length=6, max_length=8)
+
+
 class PasswordResetRequestRequest(V2BaseModel):
     """POST /auth/password-reset/request 请求体（Task 12）。
 

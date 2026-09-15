@@ -26,10 +26,10 @@ token_urlsafe(32)；pending secret TTL 10 分钟、按 user_id 键、重复 setu
 进程内单例：多 worker 部署下挑战/注册态不跨进程共享，Phase 2 单进程部署为前提
 （跨进程共享需迁移 DB/Redis，属后续阶段裁决）。
 
-失败限流（A15）：login/mfa 与 activate 的码验证失败统一走 ``mfa_failure`` scope
-（主体 [HMAC(user_id)]，10/900s）；enforce 自管事务先于 attempts 计数与 401——
-超限 429 **替换** 401（契约：429 wins，此时挑战尝试计数不推进）。挑战未知/过期
-不写限流事件（尝试计数归挑战存储）。
+失败限流（A15）：login/mfa、activate 与 step-up verify（Phase 8 T3，Sup §10.4）
+的码验证失败统一走 ``mfa_failure`` scope（主体 [HMAC(user_id)]，10/900s）；enforce
+自管事务先于 attempts 计数与 401——超限 429 **替换** 401（契约：429 wins，此时挑
+战尝试计数不推进）。挑战未知/过期不写限流事件（尝试计数归挑战存储）。
 
 MFA 验证后 5 分钟窗口内的状态漂移（login 放行后被停用）不做二次门：所得会话在
 get_v2_auth 状态门处被拦（suspended/deleting 403），无越权面。
@@ -55,6 +55,7 @@ from backend.v2.session_service import create_session
 # 统一失败文案（契约钉死；状态门文案与 session_service（T7）逐字一致）
 _INVALID_CREDENTIALS_MESSAGE = "账号或密码不正确"
 _MFA_INVALID_MESSAGE = "验证码无效或已过期"
+_MFA_NOT_CONFIGURED_MESSAGE = "尚未配置 TOTP 两步验证"
 _SUSPENDED_MESSAGE = "账户已被停用"
 _DELETING_MESSAGE = "账户注销处理中"
 # V1 约定形状（FORBIDDEN 不在 ErrorCode 注册表；A9 裁决钉死）
@@ -88,6 +89,13 @@ def _invalid_credentials() -> AgentCraftError:
 def _mfa_invalid(status: int) -> AgentCraftError:
     """MFA 统一失败：同码同文案（401 挑战路径 / 400 注册路径）。"""
     return AgentCraftError(ErrorCode.MFA_INVALID, _MFA_INVALID_MESSAGE, http_status=status)
+
+
+def _mfa_not_configured() -> AgentCraftError:
+    """step-up verify 侧未配置 TOTP 显式 400（已认证无枚举面——Sup §10.4 不对称注记）。"""
+    return AgentCraftError(
+        ErrorCode.MFA_NOT_CONFIGURED, _MFA_NOT_CONFIGURED_MESSAGE, http_status=400
+    )
 
 
 # ---------- A13 内存 store：模块级单例，惰性清理，reset() 供测试复位 ----------
@@ -354,6 +362,49 @@ async def login_mfa(
         device_label=device_label,
         mfa_verified=True,
     )
+
+
+async def verify_mfa(runtime: V2Runtime, *, user_id: str, session_id: str, totp_code: str) -> dict:
+    """step-up MFA 续期（Phase 8 T3，Sup §10.4）：认证态重验 TOTP 刷新 12h 窗。
+
+    已认证用户对当前会话重验 TOTP（普通用户即可，非 admin 门）：正确码 → 200
+    ``{data:{mfa_verified:true}}`` 且 ``sessions.mfa_verified_at = now()``（12h 窗
+    重置，admin 门③即刻解除——门读每请求新解析的会话快照，无需重登录）；
+    未配置 TOTP → 400 ``MFA_NOT_CONFIGURED``（已认证无枚举面，与 login 侧统一 401
+    防枚举不对称——§10.4 注记）；码错先 enforce ``mfa_failure``（429 优先于 401）
+    再 401 ``MFA_INVALID``。信封不可解统一 401 不计失败（login_mfa 同款）。幂等
+    豁免（§10.4）：路由不接幂等 begin，重复提交由 mfa_failure 限流兜底。
+    """
+    # admin 只读信封（login_mfa 同款：明文 secret 不驻内存——解密按需）
+    async with runtime.admin_factory() as db:
+        row = (
+            await db.execute(
+                text("SELECT id, mfa_secret_enc FROM users WHERE id = :u"), {"u": user_id}
+            )
+        ).first()
+    if row is None or row.mfa_secret_enc is None:
+        raise _mfa_not_configured()
+    try:
+        secret = decrypt_text(
+            json.loads(row.mfa_secret_enc),
+            aad=mfa_secret_aad(str(row.id)),
+            keyring=_mfa_keyring()[1],
+        )
+    except EncryptionError as exc:
+        raise _mfa_invalid(401) from exc  # 信封损坏/kid 失效：统一 401，不计失败尝试
+    if not pyotp.TOTP(secret).verify(totp_code, valid_window=1):
+        await _enforce_mfa_failure(runtime, user_id)  # 429 优先于 401
+        raise _mfa_invalid(401)
+
+    # owner 上下文盖 MFA 戳（activate_mfa 同款单句 UPDATE；sessions owner-RLS 放行）
+    async with owner_session(runtime, user_id) as db:
+        await db.execute(
+            text(
+                "UPDATE sessions SET mfa_verified_at = now() WHERE id = :sid AND revoked_at IS NULL"
+            ),
+            {"sid": session_id},
+        )
+    return {"data": {"mfa_verified": True}}
 
 
 def setup_mfa(*, user_id: str, email: str) -> dict:
