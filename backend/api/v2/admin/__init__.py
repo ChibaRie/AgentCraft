@@ -16,6 +16,7 @@ from backend.api.v2.admin._deps import (
     get_v2_admin_auth,
     require_admin_reason,
 )
+from backend.api.v2.admin.audit import router as audit_router
 from backend.api.v2.admin.invitations import router as invitations_router
 from backend.api.v2.admin.reviews import router as reviews_router
 from backend.api.v2.admin.users import router as users_router
@@ -28,6 +29,7 @@ admin_api_router = APIRouter()
 admin_api_router.include_router(invitations_router)
 admin_api_router.include_router(reviews_router)
 admin_api_router.include_router(users_router)
+admin_api_router.include_router(audit_router)
 
 __all__ = [
     "admin_api_router",
