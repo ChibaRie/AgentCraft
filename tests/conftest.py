@@ -398,10 +398,19 @@ def _run_migrations(dsn: str) -> None:
     )
 
 
+def _template_db_name() -> str:
+    """模板库名，可经 AC_TEMPLATE_DB_NAME 覆写（默认 ac_template_v2 不变）。
+
+    并行 pytest 会话经不同模板库名隔离：各会话只建/删/克隆自己的模板库，
+    防止对同一模板库 DROP WITH (FORCE) + CREATE 互毁；建模板（pg_template）
+    与克隆（_clone_from_template）必须取同一名字，克隆才跟随本会话的模板。"""
+    return os.environ.get("AC_TEMPLATE_DB_NAME", "ac_template_v2")
+
+
 @pytest.fixture(scope="session")
 def pg_template(pg_url_base):
     """建模板库并跑 v2 迁移；注意：Task 6 之前 versions/ 为空，upgrade 是无害空操作。"""
-    tpl = "ac_template_v2"
+    tpl = _template_db_name()
     admin = _admin_engine(pg_url_base)
 
     async def _recreate():
@@ -430,7 +439,7 @@ class PgDb(NamedTuple):
 async def _clone_from_template(base_url: str, name: str) -> None:
     admin = _admin_engine(base_url)
     async with admin.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{name}" TEMPLATE "ac_template_v2"'))
+        await conn.execute(text(f'CREATE DATABASE "{name}" TEMPLATE "{_template_db_name()}"'))
     await admin.dispose()
 
 
