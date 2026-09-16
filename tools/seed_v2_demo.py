@@ -449,13 +449,17 @@ async def _ensure_demo_task(engine, *, owner_id: _uuid.UUID, catalog: dict, cont
     async with AsyncSession(engine) as session:
         async with session.begin():
             existing = (
-                await session.execute(
-                    select(Task.id).where(
-                        Task.owner_id == owner_id,
-                        Task.expert_revision_id == _uuid.UUID(content["expert_revision_id"]),
+                (
+                    await session.execute(
+                        select(Task.id).where(
+                            Task.owner_id == owner_id,
+                            Task.expert_revision_id == _uuid.UUID(content["expert_revision_id"]),
+                        )
                     )
                 )
-            ).scalar_one_or_none()
+                .scalars()
+                .first()
+            )
             if existing is not None:
                 return {"outcome": "exists", "task_id": str(existing)}
             provider_id = await _ensure_demo_provider(session, owner_id=owner_id, catalog=catalog)
