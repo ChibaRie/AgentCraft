@@ -74,7 +74,7 @@ jobs:
         env:
           AGENTCRAFT_V2_DATABASE_URL: ${{ env.CI_PG_HOST_DSN }}/agentcraft_ci
       - name: Test
-        run: uv run pytest -q --tb=short
+        run: uv run pytest -q --tb=short --cov=backend --cov-report=term-missing --cov-fail-under=80
         env:
           AGENTCRAFT_TEST_PG_URL: ${{ env.CI_PG_HOST_DSN }}
       - name: Alembic drift check

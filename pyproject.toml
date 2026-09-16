@@ -30,6 +30,7 @@ dev = [
     "pytest>=8.2.0",
     "ruff>=0.6.0",
     "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.ruff]
@@ -47,3 +48,21 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.File"]
 [tool.ruff.lint.per-file-ignores]
 # conftest.py 末尾追加的 V2 PostgreSQL 夹具块刻意自带 import（不依赖文件头部引入顺序）
 "tests/conftest.py" = ["E402", "F811"]
+
+
+[tool.coverage.run]
+source = ["backend"]
+omit = [
+    # V1 历史迁移链（D15-Option1 冻结面：不计入是既定裁决的自然延伸）
+    "backend/alembic/*",
+    # D15-Option1 dead-but-alive 冻结面（勿删勿改语义）
+    "backend/engine/pi_engine_manager.py",
+    "backend/api/internal.py",
+    # 工具脚本非库代码
+    "tools/*",
+]
+
+[tool.coverage.report]
+# 覆盖率 gate：低于此值 pytest 退出非零
+fail_under = 80
+show_missing = true

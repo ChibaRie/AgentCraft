@@ -1,5 +1,7 @@
 # AgentCraft：本地 AI 专家工作台
 
+[![Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen)](https://github.com/ChibaRie/AgentCraft)
+
 把领域经验封装为可复用的「专家」：人设 + 方法论 + Skill（能力包）+ MCP 工具，
 发布后供他人召唤。每个任务运行在**本机独立 Docker 沙箱**中的 Pi 编码代理里，
 模型请求经按任务令牌路由的薄代理转发到你自己配置的 Provider（BYOK）。
