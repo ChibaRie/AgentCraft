@@ -9,8 +9,9 @@ Replay 分流形态照抄 api/v2/providers.py:63-65（重放不带 Set-Cookie）
 offline/DELETE 无请求体：request_hash(None)（revoke_provider 同款）。
 """
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import func, select
 
 from backend.api.v2.content_schemas import (
     ExpertContentPayload,
@@ -20,7 +21,9 @@ from backend.api.v2.content_schemas import (
 from backend.api.v2.schemas import V2BaseModel  # noqa: F401  # 导出一致性
 from backend.v2 import author_service, idempotency
 from backend.v2.idempotency import require_key_header
-from backend.v2.runtime import V2Runtime, get_v2_runtime, owner_session
+from backend.v2.models.content import Skill, SkillRevision
+from backend.v2.rate_limit import enforce, hmac_subject
+from backend.v2.runtime import V2Runtime, client_ip, get_v2_runtime, owner_session
 from backend.v2.session_service import V2AuthContext, get_v2_auth
 
 router = APIRouter()
@@ -154,6 +157,67 @@ def _register(domain: str, payload_model, path_prefix: str, tag: str) -> None:
             idem_hash=idempotency.request_hash(None),
         )
         return _replay_or(outcome)
+
+
+# ---------------------------------------------------------------------------
+# 他人 published skill 公开枚举（Phase 9 T2：Sup §10.11(a)）
+# ---------------------------------------------------------------------------
+#
+# 声明位置即契约：必须在 _register（含 /skills/{entity_id} 动态路由）
+# 之前完成声明，否则 /skills/public 会被动态段先匹配。
+
+_SKILL_PUBLIC_PAGE_SIZE_MAX = 50
+
+
+def _public_skill_card(skill: Skill, revision: SkillRevision) -> dict:
+    """非敏感卡五键（Sup §10.11(a)）：不含方法论正文/不含 owner。"""
+    content = revision.content_json
+    return {
+        "id": str(skill.id),
+        "published_revision_id": str(skill.published_revision_id),
+        "name": content.get("name"),
+        "description": content.get("description"),
+        "category": content.get("category"),
+    }
+
+
+@router.get("/skills/public", tags=["authoring"])
+async def list_public_skills(
+    request: Request,
+    status: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=_SKILL_PUBLIC_PAGE_SIZE_MAX),
+    user_ctx: V2AuthContext = Depends(get_v2_auth),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """已发布 skill 公开枚举（限已登录）：裸 app 会话→ skills/skill_revisions
+    published_read policy 仅放行 published 行；status 仅接受 published（缺省
+    即 published）。限流沿 discover 口径：60/h/IP。"""
+    if status is not None and status != "published":
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "VALIDATION_ERROR", "message": "status 仅支持 published"},
+        )
+    async with runtime.app_factory() as db:
+        await enforce(db, scope="discover", subjects=[hmac_subject("ip", client_ip(request))])
+        query = (
+            select(Skill, SkillRevision)
+            .join(SkillRevision, SkillRevision.id == Skill.published_revision_id)
+            .where(Skill.status == "published")
+        )
+        total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
+        rows = (
+            await db.execute(
+                query.order_by(Skill.created_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        ).all()
+        items = [_public_skill_card(skill, revision) for skill, revision in rows]
+    return JSONResponse(
+        status_code=200,
+        content={"data": {"items": items, "total": total, "page": page, "page_size": page_size}},
+    )
 
 
 _register("experts", ExpertContentPayload, "/experts", "authoring")

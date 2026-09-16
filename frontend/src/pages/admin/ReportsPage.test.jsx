@@ -242,6 +242,7 @@ describe("⑤「查看上下文」→ D8 抽屉（reason 前置）", () => {
   it("reason 弹窗（先审计后读提示语）先于读取；提交后 messages/files 带原因查询串", async () => {
     stubByPath({
       "GET /api/admin/reports": () => ok({ items: [REPORT_MSG], total: 1, page: 1, size: 20 }),
+      "GET /api/admin/reports/rp-msg": () => ok({ ...REPORT_MSG, task_id: "t9" }),
       "GET /api/admin/tasks/t9": () =>
         ok({ id: "t9", status: "done", expert: { name: "代码审查专家" }, provider: { display_name: "X", model: "m" } }),
       "GET /api/admin/tasks/t9/messages": () =>
@@ -256,10 +257,9 @@ describe("⑤「查看上下文」→ D8 抽屉（reason 前置）", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
     await flush();
-    // 第一步：任务 id 录入（举报条目不携带任务 id——message 举报 target 为消息 id）
-    fireEvent.change(screen.getByLabelText("任务 ID"), { target: { value: "t9" } });
-    fireEvent.click(screen.getByRole("button", { name: "打开任务上下文" }));
-    await flush();
+    // Phase 9 T2 §10.11(c)：message 类举报先向详情端点解析 task_id，直接进 reason 相位
+    expect(requestV2).toHaveBeenCalledWith("/api/admin/reports/rp-msg", expect.anything());
+    expect(screen.queryByLabelText("任务 ID")).toBeNull();
 
     // reason 前置：此刻尚未发出任何任务读取请求
     expect(screen.getByLabelText(REASON_LABEL)).toBeTruthy();
@@ -299,6 +299,7 @@ describe("⑤「查看上下文」→ D8 抽屉（reason 前置）", () => {
   it("读取失败（404）→ 错误外显于 reason 弹窗，输入保留可直接重试（修复轮 1）", async () => {
     stubByPath({
       "GET /api/admin/reports": () => ok({ items: [REPORT_MSG], total: 1, page: 1, size: 20 }),
+      "GET /api/admin/reports/rp-msg": () => ok({ ...REPORT_MSG, task_id: "t-404" }),
       "GET /api/admin/tasks/t-404": () =>
         Promise.reject(new V2ApiError("NOT_FOUND", "任务不存在", 404)),
     });
@@ -306,9 +307,6 @@ describe("⑤「查看上下文」→ D8 抽屉（reason 前置）", () => {
     await flush();
 
     fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
-    await flush();
-    fireEvent.change(screen.getByLabelText("任务 ID"), { target: { value: "t-404" } });
-    fireEvent.click(screen.getByRole("button", { name: "打开任务上下文" }));
     await flush();
     fireEvent.change(screen.getByLabelText(REASON_LABEL), { target: { value: "举报核查" } });
     await act(async () => {
@@ -322,5 +320,76 @@ describe("⑤「查看上下文」→ D8 抽屉（reason 前置）", () => {
     expect(screen.getByRole("alert").textContent).toContain("任务不存在");
     // 唯一 dialog 即 reason 弹窗本体——读取失败不得打开空抽屉
     expect(screen.getByRole("dialog").textContent).toContain("任务不存在");
+  });
+});
+
+
+describe("⑥ T2 §10.11(c)：举报详情自动解析 task_id（去手录）", () => {
+  it("task_id=null（目标已删）→ 回退手录入口", async () => {
+    stubByPath({
+      "GET /api/admin/reports": () => ok({ items: [REPORT_MSG], total: 1, page: 1, size: 20 }),
+      "GET /api/admin/reports/rp-msg": () => ok({ ...REPORT_MSG, task_id: null }),
+    });
+    renderPage();
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
+    await flush();
+    expect(screen.getByLabelText("任务 ID")).toBeTruthy();
+    expect(screen.getByText(/未能自动解析任务 ID/)).toBeTruthy();
+  });
+
+  it("详情端点失败 → 静默降级手录录入（不阻断处置流）", async () => {
+    stubByPath({
+      "GET /api/admin/reports": () => ok({ items: [REPORT_MSG], total: 1, page: 1, size: 20 }),
+      "GET /api/admin/reports/rp-msg": () =>
+        Promise.reject(new V2ApiError("NOT_FOUND", "举报不存在", 404)),
+    });
+    renderPage();
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
+    await flush();
+    expect(screen.getByLabelText("任务 ID")).toBeTruthy();
+  });
+
+  it("非 message 目标不触发详情请求，直接手录入口", async () => {
+    stubByPath({
+      "GET /api/admin/reports": () => ok({ items: [REPORT_EXPERT], total: 1, page: 1, size: 20 }),
+    });
+    renderPage();
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
+    await flush();
+    expect(screen.getByLabelText("任务 ID")).toBeTruthy();
+    const detailCalls = requestV2.mock.calls.filter(([path]) =>
+      String(path).startsWith("/api/admin/reports/rp-exp")
+    );
+    expect(detailCalls.length).toBe(0);
+  });
+
+  it("抽屉内文件元数据展示 id（T2 §10.11(b)）", async () => {
+    stubByPath({
+      "GET /api/admin/reports": () => ok({ items: [REPORT_MSG], total: 1, page: 1, size: 20 }),
+      "GET /api/admin/reports/rp-msg": () => ok({ ...REPORT_MSG, task_id: "t9" }),
+      "GET /api/admin/tasks/t9": () => ok({ id: "t9", status: "done" }),
+      "GET /api/admin/tasks/t9/messages": () => ok([]),
+      "GET /api/admin/tasks/t9/files": () =>
+        ok([{ id: "f-1", file_name: "out.txt", sha256: "ab".repeat(32), size_bytes: 12, state: "registered" }]),
+    });
+    renderPage();
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
+    await flush();
+    fireEvent.change(screen.getByLabelText(REASON_LABEL), { target: { value: "举报核查" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
+    });
+    await flush();
+
+    expect(screen.getAllByText(/out\.txt/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/可直接喂 admin 产物下载直链/)).toBeTruthy();
   });
 });

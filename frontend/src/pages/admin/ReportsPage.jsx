@@ -3,6 +3,7 @@ import { X } from "@phosphor-icons/react";
 import AdminReasonPrompt from "../../components/AdminReasonPrompt.jsx";
 import { useAdminGate } from "../../components/RequireAdmin.jsx";
 import {
+  getReportDetail,
   getTaskAdmin,
   listReports,
   listTaskFilesAdmin,
@@ -148,6 +149,28 @@ export default function ReportsPage() {
     }
   }
 
+  async function openContext(report) {
+    // message 类举报：先向 T2 详情端点解析 task_id（去手录），失败降级手录入口。
+    if (report.target_type !== "message") {
+      setCtxDraft("");
+      setCtx({ phase: "taskId" });
+      return;
+    }
+    try {
+      const result = await getReportDetail(report.id);
+      const taskId = result.data?.task_id ?? null;
+      if (taskId) {
+        setCtxDraft("");
+        setCtx({ phase: "reason", taskId });
+        return;
+      }
+    } catch {
+      // 录入回退面（解析失败不阻断处置流）
+    }
+    setCtxDraft("");
+    setCtx({ phase: "taskId" });
+  }
+
   function closeDrawer() {
     setCtx(null);
     setCtxMessages([]);
@@ -197,10 +220,7 @@ export default function ReportsPage() {
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"
-                        onClick={() => {
-                          setCtxDraft("");
-                          setCtx({ phase: "taskId" });
-                        }}
+                        onClick={() => openContext(report)}
                       >
                         查看上下文
                       </button>
@@ -314,8 +334,8 @@ export default function ReportsPage() {
               查看任务上下文
             </h3>
             <p className="modal-body">
-              举报条目不携带任务 ID（消息类举报的目标为消息 id）。请录入目标任务 id（可从审计查询的
-              task.message.read 记录或用户任务列表获取）。
+              未能自动解析任务 ID（消息类举报目标为消息 id；目标已删除时详情端点返回 null）。
+              请录入目标任务 id（可从审计查询的 task.message.read 记录或用户任务列表获取）。
             </p>
             <div className="field">
               <label className="field-label" htmlFor="admin-ctx-task-id">
@@ -422,7 +442,8 @@ export default function ReportsPage() {
                   </div>
                 ))}
                 <p className="field-note">
-                  文件仅展示元数据（内容字节不出队）；admin files 列表暂无 id 键，内联下载待 T16 契约 pass 后接入。
+                  文件仅展示元数据（内容字节不出队）；条目已含 id（Phase 9 T2 §10.11(b)），
+                  可直接喂 admin 产物下载直链。
                 </p>
               </section>
             </div>

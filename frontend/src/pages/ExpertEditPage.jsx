@@ -220,8 +220,8 @@ export default function ExpertEditPage({ expertId }) {
     };
   }, [isAuthor, isNew, expertId]);
 
-  // 候选 Skill（本人 published 集；§10.6 注记：作者面列表即数据源，ref 钉
-  // published_revision_id——见报告申报。失败不阻塞编辑，软提示）
+  // 候选 Skill（全平台 published 公开枚举：Phase 9 T2 §10.11(a)，替代旧「本人
+  // published 集」裁量；ref 钉 published_revision_id。失败不阻塞编辑，软提示）
   useEffect(() => {
     if (!isAuthor) {
       return;
@@ -229,7 +229,7 @@ export default function ExpertEditPage({ expertId }) {
     let cancelled = false;
     async function loadCandidates() {
       try {
-        const result = await requestV2(`${V2_AUTHORING_SKILLS}?status=published`);
+        const result = await requestV2(`${V2_AUTHORING_SKILLS}/public`);
         if (!cancelled) {
           setCandidateSkills(result.data ?? []);
         }

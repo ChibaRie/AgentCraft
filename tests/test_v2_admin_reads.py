@@ -233,8 +233,8 @@ async def test_admin_content_reads_reason_gates_400(pg, admin_env):
 
 
 async def test_admin_files_direction_metadata_no_content_and_audit(pg, admin_env):
-    """?direction= 词表过滤（input|output，词表外 400 先于审计）：仅元数据
-    file_name/sha256/size_bytes/state（无 content 字段）；deleted 墓碑不可见；
+    """?direction= 词表过滤（input|output，词表外 400 先于审计）：元数据五键
+    id/file_name/sha256/size_bytes/state（无 content 字段）；deleted 墓碑不可见；
     每次成功读各落一行 task.file_list.read（detail={task_id} 零内容材料）。"""
     uid, _pid, tid = await _seed_task_chain(pg, "t4-files-owner@x.test")
     await seed_input_file(pg, uid, tid, size_bytes=7, file_name="输入.txt")
@@ -253,7 +253,8 @@ async def test_admin_files_direction_metadata_no_content_and_audit(pg, admin_env
         assert resp.status_code == 200
         items = resp.json()["data"]
         assert len(items) == 1
-        assert set(items[0]) == {"file_name", "sha256", "size_bytes", "state"}  # 无 content
+        # Phase 9 T2 §10.11(b)：五键拓 id（内联下载消费）；仍无 content
+        assert set(items[0]) == {"id", "file_name", "sha256", "size_bytes", "state"}
         assert items[0]["file_name"] == "输入.txt"
         assert items[0]["size_bytes"] == 7 and items[0]["state"] == "staged"
         out = await client.get(_F.format(tid=tid), params={"direction": "output", "reason": "核查"})

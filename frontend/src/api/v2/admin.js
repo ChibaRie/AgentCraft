@@ -180,6 +180,14 @@ export function listReports({ page, size } = {}) {
   return requestV2(`${V2_ADMIN}/reports${qs({ page, size })}`, {});
 }
 
+/**
+ * 举报详情（Phase 9 T2：Sup §10.11(c)）：GET /reports/{id}。
+ * 元数据读免 reason；message 目标额外返回 task_id（去手录任务号）。
+ */
+export function getReportDetail(reportId) {
+  return requestV2(`${V2_ADMIN}/reports/${reportId}`, {});
+}
+
 /** 处置举报：POST /reports/{id}/resolve，载荷 {action ∈ dismiss|takedown_revision|ban_author, reason} */
 export function resolveReport({ reportId, action, reason, idempotencyKey }) {
   return requestV2(`${V2_ADMIN}/reports/${reportId}/resolve`, {

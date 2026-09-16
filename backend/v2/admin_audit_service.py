@@ -35,9 +35,9 @@
   **预取落空短路不落审计**，§9.11.4 先例同形）→ INSERT AuditLog（action=
   task.message.read / task.file_list.read，detail={task_id} 零内容材料）→
   **flush 成功后才进读取面**（写失败异常向上 → 端点壳事务回滚拒读）；messages
-  复用冻结 ``list_task_messages``（升序全量正文），files 走四键元数据窄 SELECT
-  （file_name/sha256/size_bytes/state，无内容字节无 storage_key；deleted 墓碑
-  不可见；created_at/id 稳定序），direction 词表校验先于审计（400 零审计）。
+  复用冻结 ``list_task_messages``（升序全量正文），files 走五键元数据窄 SELECT
+  （id/file_name/sha256/size_bytes/state，Phase 9 T2 §10.11(b) 补 id；无内容字节无
+  storage_key；deleted 墓碑不可见；created_at/id 稳定序），direction 词表校验先于审计
 """
 
 import uuid as _uuid
@@ -286,13 +286,19 @@ async def admin_list_task_messages(
 async def _task_file_meta_rows(
     admin_db: AsyncSession, *, tid: _uuid.UUID, direction: str
 ) -> list[dict]:
-    """任务文件元数据窄 SELECT（Sup §10.5 四键 file_name/sha256/size_bytes/
+    """任务文件元数据窄 SELECT（Sup §10.11(b) 五键 id/file_name/sha256/size_bytes/
     state——无内容字节无 storage_key；deleted 墓碑不可见；created_at ASC +
     id ASC 稳定序，task_file_service.list_files 同构）。独立模块级函数：注入
     实证的 sentinel 打点位（test_v2_admin_reads）。"""
     rows = (
         await admin_db.execute(
-            select(TaskFile.file_name, TaskFile.sha256, TaskFile.size_bytes, TaskFile.state)
+            select(
+                TaskFile.id,
+                TaskFile.file_name,
+                TaskFile.sha256,
+                TaskFile.size_bytes,
+                TaskFile.state,
+            )
             .where(
                 TaskFile.task_id == tid,
                 TaskFile.direction == direction,
@@ -303,6 +309,7 @@ async def _task_file_meta_rows(
     ).all()
     return [
         {
+            "id": str(r.id),
             "file_name": r.file_name,
             "sha256": r.sha256,
             "size_bytes": int(r.size_bytes),

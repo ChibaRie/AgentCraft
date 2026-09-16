@@ -3,6 +3,7 @@ import {
   buildArtifactDownloadUrl,
   createInvitation,
   approveRevision,
+  getReportDetail,
   getTaskAdmin,
   getUserDetail,
   grantEntitlement,
@@ -193,6 +194,12 @@ describe("举报域（reports）", () => {
   it("listReports：仅分页参数", async () => {
     await listReports({ page: 1, size: 20 });
     expectCall("GET", "/api/admin/reports?page=1&size=20");
+  });
+
+  it("getReportDetail（T2 §10.11(c)）：GET /reports/{id}（免 reason）", async () => {
+    requestV2.mockResolvedValue({ status: 200, data: { id: "rp-1", task_id: "t-1" } });
+    await getReportDetail("rp-1");
+    expectCall("GET", "/api/admin/reports/rp-1");
   });
 
   it("resolveReport：POST /reports/{id}/resolve 载荷 {action, reason}", async () => {

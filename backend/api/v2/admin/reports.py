@@ -23,6 +23,7 @@ dismiss/takedown 无级联段（store 即响应，同 unsuspend 形态）。路�
 """
 
 import logging
+import uuid as _uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -38,6 +39,7 @@ from backend.api.v2.admin import (
 from backend.v2 import admin_user_service, idempotency, report_service
 from backend.v2.idempotency import require_key_header
 from backend.v2.models.content import Report
+from backend.v2.models.tasking import TaskMessage
 from backend.v2.runtime import V2Runtime, get_v2_runtime
 from backend.v2.session_service import V2AuthContext
 
@@ -60,6 +62,14 @@ class ResolvePayload(BaseModel):
 
     action: str
     reason: str | None = None
+
+
+def _parse_uuid_or_400(value: str) -> _uuid.UUID:
+    """report_id 路径参数解析（非 UUID → 400 VALIDATION_ERROR，沿契约边界注记）。"""
+    try:
+        return _uuid.UUID(str(value))
+    except ValueError:
+        raise _validation("report_id 须为合法 UUID") from None
 
 
 def _validation(message: str) -> HTTPException:
@@ -103,6 +113,36 @@ async def list_reports(
         status_code=200,
         content={"data": {"items": items, "total": total, "page": page, "size": size}},
     )
+
+
+@router.get("/reports/{report_id}")
+async def get_report(
+    report_id: str,
+    ctx: V2AuthContext = Depends(get_v2_admin_auth),
+    runtime: V2Runtime = Depends(get_v2_runtime),
+) -> JSONResponse:
+    """举报详情（Phase 9 T2：Sup §10.11(c)）——元数据读免 reason 免审计（响应仅含
+    举报元数据 + 目标定位 id，不含内容）。message 目标额外解析 task_id（消息
+    行存在→字符串，已删/不存在→null；非 message 目标→null），去管理员手录任务号。
+    非 UUID 路径参数 400 VALIDATION_ERROR；不存在 404 NOT_FOUND。"""
+    rid = _parse_uuid_or_400(report_id)
+    async with runtime.admin_factory() as db:
+        report = (await db.execute(select(Report).where(Report.id == rid))).scalar_one_or_none()
+        if report is None:
+            raise HTTPException(
+                status_code=404, detail={"code": "NOT_FOUND", "message": "举报不存在"}
+            )
+        payload = report_service.report_brief(report)
+        task_id: str | None = None
+        if report.target_type == "message":
+            task_id = (
+                await db.execute(
+                    select(TaskMessage.task_id).where(TaskMessage.id == report.target_id)
+                )
+            ).scalar_one_or_none()
+            task_id = str(task_id) if task_id is not None else None
+        payload["task_id"] = task_id
+    return JSONResponse(status_code=200, content={"data": payload})
 
 
 @router.post("/reports/{report_id}/resolve")

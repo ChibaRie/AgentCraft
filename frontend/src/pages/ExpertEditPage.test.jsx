@@ -46,34 +46,21 @@ const DRAFT_CONTENT = {
   skill_refs: [],
 };
 
-const PUBLISHED_SKILLS = [
+// GET /api/skills/public 卡五键（Phase 9 T2 §10.11(a)：不含方法论正文/owner）
+const PUBLIC_SKILLS = [
   {
     id: SKILL1_ID,
-    status: "published",
     published_revision_id: SKILL1_REV,
-    revision_count: 1,
-    latest_revision: {
-      revision_id: SKILL1_REV,
-      revision_no: 1,
-      status: "approved",
-      content_sha256: "ab".repeat(32),
-      updated_at: "2026-09-09T08:00:00",
-    },
     name: "周报整理",
+    description: "把散落的每日记录汇总为周报。",
+    category: "office",
   },
   {
     id: SKILL2_ID,
-    status: "published",
     published_revision_id: SKILL2_REV,
-    revision_count: 2,
-    latest_revision: {
-      revision_id: "22222222-2222-4333-8444-555555555555",
-      revision_no: 2,
-      status: "draft",
-      content_sha256: "cd".repeat(32),
-      updated_at: "2026-09-12T08:00:00",
-    },
     name: "会议纪要",
+    description: "从会议记录中提炼结论与待办。",
+    category: "office",
   },
 ];
 
@@ -144,7 +131,7 @@ function renderAt(path) {
 /** 编辑模式挂载（并行 GET 详情 + 已发布 skills）并等待落定 */
 async function renderEditLoaded(options = {}) {
   requestV2.mockResolvedValueOnce(ok(detail(options)));
-  requestV2.mockResolvedValueOnce(ok(PUBLISHED_SKILLS));
+  requestV2.mockResolvedValueOnce(ok(PUBLIC_SKILLS));
   renderAt(`/my-experts/${EXPERT_ID}/edit`);
   await flush();
 }
@@ -214,11 +201,11 @@ describe("新建（POST 全量 content_json）", () => {
 });
 
 describe("编辑装载", () => {
-  it("并行 GET 详情与已发布 skills，表单回填最新 revision 的 content_json", async () => {
+  it("并行 GET 详情与公开 skills 枚举，表单回填最新 revision 的 content_json", async () => {
     await renderEditLoaded();
 
     expect(requestV2.mock.calls[0][0]).toBe(`/api/experts/${EXPERT_ID}`);
-    expect(requestV2.mock.calls[1][0]).toBe("/api/skills?status=published");
+    expect(requestV2.mock.calls[1][0]).toBe("/api/skills/public");
     expect(screen.getByLabelText("名称").value).toBe("代码评审专家");
     expect(screen.getByLabelText("方法论").value).toBe("先读结构，再读实现，最后看测试覆盖");
     expect(screen.getByLabelText("任务示例 1").value).toBe("审查这段函数的边界条件");
