@@ -565,3 +565,175 @@
   gap: 10px;
   justify-content: flex-end;
 }
+
+/* ============================================================
+   admin 控制台治理页增量样式（Phase 8 T12b；T12a 申报样式缺口收口：
+   .admin-table/.danger-zone/notice）。设计令牌全取 global.css（墨色
+   单色体系，无新取值）；text-only 块以等宽 + pre-wrap 呈现原文。
+   ============================================================ */
+
+/* ---------- admin 数据表（邀请/用户/审核/举报/目录/审计六页统一基元） ---------- */
+
+.admin-table {
+  width: 100%;
+  margin-top: 16px;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-table thead th {
+  border-bottom: 1px solid var(--hairline-strong);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.admin-table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+/* 行内操作按钮组（处置/查看上下文、停用/白名单等并排换行） */
+.admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ---------- 状态徽标（auto_check 结果；与 v2-session-badge 同构全圆角小徽） ---------- */
+
+.admin-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+/* 未通过徽标：墨色加重表达（系统无红——同 .status-chip.is-failed 惯例） */
+.admin-chip.is-bad {
+  border-color: var(--ink);
+  color: var(--ink-strong);
+}
+
+/* auto_check issue 明细 / 文件元数据列表 */
+.admin-issue-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+
+/* ---------- text-only 文本块（content_json 全文/消息正文/审计详情树） ----------
+   等宽 + pre-wrap + 长串 break：审核员看到的就是字面原文，零 HTML 解析 */
+
+.admin-pre {
+  max-height: 320px;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* JSON 树缩进层级：发丝线左缘 */
+.admin-tree-children {
+  margin-left: 6px;
+  padding-left: 12px;
+  border-left: 1px solid var(--hairline);
+}
+
+.admin-tree-key {
+  color: var(--text-3);
+}
+
+/* ---------- 成功回执/通知（T12a minor ③ notice 缺口收口） ----------
+   中性强调：surface-2 底 + 全强度发丝线，标题 ink-strong（不用 form-alert 的
+   错误语义，也不占用 .page-sub 的弱灰） */
+
+.admin-notice {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  font-size: 13.5px;
+  color: var(--ink);
+}
+
+.admin-notice h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-strong);
+}
+
+.admin-notice ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+/* ---------- 危险区（kill-switch 声明块；T12a minor ③缺口收口） ----------
+   与 .v2-danger-panel 同语言：全强度墨边 + surface-2 底，与常规卡片成层级差 */
+
+.danger-zone {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+}
+
+.danger-zone h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-strong);
+}
+
+.danger-zone p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink);
+}
+
+/* ---------- 处置动作选择行（radio + 说明语） ---------- */
+
+.admin-option-row {
+  display: block;
+  padding: 8px 0;
+  cursor: pointer;
+}
+
+.admin-option-row input[type="radio"] {
+  margin-right: 8px;
+}
+
+.admin-option-row .field-note {
+  margin-left: 6px;
+}
