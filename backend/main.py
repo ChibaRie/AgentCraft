@@ -78,7 +78,7 @@ async def lifespan(_app: FastAPI):
                 await engine.dispose()
 
 
-app = FastAPI(title="AgentCraft API", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="AgentCraft API", version="2.0.0", lifespan=lifespan)
 # 单请求体量上限 = 单次文件数 × 单文件上限 + 32MB 表单余量（防 multipart 预落盘 DoS）
 _settings = get_settings()
 app.add_middleware(
