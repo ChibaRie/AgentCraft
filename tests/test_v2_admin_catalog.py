@@ -27,13 +27,13 @@ from backend.v2.runtime import owner_session
 from backend.v2.session_service import COOKIE_NAME, create_session
 from backend.v2.task_storage import TaskStorage
 from tests import v2_admin_helpers as _vah
-from tests.test_v2_task_executor import (
+from tests.v2_admin_helpers import admin_client
+from tests.v2_executor_helpers import (
     _drain_round_tasks,
     _make_executor,
     _seed_task_tool,
     _wait_prompt,
 )
-from tests.v2_admin_helpers import admin_client
 from tests.v2_provider_helpers import catalog_id_by_host, seed_provider, seed_task_for_provider
 from tests.v2_task_helpers import seed_running_task, seed_task_user
 

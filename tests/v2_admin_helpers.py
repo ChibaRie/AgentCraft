@@ -17,15 +17,19 @@ tests/test_v2_login_mfa.py——_mfa_envelope 形态按 login_mfa.py:90-97 复�
 import base64
 import json
 import uuid as _uuid
+from datetime import datetime, timezone
 
 import httpx
 import pyotp
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import text
 
 from backend.main import app
 from backend.utils.crypto import encrypt_text, make_keyring
 from backend.v2 import login_service
+from backend.v2.author_service import create_entity
+from backend.v2.ids import uuid7
 from backend.v2.runtime import get_v2_runtime, owner_session
 from backend.v2.security import hash_password
 from backend.v2.session_service import COOKIE_NAME, create_session
@@ -112,3 +116,237 @@ async def admin_client(pg, rt, *, email: str) -> tuple[httpx.AsyncClient, str, s
         cookies={COOKIE_NAME: session_token},
     )
     return client, csrf, admin_id
+
+
+# ---------------------------------------------------------------------------
+# 用户管理面共享助手（Phase 9 T6 拆分自 test_v2_admin_users.py 顶部）
+# ---------------------------------------------------------------------------
+
+_USERS = "/api/admin/users"
+_USERS_UA = "AgentCraft-AdminUsersTest/1.0"
+_CANARY_CIPHERTEXT = "CANARY-CIPHERTEXT-never-leak-0123456789"
+
+
+# ---------- 种子与复核助手（superuser 绕 RLS/授权）----------
+
+
+async def _seed_user(
+    pg,
+    email: str,
+    *,
+    status: str = "active",
+    role: str = "user",
+    created_at: datetime | None = None,
+) -> str:
+    """播种普通用户行（app role 无 users INSERT），返回 user id 字符串。"""
+    uid = str(_uuid.uuid4())
+    async with pg.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO users (id, email, password_hash, role, status, "
+                "mfa_secret_enc, created_at) VALUES (:i, :e, 'h', :r, :s, NULL, :ca)"
+            ),
+            {
+                "i": uid,
+                "e": email,
+                "r": role,
+                "s": status,
+                "ca": created_at or datetime.now(timezone.utc),
+            },
+        )
+    return uid
+
+
+async def _seed_task_chain(pg, owner_id: str) -> dict:
+    """播种最小任务前置链（experts/expert_revisions/user_providers），返回外键 id 集合。
+
+    tasks 三外键（expert_revision_id RESTRICT / provider_id RESTRICT）必须先行落位；
+    user_providers 密文用金丝雀字面（detail 无 Key 红线断言的泄漏探针）。
+    """
+    async with pg.engine.begin() as conn:
+        catalog_id = (
+            await conn.execute(text("SELECT id FROM provider_catalog LIMIT 1"))
+        ).scalar_one()
+        expert_id, rev_id, provider_id = str(uuid7()), str(uuid7()), str(uuid7())
+        await conn.execute(
+            text("INSERT INTO experts (id, owner_id, status) VALUES (:i, :o, 'draft')"),
+            {"i": expert_id, "o": owner_id},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO expert_revisions (id, expert_id, owner_id, revision_no, "
+                "content_json, content_sha256, status) "
+                "VALUES (:i, :e, :o, 1, CAST(:cj AS jsonb), :sha, 'draft')"
+            ),
+            {
+                "i": rev_id,
+                "e": expert_id,
+                "o": owner_id,
+                "cj": json.dumps({"name": "seed-expert"}),
+                "sha": "a" * 64,
+            },
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO user_providers (id, user_id, catalog_id, model_id, "
+                "key_ciphertext, dek_wrapped, key_last4, key_version, status, is_default) "
+                "VALUES (:i, :o, :c, 'gpt-4o-mini', :kc, :dw, 'ab12', 1, 'active', false)"
+            ),
+            {
+                "i": provider_id,
+                "o": owner_id,
+                "c": catalog_id,
+                "kc": _CANARY_CIPHERTEXT,
+                "dw": "dw",
+            },
+        )
+        return {
+            "expert_id": expert_id,
+            "revision_id": rev_id,
+            "provider_id": provider_id,
+            "catalog_id": str(catalog_id),
+        }
+
+
+async def _seed_task(pg, owner_id: str, chain: dict, *, status: str = "completed") -> str:
+    tid = str(uuid7())
+    async with pg.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO tasks (id, owner_id, expert_revision_id, provider_id, "
+                "provider_catalog_id, provider_model_id, provider_key_version, status, "
+                "event_sequence) VALUES (:i, :o, :r, :p, :c, 'gpt-4o-mini', 1, :s, 0)"
+            ),
+            {
+                "i": tid,
+                "o": owner_id,
+                "r": chain["revision_id"],
+                "p": chain["provider_id"],
+                "c": chain["catalog_id"],
+                "s": status,
+            },
+        )
+    return tid
+
+
+async def _seed_quota(
+    pg, user_id: str, daily: int, active: int, running: int, retained: int
+) -> None:
+    async with pg.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO user_quotas (user_id, max_daily_tasks, max_active_tasks, "
+                "max_running_tasks, max_retained_storage_bytes) "
+                "VALUES (CAST(:u AS uuid), :d, :a, :r, :s)"
+            ),
+            {"u": user_id, "d": daily, "a": active, "r": running, "s": retained},
+        )
+
+
+async def _seed_usage(pg, user_id: str, active: int, running: int, retained: int) -> None:
+    async with pg.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO user_quota_usage (user_id, active_tasks, running_tasks, "
+                "retained_storage_bytes) VALUES (CAST(:u AS uuid), :a, :r, :s)"
+            ),
+            {"u": user_id, "a": active, "r": running, "s": retained},
+        )
+
+
+async def _one(pg, sql: str, params: dict | None = None) -> dict:
+    async with pg.engine.connect() as conn:
+        return dict((await conn.execute(text(sql), params or {})).mappings().one())
+
+
+async def _count(pg, table: str, where: str = "true", params: dict | None = None) -> int:
+    async with pg.engine.connect() as conn:
+        return (
+            await conn.execute(text(f"SELECT count(*) FROM {table} WHERE {where}"), params or {})
+        ).scalar_one()
+
+
+async def _user_client(pg, rt, *, email: str) -> httpx.AsyncClient:
+    """role='user'（无 TOTP）+ mfa_verified 会话客户端——403 FORBIDDEN 即门序①
+    role 门先行的证据（同 test_v2_admin_invitations.py 形态）。"""
+    uid = str(_uuid.uuid4())
+    async with pg.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO users (id, email, password_hash, role, status, mfa_secret_enc) "
+                "VALUES (:i, :e, 'h', 'user', 'active', NULL)"
+            ),
+            {"i": uid, "e": email},
+        )
+    async with owner_session(rt, uid) as db:
+        token, csrf = await create_session(
+            db, user_id=_uuid.UUID(uid), device_label=_USERS_UA, mfa_verified=True
+        )
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, client=("10.7.0.9", 51002)),
+        base_url="http://testserver",
+        headers={"User-Agent": _USERS_UA, "X-CSRF-Token": csrf},
+        cookies={COOKIE_NAME: token},
+    )
+
+
+async def _rewind_mfa_verified(pg, user_id: str, *, hours: int) -> None:
+    """superuser 回拨会话 mfa_verified_at（sessions owner-RLS，superuser 绕过）。"""
+    async with pg.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE sessions SET mfa_verified_at = now() - make_interval(secs => :s) "
+                "WHERE user_id = CAST(:u AS uuid)"
+            ),
+            {"s": hours * 3600, "u": user_id},
+        )
+
+
+async def _authoring_gate_status(rt, uid: str, key: str) -> int:
+    """直调 authoring 服务探测 expert_author 消费门：403（门闭）/200（门开）。"""
+    try:
+        await create_entity(
+            rt,
+            user_id=uid,
+            target="experts",
+            content={"name": f"gate-probe-{key}"},
+            idem_key=f"gate-{key}",
+            idem_hash="h-" + key,
+        )
+    except HTTPException as exc:
+        return exc.status_code
+    return 200
+
+
+# ---------- 请求助手 ----------
+
+
+async def _put_quotas(client, uid: str, *, body: dict | None = None, key: str = "k-q1"):
+    payload = body if body is not None else {"max_daily_tasks": 10, "reason": "容量评估"}
+    return await client.put(
+        f"{_USERS}/{uid}/quotas", json=payload, headers={"Idempotency-Key": key}
+    )
+
+
+async def _grant(client, uid: str, *, kind: str = "expert_author", key: str = "k-g1"):
+    return await client.post(
+        f"{_USERS}/{uid}/entitlements",
+        json={"kind": kind, "reason": "作者资格审核通过"},
+        headers={"Idempotency-Key": key},
+    )
+
+
+async def _revoke(
+    client,
+    uid: str,
+    *,
+    kind: str = "expert_author",
+    reason: str = "作者资格撤销",
+    key: str = "k-r1",
+):
+    return await client.request(
+        "DELETE",
+        f"{_USERS}/{uid}/entitlements",
+        json={"kind": kind, "reason": reason},
+        headers={"Idempotency-Key": key},
+    )

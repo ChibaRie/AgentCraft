@@ -17,18 +17,27 @@ from backend.v2.rate_limit import LIMITS, hmac_subject
 from backend.v2.task_storage import TaskStorage
 from tests.v2_provider_helpers import (
     auth_client,
-    login,
     seed_active_user,
     seed_provider,
     seed_task_for_provider,
 )
 from tests.v2_task_helpers import (
+    api_env as api_env,  # noqa: F401  # re-export fixture（Phase 9 T6 上移自本模块）
+)
+from tests.v2_task_helpers import (
+    create_task_request as _create_task,
+)
+from tests.v2_task_helpers import (
+    login_client as _login,
+)
+from tests.v2_task_helpers import (
     seed_input_file,
-    seed_published_revision,
     seed_running_task,
 )
+from tests.v2_task_helpers import (
+    seed_login_domain as _seed_domain,
+)
 
-_PASSWORD = "User-Passw0rd!"
 _D14_VIEW_KEYS = {
     "id",
     "status",
@@ -43,46 +52,6 @@ _D14_VIEW_KEYS = {
     "expert",
     "provider",
 }
-
-
-# ---------------------------------------------------------------------------
-# 种子 / 登录助手
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-async def api_env(provider_env, tmp_path):
-    """provider_env 基础上把任务物理存储根钉到 tmp（路由触盘用例统一入口）。"""
-    provider_env.storage = TaskStorage(tmp_path / "task-storage")
-    return provider_env
-
-
-async def _seed_domain(pg, email: str) -> tuple[str, str, str]:
-    """登录态用户（真实密码哈希）+ 默认位 provider + published revision。"""
-    uid = await seed_active_user(pg, email)
-    pid = await seed_provider(pg, uid, is_default=True)
-    rid = await seed_published_revision(pg, uid)
-    return str(uid), str(pid), str(rid)
-
-
-async def _login(pg, email: str):
-    client = auth_client()
-    await login(client, email, _PASSWORD)
-    return client
-
-
-async def _create_task(
-    client,
-    rid: str,
-    pid: str | None = None,
-    *,
-    idem: str = "t8a-create-1",
-    initial: str = "第一句话",
-):
-    body = {"expert_revision_id": rid, "initial_message": initial}
-    if pid is not None:
-        body["provider_id"] = pid
-    return await client.post("/api/tasks", json=body, headers={"Idempotency-Key": idem})
 
 
 async def _upload(client, task_id: str, idem: str, payloads: list[tuple[str, bytes]]):

@@ -15,6 +15,7 @@ import uuid as _uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -204,3 +205,54 @@ async def seed_running_task(pg, uid: str, pid: str) -> str:
             {"t": tid},
         )
     return str(tid)
+
+
+# ---------------------------------------------------------------------------
+# API 面共享助手（Phase 9 T6 前置）：原 test_v2_tasks_api 私有助手，
+# 因 test_v2_task_sse 跨文件 import 而统一上移（拆分前的耦合收敛点）。
+# ---------------------------------------------------------------------------
+
+TASK_PASSWORD = "User-Passw0rd!"
+
+
+@pytest.fixture
+async def api_env(provider_env, tmp_path):
+    """provider_env 基础上把任务物理存储根钉到 tmp（路由触盘用例统一入口）。"""
+    from backend.v2.task_storage import TaskStorage
+
+    provider_env.storage = TaskStorage(tmp_path / "task-storage")
+    return provider_env
+
+
+async def seed_login_domain(pg, email: str) -> tuple[str, str, str]:
+    """登录态用户（真实密码哈希）+ 默认位 provider + published revision。"""
+    from tests.v2_provider_helpers import seed_active_user, seed_provider
+
+    uid = await seed_active_user(pg, email)
+    pid = await seed_provider(pg, uid, is_default=True)
+    rid = await seed_published_revision(pg, uid)
+    return str(uid), str(pid), str(rid)
+
+
+async def login_client(pg, email: str):
+    """真实登录流（双 cookie + CSRF 头）客户端。"""
+    from tests.v2_provider_helpers import auth_client, login
+
+    client = auth_client()
+    await login(client, email, TASK_PASSWORD)
+    return client
+
+
+async def create_task_request(
+    client,
+    rid: str,
+    pid: str | None = None,
+    *,
+    idem: str = "t8a-create-1",
+    initial: str = "第一句话",
+):
+    """POST /api/tasks 薄壳（provider_id 缺省即走默认位解析）。"""
+    body = {"expert_revision_id": rid, "initial_message": initial}
+    if pid is not None:
+        body["provider_id"] = pid
+    return await client.post("/api/tasks", json=body, headers={"Idempotency-Key": idem})
