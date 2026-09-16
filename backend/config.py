@@ -77,8 +77,10 @@ class Settings(BaseSettings):
     # 仅注入 provider-proxy env（task 容器 env 禁出现）。缺省空串 = grant 端点
     # 全量 401（fail-closed），不影响 V1-only 模式
     PROXY_GRANT_SECRET: str = ""
-    # provider-proxy 兑换 grant 的控制面端点完整 URL（compose 内网服务名 control）
-    PROVIDER_PROXY_GRANT_URL: str = "http://control:8000/internal/provider-grant"
+    # provider-proxy 兑换 grant 的控制面端点完整 URL：agentcraft-control 为 internal
+    # 网络内控制面别名——dev 形态由后端转发容器提供，compose 形态由 control
+    # 服务网络别名提供（Phase 9 T1 接线，D16② 闭环）
+    PROVIDER_PROXY_GRANT_URL: str = "http://agentcraft-control:8000/internal/provider-grant"
     MAIL_TRANSPORT: str = "console"  # outbox 传输选择：console | mailegress（部署阶段接线）
     SESSION_COOKIE_SECURE: bool = True  # dev 经 http://localhost 浏览器豁免；LAN 调试可关
     LOG_LEVEL: str = "INFO"

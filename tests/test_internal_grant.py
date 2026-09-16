@@ -271,3 +271,42 @@ def test_compose_grant_secret_only_on_proxy_service():
     assert "PROXY_GRANT_SECRET" in proxy_block
     assert "PROXY_GRANT_SECRET" not in head
     assert "PROXY_GRANT_SECRET" not in tail
+
+
+# ---------------------------------------------------------------------------
+# 顶一拓扑面（Phase 9 T1：D16② 接线）
+# ---------------------------------------------------------------------------
+
+
+def test_default_grant_url_targets_internal_alias():
+    """默认 grant URL 必须走 internal 网络内控制面别名 agentcraft-control：
+    dev 形态由后端转发容器提供该别名，compose 形态由 control 服务网络别名
+    提供——两者同名才能共用一份默认配置。旧默认 http://control:8000 在 dev
+    形态下 DNS 不可达（D16② 原缺口）。"""
+    from backend.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.PROVIDER_PROXY_GRANT_URL == (
+        "http://agentcraft-control:8000/internal/provider-grant"
+    )
+
+
+def test_compose_wires_grant_topology():
+    """compose 拓扑面：control 加入 internal 网络并携带 agentcraft-control
+    别名（proxy 侧 grant 兑换可达），且 proxy 服务显式声明
+    PROVIDER_PROXY_GRANT_URL；pi-worker 面不得出现 grant 相关配置。"""
+    compose = (Path(__file__).resolve().parents[1] / "docker" / "docker-compose.yml").read_text(
+        encoding="utf-8"
+    )
+    control_block = compose.partition("\n  control:")[2].partition("\n  provider-proxy:")[0]
+    assert "agentcraft-control" in control_block
+    assert "internal:" in control_block
+
+    proxy_block = compose.partition("\n  provider-proxy:")[2].partition("\n  docker-socket-proxy:")[
+        0
+    ]
+    assert "PROVIDER_PROXY_GRANT_URL" in proxy_block
+
+    worker_block = compose.partition("\n  pi-worker:")[2].partition("\nnetworks:")[0]
+    assert "PROVIDER_PROXY_GRANT_URL" not in worker_block
+    assert "PROXY_GRANT_SECRET" not in worker_block
