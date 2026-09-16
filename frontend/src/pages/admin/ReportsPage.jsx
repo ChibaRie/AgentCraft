@@ -127,7 +127,6 @@ export default function ReportsPage() {
   }
 
   async function loadContext(taskId, reason) {
-    setCtxAlert("");
     try {
       const [snapshot, messages, filesInput, filesOutput] = await Promise.all([
         getTaskAdmin(taskId),
@@ -140,10 +139,12 @@ export default function ReportsPage() {
       setCtx({ phase: "drawer", taskId, snapshot: snapshot.data ?? null });
     } catch (error) {
       if (gateRef.current.reportAdminError(error, () => loadContext(taskId, reason))) {
+        // 403 数据面已由 gate 接管（MFA 卡/重探测）；onClose 走 reason 相位清空
         return;
       }
-      setCtxAlert(describeError(error));
-      setCtx(null);
+      // 失败反馈外显（修复轮 1）：重抛给 AdminReasonPrompt——弹窗保持打开、
+      // reason 输入与幂等键保留（R3），同 reason 可直接重试读取（读审计按次落行）
+      throw error;
     }
   }
 

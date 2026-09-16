@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuth } from "../../auth/AuthContext.jsx";
-import { requestV2 } from "../../api/v2/client.js";
+import { requestV2, V2ApiError } from "../../api/v2/client.js";
 import RequireAdmin from "../../components/RequireAdmin.jsx";
 import ReportsPage from "./ReportsPage.jsx";
 
@@ -294,5 +294,33 @@ describe("⑤「查看上下文」→ D8 抽屉（reason 前置）", () => {
     expect(drawerText).toContain("帮我看看这段代码");
     expect(drawerText).toContain("<b>加粗诱导</b>内容");
     expect(document.querySelector("b")).toBeNull();
+  });
+
+  it("读取失败（404）→ 错误外显于 reason 弹窗，输入保留可直接重试（修复轮 1）", async () => {
+    stubByPath({
+      "GET /api/admin/reports": () => ok({ items: [REPORT_MSG], total: 1, page: 1, size: 20 }),
+      "GET /api/admin/tasks/t-404": () =>
+        Promise.reject(new V2ApiError("NOT_FOUND", "任务不存在", 404)),
+    });
+    renderPage();
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
+    await flush();
+    fireEvent.change(screen.getByLabelText("任务 ID"), { target: { value: "t-404" } });
+    fireEvent.click(screen.getByRole("button", { name: "打开任务上下文" }));
+    await flush();
+    fireEvent.change(screen.getByLabelText(REASON_LABEL), { target: { value: "举报核查" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
+    });
+    await flush();
+
+    // 静默关闭回归断言：reason 弹窗保持打开（相位保持），错误弹窗内联外显
+    const prompt = screen.getByLabelText(REASON_LABEL);
+    expect(prompt.value).toBe("举报核查");
+    expect(screen.getByRole("alert").textContent).toContain("任务不存在");
+    // 唯一 dialog 即 reason 弹窗本体——读取失败不得打开空抽屉
+    expect(screen.getByRole("dialog").textContent).toContain("任务不存在");
   });
 });
