@@ -1,23 +1,430 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Paperclip, Plus, Stop, Warning, XCircle, Trash } from "@phosphor-icons/react";
-import { request } from "../api/client.js";
-import { SseClient } from "../api/sse.js";
+import { ArrowLeft, Plus, Stop, Trash, Warning, XCircle } from "@phosphor-icons/react";
+import { V2ApiError, newIdempotencyKey, requestV2 } from "../api/v2/client.js";
+import { createTaskStream, fetchEvents } from "../api/v2/sse.js";
+import { V2_TASKS } from "../api/v2/routes.js";
 import MessageList from "../components/MessageList.jsx";
 import TaskContextPanel from "../components/TaskContextPanel.jsx";
-import { formatBytes } from "../lib/format.js";
 import { formatDateTime } from "../lib/datetime.js";
+import { TASK_STATUS_LABELS } from "../lib/taskDisplay.js";
 
-const STATUS_LABELS = {
-  created: "待开始",
-  running: "进行中",
-  completed: "已结束",
-  failed: "异常",
-};
+/**
+ * P09 任务对话页（Phase 8 T9 按 detached 执行模型全量重建；契约 = Sup §1.2/§1.3/
+ * §4/§9.10.2/§9.10.8 + §10.3）。
+ *
+ * 数据编排（组件内纯 reducer `taskChatReducer`，便于测试）：
+ * - 初始五端点并行装配：任务快照 + messages?after=0 + files(input/output) + artifacts；
+ * - 流消费 `createTaskStream({taskId, after: snapshot.event_sequence, ...})`（T8 冻结
+ *   签名）：text_delta/thinking_delta 入瞬态流式缓冲；message_saved 无正文帧 → 经
+ *   GET messages?after=<该帧前水位> 回补**替换** delta 缓冲；status_changed 状态迁移
+ *   （终态丢弃未落库半截渲染）；done 轮终局刷新；queued/tool_event 对应 UI；
+ * - **应用序单调约束（安全审查 I-6.2）**：sequence ≤ 已应用水位的持久帧/事件一律丢弃
+ *   （防重连窗口 /events 补拉与实时帧并发到达乱序替换）；
+ * - 重连对账：onEvents 逐帧幂等应用；快照水位领先时经 fetchEvents 分页续补（以已应用
+ *   水位为游标循环拉取直至追平快照水位——T9 对账续补方案=分页续补，报告已申报）；
+ * - 发消息：仅 ready 可发 → POST messages（幂等键）202 → 响应 event_sequence 直接
+ *   校准水位（其下持久帧按单调约束丢弃，用户消息经响应 message.event_sequence 回补）；
+ *   429 TASK_ROUND_BUSY/Retry-After 面向用户；
+ * - abort/complete/delete 新语义：幂等键；running 分支 202 {round:{state:"cancelling"}}
+ *   显示「终止中」直到 status_changed 终态帧收敛；404 信封引导退出任务页。
+ */
 
+const TERMINAL_STATUSES = new Set(["completed", "failed", "aborted", "deleted"]);
+// abort/complete 的受理状态集（Sup §1.2:29/30——uploading 用 DELETE 终态化，终态 409）
+const ACTIONABLE_STATUSES = ["queued", "running", "ready"];
+const MESSAGE_MAX_CHARS = 65536;
+const MESSAGES_PAGE_LIMIT = 200;
+const SIDEBAR_PAGE_SIZE = 50;
 // 用户上翻回看时停止自动滚底的容差（像素）
 const AUTOSCROLL_THRESHOLD_PX = 120;
 
+const ABORT_REASON_LABELS = {
+  user_cancel: "用户取消",
+  round_failed: "执行失败",
+  upload_expired: "上传超时",
+  provider_key_revoked: "Provider 凭据已撤销",
+  tool_revoked: "工具已停用",
+  admin_suspended: "账号被停用",
+};
+
+const EMPTY_STREAMING = Object.freeze({ active: false, text: "", thinking: "", toolCalls: [] });
+
+function messagesPath(taskId, after) {
+  return `${V2_TASKS}/${encodeURIComponent(taskId)}/messages?after=${Math.max(0, after)}&limit=${MESSAGES_PAGE_LIMIT}`;
+}
+
+// ---------------------------------------------------------------------------
+// 纯 reducer（应用序单调约束在此收口；导出供测试直测）
+// ---------------------------------------------------------------------------
+
+export const initialTaskChatState = {
+  phase: "loading", // loading | loaded | missing | error
+  loadError: null,
+  task: null,
+  messages: [],
+  watermark: 0, // 已应用事件水位（I-6.2 单调闸）
+  inputFiles: [],
+  artifacts: [],
+  pendingRefetchAfter: null, // messages 回补游标（最小待拉 event_sequence - 1）
+  pendingReplaceSeq: null, // 待替换 delta 缓冲的 message_saved sequence
+  reconcileTarget: null, // 对账目标水位（快照 watermark 领先时触发分页续补）
+  finalizing: false, // done → 轮终局刷新在途
+  pendingUser: null, // {content, messageSeq} 发送乐观位
+  roundCancelling: false, // abort/complete 202 受理 → status_changed 终态帧前显示「终止中」
+  streaming: EMPTY_STREAMING,
+  notice: null,
+};
+
+/** 历史消息合并：按 id 去重（服务端权威覆盖）、按 event_sequence 升序。 */
+function mergeMessages(existing, incoming) {
+  const byId = new Map();
+  for (const message of existing) {
+    byId.set(message.id, message);
+  }
+  for (const message of incoming ?? []) {
+    if (message && message.id) {
+      byId.set(message.id, message);
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.event_sequence - b.event_sequence);
+}
+
+/** 消息页满 → 以页尾 event_sequence 为游标续拉下一页（limit 上限 200 的分页续补）。 */
+function continuationCursor(messages) {
+  if (!Array.isArray(messages) || messages.length < MESSAGES_PAGE_LIMIT) {
+    return null;
+  }
+  return messages.reduce((max, message) => Math.max(max, message.event_sequence ?? 0), 0);
+}
+
+function withStreaming(state, patch) {
+  return { ...state, streaming: { ...state.streaming, ...patch } };
+}
+
+/** 终态迁移：丢弃未落库半截渲染 + 解除「终止中」（Sup §1.3:50）。 */
+function withTerminalClear(state, status) {
+  if (!TERMINAL_STATUSES.has(status)) {
+    return status === "running" ? { ...state, roundCancelling: false } : state;
+  }
+  return { ...state, streaming: EMPTY_STREAMING, roundCancelling: false };
+}
+
+function applyStatusChanged(state, data) {
+  const status = data?.status;
+  if (typeof status !== "string" || !state.task) {
+    return state;
+  }
+  const task = {
+    ...state.task,
+    status,
+    abort_reason: data.abort_reason ?? state.task.abort_reason,
+  };
+  return withTerminalClear({ ...state, task }, status);
+}
+
+function applyMessageSaved(state, seq) {
+  const after = Math.max(0, seq - 1);
+  return {
+    ...state,
+    pendingRefetchAfter: Math.min(state.pendingRefetchAfter ?? after, after),
+    pendingReplaceSeq: seq,
+  };
+}
+
+function applyToolEvent(state, data) {
+  const calls = state.streaming.toolCalls;
+  if (data?.status === "start") {
+    return withStreaming(state, {
+      active: true,
+      toolCalls: [
+        ...calls,
+        { name: data.name ?? "工具调用", args: data.args ?? null, status: "running", result: null },
+      ],
+    });
+  }
+  if (data?.status === "end") {
+    const next = [...calls];
+    for (let i = next.length - 1; i >= 0; i -= 1) {
+      if (next[i].name === data.name && next[i].status === "running") {
+        next[i] = { ...next[i], status: data.isError ? "error" : "end", result: data.result ?? "" };
+        break;
+      }
+    }
+    return withStreaming(state, { active: true, toolCalls: next });
+  }
+  return state; // update：忽略（增量无独立展示，V1 同型）
+}
+
+/** 单帧应用（帧类型词表 = Sup §1.3:38-46）。未知类型静默忽略（前向兼容）。 */
+function applyFrameEvent(state, event, data, seq) {
+  switch (event) {
+    case "text_delta":
+      return withStreaming(state, { active: true, text: state.streaming.text + String(data?.delta ?? "") });
+    case "thinking_delta":
+      return withStreaming(state, { active: true, thinking: state.streaming.thinking + String(data?.delta ?? "") });
+    case "tool_event":
+      return applyToolEvent(state, data);
+    case "message_saved":
+      return applyMessageSaved(state, seq);
+    case "status_changed":
+      return applyStatusChanged(state, data);
+    case "done":
+      // 轮终局：流式气泡收场 + 触发终局刷新（终局收敛经终局刷新兜底）
+      return { ...state, streaming: EMPTY_STREAMING, finalizing: true };
+    case "queued":
+      return { ...state, notice: "任务已进入排队，等待运行槽位分配。" };
+    case "error":
+      return {
+        ...state,
+        notice: data?.recoverable ? `${data.message ?? "执行出错"}（可重试）` : data?.message ?? "执行出错",
+      };
+    default:
+      return state; // meta 等：瞬态帧无消费规则（快照已由初始装配提供）
+  }
+}
+
+/**
+ * 帧应用入口（I-6.2）：持久帧（id 非 null）sequence ≤ 已应用水位整体丢弃；
+ * 通过后应用并以该 sequence 推进水位；瞬态帧不动水位。
+ */
+function applySequencedFrame(state, id, event, data) {
+  if (id !== null) {
+    if (id <= state.watermark) {
+      return state;
+    }
+    return { ...applyFrameEvent(state, event, data, id), watermark: id };
+  }
+  return applyFrameEvent(state, event, data, null);
+}
+
+/** 快照字段收敛（abort/complete/delete 响应的 task 视图 → 本地快照）。 */
+function pickSnapshotFields(task) {
+  return {
+    status: task.status,
+    abort_reason: task.abort_reason,
+    active_round: task.active_round ?? null,
+    initial_round: task.initial_round ?? null,
+    counts: task.counts ?? null,
+  };
+}
+
+function mergeBackfilledMessages(state, incoming) {
+  const usable = (incoming ?? []).filter((message) => message && message.id);
+  if (usable.length === 0) {
+    return state;
+  }
+  let next = { ...state, messages: mergeMessages(state.messages, usable) };
+  // 发送乐观位收敛：落库用户消息（响应 message.event_sequence）到位即撤
+  if (
+    next.pendingUser &&
+    usable.some((m) => m.author === "user" && m.event_sequence === next.pendingUser.messageSeq)
+  ) {
+    next = { ...next, pendingUser: null };
+  }
+  // assistant 落库 → 以权威正文替换对应 delta 缓冲（仅限帧宣告的那条消息）
+  if (usable.some((m) => m.author === "assistant" && m.event_sequence === state.pendingReplaceSeq)) {
+    next = {
+      ...next,
+      streaming: { ...next.streaming, text: "", thinking: "" },
+      pendingReplaceSeq: null,
+    };
+  }
+  // tool 落库 → 已结束的流内工具卡由历史卡片接管（防双渲染）
+  if (usable.some((m) => m.author === "tool")) {
+    next = {
+      ...next,
+      streaming: {
+        ...next.streaming,
+        toolCalls: next.streaming.toolCalls.filter((call) => call.status === "running"),
+      },
+    };
+  }
+  return next;
+}
+
+export function taskChatReducer(state, action) {
+  switch (action.type) {
+    case "LOAD_SUCCEEDED": {
+      const task = action.task;
+      const messages = mergeMessages([], action.messages);
+      return {
+        ...state,
+        phase: "loaded",
+        task,
+        messages,
+        inputFiles: action.inputFiles ?? [],
+        artifacts: action.artifacts ?? [],
+        watermark:
+          Number.isInteger(task?.event_sequence) && task.event_sequence > 0
+            ? task.event_sequence
+            : state.watermark,
+        pendingRefetchAfter: continuationCursor(messages) ?? state.pendingRefetchAfter,
+      };
+    }
+    case "LOAD_MISSING":
+      return { ...state, phase: "missing" };
+    case "LOAD_FAILED":
+      return { ...state, phase: "error", loadError: action.message ?? "加载失败，请稍后重试" };
+    case "FRAME": {
+      const id = Number.isInteger(action.id) && action.id > 0 ? action.id : null;
+      return applySequencedFrame(state, id, action.event, action.data);
+    }
+    case "EVENTS_APPLIED": {
+      let next = state;
+      for (const item of action.events ?? []) {
+        const seq = Number(item?.sequence);
+        const id = Number.isInteger(seq) && seq > 0 ? seq : null;
+        next = applySequencedFrame(next, id, String(item?.type ?? "message"), item);
+      }
+      const snapshot = action.snapshot;
+      if (snapshot && next.task && typeof snapshot.status === "string") {
+        next = {
+          ...next,
+          task: {
+            ...next.task,
+            status: snapshot.status,
+            abort_reason: snapshot.abort_reason ?? next.task.abort_reason,
+          },
+        };
+      }
+      const target = Number(snapshot?.event_sequence);
+      if (Number.isInteger(target) && target > next.watermark) {
+        next = { ...next, reconcileTarget: Math.max(next.reconcileTarget ?? 0, target) };
+      }
+      if (next.reconcileTarget !== null && next.watermark >= next.reconcileTarget) {
+        next = { ...next, reconcileTarget: null };
+      }
+      return next;
+    }
+    case "RECONCILE_GIVE_UP":
+      // 单页拉空仍落后目标（理论不可达）：接受本轮不追平，下次重连收敛
+      return { ...state, reconcileTarget: null };
+    case "MESSAGES_MERGED": {
+      const next = mergeBackfilledMessages(state, action.messages);
+      const continuation = continuationCursor(action.messages);
+      if (continuation !== null) {
+        // 页满续拉优先于游标清除（分页未到尾页）
+        return { ...next, pendingRefetchAfter: Math.max(continuation, next.pendingRefetchAfter ?? 0) };
+      }
+      if (state.pendingRefetchAfter === action.after) {
+        return { ...next, pendingRefetchAfter: null };
+      }
+      return next;
+    }
+    case "REFETCH_FAILED":
+      // 回补失败：清除游标防死循环；done 终局刷新与下一次 message_saved 帧兜底
+      return state.pendingRefetchAfter === action.after
+        ? { ...state, pendingRefetchAfter: null }
+        : state;
+    case "SEND_ACCEPTED": {
+      const { content, messageSeq, watermarkSeq } = action;
+      let next = { ...state, notice: null, pendingUser: { content, messageSeq } };
+      if (Number.isInteger(watermarkSeq) && watermarkSeq > state.watermark) {
+        next = { ...next, watermark: watermarkSeq };
+      }
+      if (Number.isInteger(messageSeq)) {
+        const after = Math.max(0, messageSeq - 1);
+        next = { ...next, pendingRefetchAfter: Math.min(next.pendingRefetchAfter ?? after, after) };
+      }
+      if (next.task) {
+        // 发送事务 ready→queued（Sup §1.2:25）；对应帧 ≤ 校准水位，由本处直改承接
+        next = { ...next, task: { ...next.task, status: "queued" } };
+      }
+      return next;
+    }
+    case "TERMINAL_ACCEPTED": {
+      let next = { ...state, roundCancelling: Boolean(action.cancelling) };
+      if (action.task && next.task) {
+        next = { ...next, task: { ...next.task, ...pickSnapshotFields(action.task) } };
+      }
+      if (next.task && TERMINAL_STATUSES.has(next.task.status)) {
+        next = { ...next, streaming: EMPTY_STREAMING, roundCancelling: false };
+      }
+      return next;
+    }
+    case "ROUND_FINALIZED": {
+      let next = { ...state, finalizing: false, streaming: EMPTY_STREAMING };
+      if (action.task && next.task) {
+        next = { ...next, task: { ...next.task, ...pickSnapshotFields(action.task) } };
+      }
+      if (action.inputFiles) {
+        next = { ...next, inputFiles: action.inputFiles };
+      }
+      if (action.artifacts) {
+        next = { ...next, artifacts: action.artifacts };
+      }
+      if (action.messages) {
+        next = { ...next, messages: mergeMessages(next.messages, action.messages) };
+        if (
+          next.pendingUser &&
+          (next.pendingUser.messageSeq === null ||
+            action.messages.some(
+              (m) => m.author === "user" && m.event_sequence === next.pendingUser.messageSeq
+            ))
+        ) {
+          // 落库行到位即撤乐观位；202 响应缺 message.event_sequence（异常形态）时终局兜底
+          next = { ...next, pendingUser: null };
+        }
+      }
+      return next;
+    }
+    case "STREAM_ERROR":
+      if (action.status === 403) {
+        return { ...state, notice: action.message ?? "无权访问该任务" };
+      }
+      return { ...state, notice: "事件流连接中断，正在自动重连…" };
+    case "NOTICE_SET":
+      return { ...state, notice: action.notice };
+    case "NOTICE_CLEARED":
+      return { ...state, notice: null };
+    case "RESET":
+      return initialTaskChatState;
+    default:
+      return state;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 数据装载（五端点并行）
+// ---------------------------------------------------------------------------
+
+/** 初始装配：快照 + messages?after=0 + files(input/output) + artifacts（Sup §1.2/§4）。 */
+async function loadTaskBundle(taskId) {
+  const base = `${V2_TASKS}/${encodeURIComponent(taskId)}`;
+  const [taskRes, msgRes, inputRes, outputRes, artifactRes] = await Promise.all([
+    requestV2(base),
+    requestV2(messagesPath(taskId, 0)),
+    requestV2(`${base}/files?direction=input`),
+    requestV2(`${base}/files?direction=output`),
+    requestV2(`${base}/artifacts`),
+  ]);
+  const task = taskRes.data?.task ?? null;
+  if (!task) {
+    throw new V2ApiError("INVALID_RESPONSE", "任务快照缺少 task 字段", taskRes.status);
+  }
+  return {
+    task,
+    messages: Array.isArray(msgRes.data) ? msgRes.data : [],
+    inputFiles: Array.isArray(inputRes.data) ? inputRes.data : [],
+    artifacts: Array.isArray(artifactRes.data) ? artifactRes.data : [],
+  };
+}
+
+function describeSendError(cause) {
+  if (cause instanceof V2ApiError && cause.code === "TASK_ROUND_BUSY") {
+    const wait =
+      Number.isFinite(cause.retryAfter) && cause.retryAfter > 0 ? `（约 ${cause.retryAfter} 秒后可重试）` : "";
+    return `当前轮次尚未结束，请等待本轮回复完成后再发送${wait}`;
+  }
+  return cause?.message ?? "发送失败，请稍后重试";
+}
+
+// ---------------------------------------------------------------------------
+// 视图子组件
+// ---------------------------------------------------------------------------
+
+/** 左侧任务列表（V2_TASKS 列表面；辅助导航，失败静默）。 */
 function TaskSidebar({ tasks, activeId }) {
   return (
     <aside className="task-sidebar rise" aria-label="任务列表">
@@ -31,10 +438,10 @@ function TaskSidebar({ tasks, activeId }) {
               to={`/tasks/${task.id}`}
               className={"task-sidebar-item" + (task.id === activeId ? " is-active" : "")}
             >
-              <span className="task-sidebar-title">{task.title}</span>
+              <span className="task-sidebar-title">{task.expert?.name || "未命名任务"}</span>
               <span className="task-sidebar-meta">
                 <span className={`status-chip is-${task.status}`}>
-                  {STATUS_LABELS[task.status] || task.status}
+                  {TASK_STATUS_LABELS[task.status] || task.status}
                 </span>
                 <time>{formatDateTime(task.created_at)}</time>
               </span>
@@ -46,102 +453,203 @@ function TaskSidebar({ tasks, activeId }) {
   );
 }
 
-/** P09 任务对话页：左侧任务列表 + 消息流式渲染 + 任务活跃期可上传附件。
+function NoticeBanner({ notice, onClear }) {
+  return (
+    <div className="task-notice" role="alert">
+      <Warning size={15} aria-hidden="true" />
+      <span>{notice}</span>
+      <button type="button" className="task-notice-close" aria-label="关闭提示" onClick={onClear}>
+        ×
+      </button>
+    </div>
+  );
+}
 
-  切换任务时中止在途 SSE 流并重置全部状态；refresh 带乱序守卫，
-  过期响应直接丢弃；流结束后以服务端历史对账，对账失败保留乐观回复并提示。
-  */
+// ---------------------------------------------------------------------------
+// 页面
+// ---------------------------------------------------------------------------
+
+/** P09 任务对话页：detached 模型——SSE 实时流 + /events 对账兜底 + 幂等发送。 */
 export default function TaskChatPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const taskId = id ? Number(id) : null;
+  const taskId = id ? String(id) : null;
 
-  const [tasks, setTasks] = useState([]);
-  const [task, setTask] = useState(null);
-  const [isMissing, setIsMissing] = useState(false);
-  const [loadError, setLoadError] = useState(null);
-  const [notice, setNotice] = useState(null);
-
-  const [streaming, setStreaming] = useState({
-    active: false,
-    text: "",
-    thinking: "",
-    toolCalls: [],
-  });
-  const [pendingUser, setPendingUser] = useState(null);
-  // 对账失败时保留本次回复的乐观渲染，避免已显示内容凭空消失
-  const [unpersistedReply, setUnpersistedReply] = useState(null);
+  const [state, dispatch] = useReducer(taskChatReducer, initialTaskChatState);
+  const [sidebarTasks, setSidebarTasks] = useState([]);
   const [input, setInput] = useState("");
-  const [isUploading, setIsUploading] = useState(false);
-  const [examples, setExamples] = useState([]);
-  const sseRef = useRef(null);
-  const activeTaskIdRef = useRef(taskId);
+  const [reloadKey, setReloadKey] = useState(0);
+  const streamRef = useRef(null);
   const scrollRef = useRef(null);
-  const fileInputRef = useRef(null);
   const composerRef = useRef(null);
 
-  const refresh = useCallback(async () => {
-    const forTaskId = taskId;
-    if (forTaskId == null) {
-      return false; // /tasks 列表页无任务 id，不发详情请求
-    }
-    try {
-      const payload = await request(`/api/tasks/${forTaskId}`);
-      if (activeTaskIdRef.current !== forTaskId) {
-        return false; // 响应到达前已切换任务：丢弃过期数据
-      }
-      setTask(payload.data);
-      setIsMissing(false);
-      setLoadError(null);
-      return true;
-    } catch (cause) {
-      if (activeTaskIdRef.current !== forTaskId) {
-        return false;
-      }
-      if (cause.status === 404) {
-        setIsMissing(true);
-      } else {
-        setLoadError(cause.message);
-      }
-      return false;
-    }
-  }, [taskId]);
-
-  // 任务切换 / 卸载：中止在途 SSE 流，重置全部会话态
+  // 主装载 + 流建立（路由已按 id key 重挂载；reloadKey 供错误面重试）
   useEffect(() => {
-    activeTaskIdRef.current = taskId;
-    sseRef.current?.abort();
-    sseRef.current = null;
-    setTask(null);
-    setIsMissing(false);
-    setLoadError(null);
-    setNotice(null);
-    setStreaming({ active: false, text: "", thinking: "", toolCalls: [] });
-    setPendingUser(null);
-    setUnpersistedReply(null);
-    setInput("");
-    refresh();
+    if (taskId === null) {
+      return undefined;
+    }
+    let cancelled = false;
+    loadTaskBundle(taskId)
+      .then((bundle) => {
+        if (cancelled) {
+          return;
+        }
+        dispatch({ type: "LOAD_SUCCEEDED", ...bundle });
+        streamRef.current = createTaskStream({
+          taskId,
+          after: Number.isInteger(bundle.task.event_sequence) ? bundle.task.event_sequence : 0,
+          onFrame: (frame) =>
+            dispatch({ type: "FRAME", id: frame.id, event: frame.event, data: frame.data }),
+          onEvents: (events, snapshot) => dispatch({ type: "EVENTS_APPLIED", events, snapshot }),
+          onError: (cause) => {
+            // 非瞬时 4xx：404 信封引导退出任务页；403 面向用户；其余由 T8 退避重连
+            if (cause?.status === 404) {
+              streamRef.current?.close();
+              dispatch({ type: "LOAD_MISSING" });
+              return;
+            }
+            dispatch({
+              type: "STREAM_ERROR",
+              status: cause?.status,
+              code: cause?.code,
+              message: cause?.message,
+            });
+          },
+        });
+      })
+      .catch((cause) => {
+        if (cancelled) {
+          return;
+        }
+        if (cause?.status === 404) {
+          dispatch({ type: "LOAD_MISSING" });
+        } else {
+          dispatch({ type: "LOAD_FAILED", message: cause?.message });
+        }
+      });
     return () => {
-      sseRef.current?.abort();
-      sseRef.current = null;
+      cancelled = true;
+      streamRef.current?.close();
+      streamRef.current = null;
     };
-  }, [taskId, refresh]);
+  }, [taskId, reloadKey]);
 
+  // 左侧任务列表（辅助导航，失败静默）
   useEffect(() => {
     let cancelled = false;
-    request("/api/tasks?page=1&size=50")
-      .then((payload) => {
+    requestV2(`${V2_TASKS}?page=1&size=${SIDEBAR_PAGE_SIZE}`)
+      .then((result) => {
         if (!cancelled) {
-          setTasks(payload.data);
+          setSidebarTasks(Array.isArray(result.data?.items) ? result.data.items : []);
         }
       })
       .catch(() => {
-        // 侧栏是辅助导航，失败不打断主对话区
+        if (!cancelled) {
+          setSidebarTasks([]);
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [taskId, streaming.active]);
+  }, [taskId]);
+
+  // message_saved 回补：以「该帧前水位」为游标拉全量正文（无正文帧的权威回补面）
+  useEffect(() => {
+    if (state.phase !== "loaded" || state.pendingRefetchAfter === null || taskId === null) {
+      return undefined;
+    }
+    const after = state.pendingRefetchAfter;
+    let cancelled = false;
+    requestV2(messagesPath(taskId, after))
+      .then((result) => {
+        if (!cancelled) {
+          dispatch({
+            type: "MESSAGES_MERGED",
+            after,
+            messages: Array.isArray(result.data) ? result.data : [],
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          dispatch({ type: "REFETCH_FAILED", after });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [state.phase, state.pendingRefetchAfter, taskId]);
+
+  // 对账分页续补（断连窗口 >1000 持久事件的方案=分页拉齐：循环 after=已应用水位
+  // 直至追平快照水位；单页拉空即放弃，接受下次重连收敛）
+  useEffect(() => {
+    if (
+      state.phase !== "loaded" ||
+      state.reconcileTarget === null ||
+      taskId === null ||
+      state.watermark >= state.reconcileTarget
+    ) {
+      return undefined;
+    }
+    let cancelled = false;
+    fetchEvents(taskId, state.watermark)
+      .then((page) => {
+        if (cancelled) {
+          return;
+        }
+        if (!Array.isArray(page.events) || page.events.length === 0) {
+          // 单页拉空仍落后目标（理论不可达）：放弃本轮续补，接受下次重连收敛
+          dispatch({ type: "RECONCILE_GIVE_UP" });
+          return;
+        }
+        dispatch({
+          type: "EVENTS_APPLIED",
+          events: page.events,
+          snapshot: { event_sequence: state.reconcileTarget },
+        });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          dispatch({ type: "RECONCILE_GIVE_UP" });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [state.phase, state.reconcileTarget, state.watermark, taskId]);
+
+  // 轮终局刷新（done → 快照/messages 续拉/files/artifacts；部分失败容忍）
+  useEffect(() => {
+    if (!state.finalizing || taskId === null) {
+      return undefined;
+    }
+    let cancelled = false;
+    const base = `${V2_TASKS}/${encodeURIComponent(taskId)}`;
+    const requests = [
+      requestV2(base),
+      requestV2(messagesPath(taskId, state.watermark)),
+      requestV2(`${base}/files?direction=input`),
+      requestV2(`${base}/artifacts`),
+    ];
+    Promise.allSettled(requests).then(([taskR, msgR, inR, artR]) => {
+      if (cancelled) {
+        return;
+      }
+      dispatch({
+        type: "ROUND_FINALIZED",
+        task: taskR.status === "fulfilled" ? taskR.value.data?.task ?? null : null,
+        messages: msgR.status === "fulfilled" && Array.isArray(msgR.value.data) ? msgR.value.data : null,
+        inputFiles:
+          inR.status === "fulfilled" && Array.isArray(inR.value.data) ? inR.value.data : null,
+        artifacts:
+          artR.status === "fulfilled" && Array.isArray(artR.value.data) ? artR.value.data : null,
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- finalizing 翻转时以当轮渲染水位为准
+  }, [state.finalizing, taskId]);
 
   // 流式渲染期间跟随滚动到底部；用户上翻回看时不打扰
   useEffect(() => {
@@ -153,189 +661,59 @@ export default function TaskChatPage() {
     if (distanceToBottom < AUTOSCROLL_THRESHOLD_PX) {
       container.scrollTop = container.scrollHeight;
     }
-  }, [task?.messages?.length, streaming]);
+  }, [state.messages.length, state.streaming, state.pendingUser]);
 
   // 切换任务 / 首次加载：直接定位到最新消息
   useEffect(() => {
     const container = scrollRef.current;
-    if (container && task) {
+    if (container && state.task) {
       container.scrollTop = container.scrollHeight;
     }
-    // 仅在任务标识变化时执行；task 内容更新由上方 near-bottom 逻辑接管
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 刻意只看 taskId
-  }, [taskId, Boolean(task)]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 刻意只看任务标识
+  }, [taskId, Boolean(state.task)]);
 
-  // 发送后立即滚到底（用户主动发信必然关注回复）
-  useEffect(() => {
-    if (pendingUser && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [pendingUser]);
-
-  // 空对话示例 chips：取专家公开详情的 task_examples（仅首条消息前展示）
-  const hasUserMessage = (task?.messages ?? []).some((message) => message.role === "user");
-  useEffect(() => {
-    if (!task?.expert_id || hasUserMessage) {
-      setExamples([]);
-      return undefined;
-    }
-    let cancelled = false;
-    request(`/api/experts/${task.expert_id}`)
-      .then((payload) => {
-        if (!cancelled) {
-          setExamples(payload.data.task_examples ?? []);
-        }
-      })
-      .catch(() => {
-        // 示例是引导性内容，失败静默
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [task?.expert_id, hasUserMessage]);
+  // -- 用户操作 ---------------------------------------------------------------
 
   async function handleSend(event) {
     event.preventDefault();
     const content = input.trim();
-    const myTaskId = taskId;
-    if (!content || !myTaskId || streaming.active) {
+    if (!content || taskId === null || state.task?.status !== "ready") {
       return;
     }
     setInput("");
     if (composerRef.current) {
-      composerRef.current.style.height = "auto"; // 发送后复位自增高
+      composerRef.current.style.height = "auto";
     }
-    setNotice(null);
-    setUnpersistedReply(null);
-    setPendingUser(content);
-    setStreaming({ active: true, text: "", thinking: "", toolCalls: [] });
-    const client = new SseClient(`/api/tasks/${myTaskId}/messages`);
-    sseRef.current = client;
-    let lastText = "";
     try {
-      for await (const { event: name, data } of client.connect(content)) {
-        if (activeTaskIdRef.current !== myTaskId) {
-          break; // 已切换任务：不再更新共享状态
-        }
-        if (name === "text_delta") {
-          lastText += data.delta;
-          setStreaming((current) => ({ ...current, text: current.text + data.delta }));
-        } else if (name === "thinking_delta") {
-          setStreaming((current) => ({
-            ...current,
-            thinking: current.thinking + data.delta,
-          }));
-        } else if (name === "tool_event") {
-          // start 建卡（running）；end 回填结果；update 忽略（v1 无增量展示）
-          setStreaming((current) => {
-            if (data.status === "start") {
-              return {
-                ...current,
-                toolCalls: [
-                  ...(current.toolCalls ?? []),
-                  { name: data.name, args: data.args, status: "running", result: null },
-                ],
-              };
-            }
-            if (data.status === "end") {
-              const calls = [...(current.toolCalls ?? [])];
-              for (let i = calls.length - 1; i >= 0; i -= 1) {
-                if (calls[i].name === data.name && calls[i].status === "running") {
-                  calls[i] = {
-                    ...calls[i],
-                    status: data.isError ? "error" : "end",
-                    result: data.result ?? "",
-                  };
-                  break;
-                }
-              }
-              return { ...current, toolCalls: calls };
-            }
-            return current;
-          });
-        } else if (name === "message_saved") {
-          lastText = data.content;
-          setStreaming((current) => ({ ...current, text: data.content }));
-        } else if (name === "queued") {
-          setNotice("并发已满，任务进入排队；有容器空出后会自动开始本轮回复。");
-        } else if (name === "error") {
-          setNotice(data.recoverable ? `${data.message}（可重试）` : data.message);
-        }
-        // meta/done：done 后服务端随即收流，历史以 finally 中的服务端对账为准
-      }
+      const result = await requestV2(`${V2_TASKS}/${encodeURIComponent(taskId)}/messages`, {
+        method: "POST",
+        body: { content },
+        idempotencyKey: newIdempotencyKey(),
+      });
+      const data = result.data ?? {};
+      const messageSeq = Number(data.message?.event_sequence);
+      const watermarkSeq = Number(data.event_sequence);
+      dispatch({
+        type: "SEND_ACCEPTED",
+        content,
+        messageSeq: Number.isInteger(messageSeq) ? messageSeq : null,
+        watermarkSeq: Number.isInteger(watermarkSeq) ? watermarkSeq : null,
+      });
     } catch (cause) {
-      const isAbort = cause?.name === "AbortError";
-      if (!isAbort && activeTaskIdRef.current === myTaskId) {
-        setNotice(cause.message);
-      }
-    } finally {
-      sseRef.current = null;
-      if (activeTaskIdRef.current !== myTaskId) {
-        return; // 旧任务流的收尾：状态已随切换重置
-      }
-      const refreshed = await refresh();
-      setStreaming({ active: false, text: "" });
-      if (refreshed) {
-        setPendingUser(null);
-        setUnpersistedReply(null);
-      } else if (lastText) {
-        // 对账失败：保留乐观渲染的用户消息与回复，显式提示
-        setUnpersistedReply(lastText);
-        setNotice("历史刷新失败，最新回复可能未保存，请稍后重试");
-      } else {
-        setPendingUser(null);
-        setNotice("历史刷新失败，请稍后重试");
-      }
+      dispatch({ type: "NOTICE_SET", notice: describeSendError(cause) });
     }
   }
 
-  async function handleFilesChosen(fileList) {
-    const files = Array.from(fileList || []);
-    if (files.length === 0 || !taskId) {
-      return;
-    }
-    const formData = new FormData();
-    for (const file of files) {
-      formData.append("files", file);
-    }
-    setIsUploading(true);
-    setNotice(null);
+  async function runTerminalIntent(endpoint) {
     try {
-      await request(`/api/tasks/${taskId}/files`, { method: "POST", body: formData });
-      await refresh();
+      const result = await requestV2(`${V2_TASKS}/${encodeURIComponent(taskId)}/${endpoint}`, {
+        method: "POST",
+        idempotencyKey: newIdempotencyKey(),
+      });
+      const data = result.data ?? {};
+      dispatch({ type: "TERMINAL_ACCEPTED", task: data.task ?? null, cancelling: Boolean(data.round) });
     } catch (cause) {
-      setNotice(cause.message);
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
-    }
-  }
-
-  // -- 生命周期操作（PRD §4.5.4：中止/结束/删除；§4.5.6 约束） --------------
-
-  async function handleAbort() {
-    setNotice(null);
-    try {
-      await request(`/api/tasks/${taskId}/abort`, { method: "POST" });
-      setNotice(null); // 轮将由 SSE done(aborted) 自然收尾
-    } catch (cause) {
-      setNotice(cause.message); // 409：当前没有可中止的 Agent 轮
-    }
-  }
-
-  async function handleComplete() {
-    if (!window.confirm("确定要结束该任务吗？结束后不可继续对话（历史保留）。")) {
-      return;
-    }
-    sseRef.current?.abort(); // 有在途流先断开本地读取
-    setNotice(null);
-    try {
-      await request(`/api/tasks/${taskId}/complete`, { method: "POST" });
-      await refresh();
-    } catch (cause) {
-      setNotice(cause.message);
+      dispatch({ type: "NOTICE_SET", notice: cause?.message ?? "操作失败，请稍后重试" });
     }
   }
 
@@ -343,49 +721,49 @@ export default function TaskChatPage() {
     if (!window.confirm("确定要删除该任务吗？任务消息与上传文件将一并删除，且不可恢复。")) {
       return;
     }
-    sseRef.current?.abort();
+    streamRef.current?.close();
     try {
-      await request(`/api/tasks/${taskId}`, { method: "DELETE" });
+      await requestV2(`${V2_TASKS}/${encodeURIComponent(taskId)}`, {
+        method: "DELETE",
+        idempotencyKey: newIdempotencyKey(),
+      });
       navigate("/tasks");
     } catch (cause) {
-      setNotice(cause.message);
+      dispatch({ type: "NOTICE_SET", notice: cause?.message ?? "删除失败，请稍后重试" });
     }
   }
 
-  const messages = task?.messages ?? [];
-  const isCompleted = task?.status === "completed";
-  const isFailed = task?.status === "failed";
-  // §6.6：任务活跃期（created/running/failed）可补传附件，终态拒绝；
-  // 新文件由后端在下一轮对话中自动告知 Agent
-  const canAttach =
-    Boolean(task) && ["created", "running", "failed"].includes(task.status);
-  const canSend = Boolean(task) && !isCompleted && !streaming.active;
-  // 中止仅在有活动轮时可见；结束仅 running 可见；删除对已建任务始终可见
-  const canAbort = Boolean(task) && task.status === "running" && streaming.active;
-  const optimisticMessages = [
-    ...(pendingUser ? [{ role: "user", content: pendingUser }] : []),
-    ...(unpersistedReply ? [{ role: "assistant", content: unpersistedReply }] : []),
-  ];
-  // 调用记录 = 历史 tool 消息 + 流内进行中的调用（右侧面板）
-  // toolCalls 用 ?? [] 兜底：HMR 快速刷新会保留旧形态的 streaming state
-  const panelToolCalls = [
-    ...messages
-      .filter((message) => message.role === "tool")
-      .map((message) => {
-        const isError = message.content.startsWith("[tool_error] ");
-        return {
-          name: message.tool_name || "工具调用",
-          status: isError ? "error" : "end",
-          result: isError ? message.content.slice("[tool_error] ".length) : message.content,
-          time: message.created_at,
-        };
-      }),
-    ...(streaming.toolCalls ?? []).map((call) => ({ ...call, time: null })),
-  ];
+  // -- 派生视图 ----------------------------------------------------------------
+
+  const task = state.task;
+  const isTerminal = task !== null && TERMINAL_STATUSES.has(task.status);
+  const canSend = state.phase === "loaded" && task?.status === "ready";
+  const canAbort =
+    state.phase === "loaded" && !state.roundCancelling && ACTIONABLE_STATUSES.includes(task?.status);
+  const canComplete = canAbort;
+  const runtimeLabel = state.roundCancelling
+    ? "终止中…"
+    : state.streaming.active
+      ? "生成中"
+      : isTerminal
+        ? "已结束"
+        : "空闲";
+  const runtimeTone = state.roundCancelling || state.streaming.active ? "running" : isTerminal ? "ended" : "idle";
+  const viewMessages = state.messages.map((message) => ({
+    ...message,
+    role: message.author,
+  }));
+  const hasStreamContent =
+    state.streaming.text !== "" ||
+    state.streaming.thinking !== "" ||
+    state.streaming.toolCalls.length > 0;
+  const showStreamingBubble = state.streaming.active && hasStreamContent;
+  const showThinkingHint =
+    task?.status === "running" && !state.roundCancelling && !showStreamingBubble;
 
   return (
-    <main className={`task-layout${taskId && task && !isMissing ? " has-context" : ""}`}>
-      <TaskSidebar tasks={tasks} activeId={taskId} />
+    <main className={`task-layout${taskId && task ? " has-context" : ""}`}>
+      <TaskSidebar tasks={sidebarTasks} activeId={taskId} />
 
       <section className="task-main">
         {!taskId && (
@@ -398,7 +776,7 @@ export default function TaskChatPage() {
           </div>
         )}
 
-        {taskId && isMissing && (
+        {taskId && state.phase === "missing" && (
           <div className="task-empty">
             <h2>任务不存在</h2>
             <p>它可能已被删除，或不属于当前账号。</p>
@@ -408,177 +786,121 @@ export default function TaskChatPage() {
           </div>
         )}
 
-        {taskId && !isMissing && loadError && !task && (
+        {taskId && state.phase === "error" && (
           <div className="task-empty">
             <h2>加载失败</h2>
-            <p>{loadError}</p>
-            <button type="button" className="btn btn-ghost" onClick={() => refresh()}>
+            <p>{state.loadError}</p>
+            <button type="button" className="btn btn-ghost" onClick={() => setReloadKey((n) => n + 1)}>
               重试
             </button>
           </div>
         )}
 
-        {taskId && !isMissing && task && (
+        {taskId && state.phase === "loading" && (
+          <div className="task-empty">
+            <h2>正在装配任务…</h2>
+          </div>
+        )}
+
+        {taskId && state.phase === "loaded" && task && (
           <>
             <header className="task-header rise" style={{ "--rise-index": 1 }}>
               <span className="task-avatar" aria-hidden="true">
-                {(task.expert_name_snapshot || "专").slice(0, 1)}
+                {(task.expert?.name || "专").slice(0, 1)}
               </span>
               <div className="task-header-info">
-                <h2 className="task-header-title">{task.title}</h2>
+                <h2 className="task-header-title">{task.expert?.name || "任务"}</h2>
                 <div className="task-header-meta">
-                  <span className="task-header-expert">{task.expert_name_snapshot}</span>
-                  <span className="task-header-id">#{task.id}</span>
-                  <span className="task-header-workdir" title="沙箱内以 /workspace 可见">
-                    {task.workdir} · 沙箱内可见
+                  <span className={`status-chip is-${task.status}`}>
+                    {TASK_STATUS_LABELS[task.status] || task.status}
                   </span>
+                  <span className="task-header-expert">
+                    {task.provider
+                      ? `${task.provider.display_name ?? ""}${task.provider.model ? ` · ${task.provider.model}` : ""}`
+                      : "Provider 快照不可见"}
+                  </span>
+                  <span className="task-header-id">#{task.id}</span>
+                  <span className="task-header-workdir">{formatDateTime(task.created_at)} 创建</span>
                 </div>
               </div>
-              <span
-                className={`runtime is-${streaming.active ? "running" : isCompleted ? "ended" : "idle"}`}
-              >
+              <span className={`runtime is-${runtimeTone}`}>
                 <span className="runtime-dot" aria-hidden="true" />
-                {streaming.active ? "生成中" : isCompleted ? "已结束" : "空闲"}
+                {runtimeLabel}
               </span>
               <span className="task-header-actions">
                 {canAbort && (
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
-                    onClick={handleAbort}
-                    title="中止当前一轮；未完成回复不保留"
+                    onClick={() => runTerminalIntent("abort")}
+                    title="中止当前一轮或取消排队；未完成回复不保留"
                   >
                     <Stop size={13} weight="fill" aria-hidden="true" />
                     中止
                   </button>
                 )}
-                {task.status === "running" && !streaming.active && (
+                {canComplete && (
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
-                    onClick={handleComplete}
+                    onClick={() => {
+                      if (window.confirm("确定要结束该任务吗？结束后不可继续对话（历史保留）。")) {
+                        runTerminalIntent("complete");
+                      }
+                    }}
                   >
                     <XCircle size={13} aria-hidden="true" />
                     结束对话
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm is-danger"
-                  onClick={handleDelete}
-                >
+                <button type="button" className="btn btn-ghost btn-sm is-danger" onClick={handleDelete}>
                   <Trash size={13} aria-hidden="true" />
                   删除
                 </button>
               </span>
             </header>
 
-            {isFailed && !notice && (
+            {task.status === "failed" && !state.notice && (
               <div className="task-notice" role="alert">
                 <Warning size={15} aria-hidden="true" />
-                <span>任务异常结束；重新发送一条消息即可重试（将重建容器并载入历史）。</span>
+                <span>任务异常结束，历史消息保留。</span>
               </div>
             )}
-
-            {notice && (
+            {task.status === "aborted" && task.abort_reason && !state.notice && (
               <div className="task-notice" role="alert">
                 <Warning size={15} aria-hidden="true" />
-                <span>{notice}</span>
-                <button
-                  type="button"
-                  className="task-notice-close"
-                  aria-label="关闭提示"
-                  onClick={() => setNotice(null)}
-                >
-                  ×
-                </button>
+                <span>任务已中止（{ABORT_REASON_LABELS[task.abort_reason] ?? task.abort_reason}）。</span>
               </div>
             )}
+            {state.notice && <NoticeBanner notice={state.notice} onClear={() => dispatch({ type: "NOTICE_CLEARED" })} />}
 
             <div className="message-scroll" ref={scrollRef}>
-              {!hasUserMessage && !streaming.active && messages.length === 0 && (
-                <div className="empty-chat">
-                  <h2>和「{task.expert_name_snapshot}」开始第一轮对话</h2>
-                  <p>
-                    描述你要完成的任务。发送后系统会装载专家人设、已启用 Skill
-                    与工作目录，并冻结任务快照。
-                  </p>
-                  {examples.length > 0 && (
-                    <div className="example-chips">
-                      {examples.map((example) => (
-                        <button
-                          key={example}
-                          type="button"
-                          className="example-chip"
-                          onClick={() => {
-                            setInput(example);
-                            composerRef.current?.focus();
-                          }}
-                        >
-                          {example}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
               <MessageList
-                messages={messages}
-                pending={optimisticMessages}
-                streamingText={streaming.text}
-                isStreaming={streaming.active}
-                streamingThinking={streaming.thinking ?? ""}
-                streamingToolCalls={streaming.toolCalls ?? []}
-                taskCreatedAt={task.created_at}
-                skillsCount={task.skills?.length ?? 0}
+                messages={viewMessages}
+                pending={state.pendingUser ? [{ role: "user", content: state.pendingUser.content }] : []}
+                streamingText={state.streaming.text}
+                isStreaming={showStreamingBubble}
+                streamingThinking={state.streaming.thinking}
+                streamingToolCalls={state.streaming.toolCalls}
               />
-              {streaming.active && streaming.text === "" && streaming.thinking === "" && (
-                <p className="task-stream-hint">专家正在思考…</p>
-              )}
+              {showThinkingHint && <p className="task-stream-hint">专家正在思考…</p>}
             </div>
-
-            {task.files.length > 0 && (
-              <ul className="file-bar" aria-label="任务附件">
-                {task.files.map((file) => (
-                  <li className="file-chip" key={file.id}>
-                    <Paperclip size={13} aria-hidden="true" />
-                    <span className="file-chip-name">{file.original_name}</span>
-                    <span className="file-chip-size">{formatBytes(file.size_bytes)}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
 
             <form className="composer rise" style={{ "--rise-index": 2 }} onSubmit={handleSend}>
               <div className="composer-row">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  hidden
-                  onChange={(event) => handleFilesChosen(event.target.files)}
-                />
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm composer-attach"
-                  disabled={!canAttach || isUploading}
-                  title={
-                    canAttach
-                      ? "上传附件（下一轮对话中自动告知 Agent）"
-                      : "任务已结束，不能上传附件"
-                  }
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <Paperclip size={15} aria-hidden="true" />
-                  {isUploading ? "上传中…" : "附件"}
-                </button>
                 <textarea
                   ref={composerRef}
                   className="composer-input"
                   value={input}
                   rows={1}
-                  maxLength={32000}
-                  placeholder={isCompleted ? "任务已结束" : "输入消息，Enter 发送，Shift + Enter 换行"}
+                  maxLength={MESSAGE_MAX_CHARS}
+                  placeholder={
+                    canSend
+                      ? "输入消息，Enter 发送，Shift + Enter 换行"
+                      : isTerminal
+                        ? "任务已结束"
+                        : "当前轮次执行中，等待结束后可继续"
+                  }
                   disabled={!canSend}
                   onChange={(event) => {
                     setInput(event.target.value);
@@ -586,10 +908,10 @@ export default function TaskChatPage() {
                     el.style.height = "auto";
                     el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
                   }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      handleSend(event);
+                  onKeyDown={(keyEvent) => {
+                    if (keyEvent.key === "Enter" && !keyEvent.shiftKey) {
+                      keyEvent.preventDefault();
+                      handleSend(keyEvent);
                     }
                   }}
                 />
@@ -602,10 +924,12 @@ export default function TaskChatPage() {
         )}
       </section>
 
-      {taskId && !isMissing && task && (
+      {taskId && state.phase === "loaded" && task && (
         <TaskContextPanel
-          skills={task.skills ?? []}
-          toolCalls={panelToolCalls}
+          taskId={taskId}
+          task={task}
+          inputFiles={state.inputFiles}
+          artifacts={state.artifacts}
         />
       )}
     </main>
