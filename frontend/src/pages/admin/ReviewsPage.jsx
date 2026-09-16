@@ -68,19 +68,32 @@ export default function ReviewsPage() {
   // 统一 reason 弹窗编排：{kind: "approve"|"reject"} | null
   const [prompt, setPrompt] = useState(null);
 
+  // latest-call 守卫（Phase 9 T7）：筛选切换会并发多次列表请求，乱序响应可能
+  // 以旧结果覆盖新筛选；只接受序号最新的一次落状态。
+  const loadSeqRef = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     setAlert("");
     try {
       const result = await listReviews({ targetType: filters.targetType || undefined });
+      if (seq !== loadSeqRef.current) {
+        return;
+      }
       setList(result.data ?? { items: [], total: 0, page: 1, size: 20 });
     } catch (error) {
+      if (seq !== loadSeqRef.current) {
+        return;
+      }
       if (gateRef.current.reportAdminError(error, load)) {
         return;
       }
       setAlert(error instanceof Error ? error.message : FALLBACK_MESSAGE);
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) {
+        setLoading(false);
+      }
     }
   }, [filters]);
 

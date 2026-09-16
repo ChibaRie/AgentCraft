@@ -135,7 +135,12 @@ export default function RequireAdmin({ children }) {
     replayRef.current = null;
     setGate(null);
     // 重放契约：replay 走页面自身加载路径（内部捕获业务错误），与初次调用同形
-    replay?.();
+    // try-catch：防重放闭包未捕获的 rejection 冒泡为 unhandled（Phase 9 T7）
+    try {
+      replay?.();
+    } catch {
+      // 重放失败由页面自身错误面处理，此处不再传播
+    }
   }, []);
 
   const reportAdminError = useCallback(

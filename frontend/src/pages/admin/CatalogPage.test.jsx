@@ -285,16 +285,20 @@ describe("③④kill-switch 危险壳", () => {
       await actFromLib(async () => {});
 
       expect(calls).toBe(2);
-      // 两次提交同键同载荷（R3/R4 重试语义）；成功后另有目录刷新 GET，
-      // 故用 toHaveBeenCalledWith 而非 lastCalledWith
-      expect(requestV2).toHaveBeenCalledWith(
-        "/api/admin/tools/check_code_style/kill-switch",
-        expect.objectContaining({
-          method: "POST",
-          body: { version: "1.0.0", reason: "紧急止血" },
-          idempotencyKey: expect.any(String),
-        })
+      // 两次提交同键同载荷（R3/R4 重试语义）——实钉：直接比对两次调用的键值与
+      // 载荷（expect.any(String) 只证「是字符串」，证不了「同键」）
+      const killCalls = requestV2.mock.calls.filter(
+        ([path]) => path === "/api/admin/tools/check_code_style/kill-switch"
       );
+      expect(killCalls.length).toBe(2);
+      const [, firstOptions] = killCalls[0];
+      const [, secondOptions] = killCalls[1];
+      expect(firstOptions.method).toBe("POST");
+      expect(firstOptions.body).toEqual({ version: "1.0.0", reason: "紧急止血" });
+      expect(secondOptions.body).toEqual(firstOptions.body);
+      expect(typeof firstOptions.idempotencyKey).toBe("string");
+      expect(firstOptions.idempotencyKey.length).toBeGreaterThan(0);
+      expect(secondOptions.idempotencyKey).toBe(firstOptions.idempotencyKey);
       // termination 回执：非 null → 计数渲染
       expect(screen.getByText(/停止执行：1/)).toBeTruthy();
       expect(screen.getByText(/终止任务：1/)).toBeTruthy();

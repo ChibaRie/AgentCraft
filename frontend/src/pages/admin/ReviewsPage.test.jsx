@@ -262,4 +262,42 @@ describe("approve/reject（target_type 随 body；Minor 7 approve 形状）", ()
     );
     expect(screen.getByRole("dialog").textContent).toContain("rejected");
   });
+
+  it("latest-call 守卫：旧查询后返回时被丢弃，队列保持最新一次结果（Phase 9 T7）", async () => {
+    const REVISION_B = {
+      ...REVISION_A,
+      id: "r9",
+      revision_no: 9,
+    };
+    let releaseFirst;
+    const firstPending = new Promise((resolve) => {
+      releaseFirst = () => resolve(ok({ items: [REVISION_A], total: 1, page: 1, size: 20 }));
+    });
+    let call = 0;
+    requestV2.mockImplementation(() => {
+      call += 1;
+      if (call === 1) {
+        return firstPending;
+      }
+      return Promise.resolve(ok({ items: [REVISION_B], total: 1, page: 1, size: 20 }));
+    });
+
+    renderPage();
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    await flush();
+    expect(screen.getByText("r9")).toBeTruthy();
+    expect(screen.getByText("第 9 版")).toBeTruthy();
+
+    // 旧查询随后返回：守卫应丢弃，不回滚为旧结果
+    const { act } = await import("@testing-library/react");
+    await act(async () => {
+      releaseFirst();
+      await Promise.resolve();
+    });
+    await flush();
+    expect(screen.getByText("r9")).toBeTruthy();
+    expect(screen.queryByText("r1")).toBeNull();
+  });
 });

@@ -336,7 +336,7 @@ export function createTaskStream({ taskId, after = 0, onFrame, onEvents, onError
         setCsrfToken(null);
         window.dispatchEvent(
           new CustomEvent(V2_SESSION_EXPIRED_EVENT, {
-            detail: { path: `/api/tasks/${taskIdText}/events/stream` },
+            detail: { path: `${V2_TASKS}/${taskIdText}/events/stream` },
           })
         );
       }

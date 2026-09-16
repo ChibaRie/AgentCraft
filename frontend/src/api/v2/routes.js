@@ -11,9 +11,7 @@ export const V2_PROVIDERS = "/api/providers";
 
 // —— Phase 8 T0 一次性预扩全（T8-T12b 只导入，不修改本文件）：T14 cutover 已切契约路径。
 export const V2_TASKS = "/api/tasks";
-export const V2_QUOTA = "/api/quota";
 export const V2_DISCOVER = "/api/discover";
 export const V2_AUTHORING_EXPERTS = "/api/experts";
 export const V2_AUTHORING_SKILLS = "/api/skills";
-export const V2_REPORTS = "/api/reports";
 export const V2_ADMIN = "/api/admin";

@@ -16,6 +16,8 @@ def test_new_error_codes_registered():
         "QUOTA_DAILY_EXCEEDED",
         "REVISION_NOT_PUBLISHED",
         "REPORT_ALREADY_RESOLVED",
+        "MFA_NOT_CONFIGURED",  # Phase 9 T7 升格注册表钉
+        "ENTITY_IN_USE",  # Phase 9 T7 升格注册表钉
     ):
         assert ErrorCode(code)
 

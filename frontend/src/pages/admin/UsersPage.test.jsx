@@ -129,9 +129,73 @@ describe("列表与过滤", () => {
       expect.anything()
     );
   });
+
+  it("latest-call 守卫：旧查询后返回时被丢弃，列表保持最新一次结果（Phase 9 T7）", async () => {
+    const OTHER = { ...USER_A, email: "bob@example.com" };
+    let releaseFirst;
+    const firstPending = new Promise((resolve) => {
+      releaseFirst = () => resolve(ok({ items: [USER_A], total: 1, page: 1, size: 20 }));
+    });
+    let call = 0;
+    requestV2.mockImplementation(() => {
+      call += 1;
+      if (call === 1) {
+        return firstPending;
+      }
+      return Promise.resolve(ok({ items: [OTHER], total: 1, page: 1, size: 20 }));
+    });
+
+    renderPage();
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    await flush();
+    expect(screen.getByText("bob@example.com")).toBeTruthy();
+
+    // 旧查询随后返回：守卫应丢弃，不回滚为旧结果
+    await act(async () => {
+      releaseFirst();
+      await Promise.resolve();
+    });
+    await flush();
+    expect(screen.getByText("bob@example.com")).toBeTruthy();
+    expect(screen.queryByText("alice@example.com")).toBeNull();
+  });
 });
 
 describe("详情抽屉四区块", () => {
+  it("首开即时渲染抽屉并在详情未落定时显示加载反馈（Phase 9 T7）", async () => {
+    let releaseDetail;
+    const pendingDetail = new Promise((resolve) => {
+      releaseDetail = () => resolve(ok(DETAIL));
+    });
+    requestV2.mockImplementation((path) => {
+      // 列表路径恰为 /api/admin/users（可带查询串）；详情为 /api/admin/users/{id}
+      if (String(path).split("?")[0] === "/api/admin/users") {
+        return Promise.resolve(ok(LIST_PAGE));
+      }
+      return pendingDetail;
+    });
+
+    renderPage();
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
+    await flush();
+
+    // 详情尚未返回：抽屉已开、显示加载中、且数据依赖的操作入口未渲染
+    const drawer = within(screen.getByRole("dialog"));
+    expect(drawer.getByText("加载中…")).toBeTruthy();
+    expect(drawer.getByText(/alice@example\.com/)).toBeTruthy(); // 目标行来自列表
+    expect(drawer.queryByRole("button", { name: "停用账户" })).toBeNull();
+
+    await act(async () => {
+      releaseDetail();
+      await Promise.resolve();
+    });
+    await flush();
+    expect(drawer.getByRole("button", { name: "停用账户" })).toBeTruthy();
+  });
+
   it("打开抽屉拉取详情：概览/配额/权限/任务计数渲染", async () => {
     const drawer = await openDrawer({
       "GET /api/admin/users": () => ok(LIST_PAGE),

@@ -588,7 +588,7 @@ async def run_suspension_cascade(runtime: V2Runtime, *, target_user_id: str, exe
                 stop = await executor.stop_round(
                     str(row.id), reason="admin_suspended", timeout=_SUSPEND_STOP_TIMEOUT
                 )
-                if stop.get("stopped"):
+                if stop["stopped"]:
                     receipts["stopped"] += 1
         async with owner_session(runtime, str(owner_id)) as db:
             receipt = await _suspend_one_task(db, task_id=task_id, owner_id=str(owner_id))

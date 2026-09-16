@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { V2ApiError, requestV2 } from "../api/v2/client.js";
 import { createTaskStream, fetchEvents } from "../api/v2/sse.js";
 import { V2_TASKS } from "../api/v2/routes.js";
-import { initialTaskChatState, taskChatReducer } from "./TaskChatPage.jsx";
+import { initialTaskChatState, taskChatReducer } from "./taskChatReducer.js";
 import TaskChatPage from "./TaskChatPage.jsx";
 
 // 页面级网络面 mock：requestV2 换 vi.fn（V2ApiError/newIdempotencyKey 保留真实实现）；

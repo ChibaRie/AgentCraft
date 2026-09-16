@@ -13,4 +13,6 @@ workspaces/
 .playwright-mcp/
 output/
 .pytest.xml
+.coverage
+.coverage.*
 .superpowers/

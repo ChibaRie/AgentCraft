@@ -194,3 +194,38 @@ describe("detail JSON 树与产物下载", () => {
     clickSpy.mockRestore();
   });
 });
+
+describe("latest-call 守卫（Phase 9 T7）", () => {
+  it("乱序响应：先发起的旧查询后返回时被丢弃，列表保持最新一次结果", async () => {
+    // 第一次（挂载）挂起；第二次（查询）先返回新数据
+    let releaseFirst;
+    const firstPending = new Promise((resolve) => {
+      releaseFirst = () => resolve(ok({ items: [LOG_PLAIN], total: 1, page: 1, size: 20 }));
+    });
+    let call = 0;
+    requestV2.mockImplementation(() => {
+      call += 1;
+      if (call === 1) {
+        return firstPending;
+      }
+      return Promise.resolve(ok({ items: [LOG_ARTIFACT], total: 1, page: 1, size: 20 }));
+    });
+
+    renderPage();
+    await flush();
+
+    // 第二次查询先落定：列表显示第二次结果
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    await flush();
+    expect(screen.getByText(/task\.artifact\.download/)).toBeTruthy();
+
+    // 旧查询随后返回：守卫应丢弃，不回滚为旧结果
+    await act(async () => {
+      releaseFirst();
+      await Promise.resolve();
+    });
+    await flush();
+    expect(screen.getByText(/task\.artifact\.download/)).toBeTruthy();
+    expect(screen.queryByText(/user\.suspend/)).toBeNull();
+  });
+});

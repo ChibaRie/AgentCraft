@@ -83,6 +83,9 @@ export default function UsersPage() {
   const [alert, setAlert] = useState("");
 
   const [detail, setDetail] = useState(null);
+  // 抽屉首开反馈：目标行独立于 detail 保存——请求未落定前即渲染抽屉骨架，
+  // 否则点击「查看详情」在首帧之后才有任何可见反馈（Phase 9 T7）
+  const [detailTarget, setDetailTarget] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailAlert, setDetailAlert] = useState("");
   const [quotaDraft, setQuotaDraft] = useState({});
@@ -94,7 +97,13 @@ export default function UsersPage() {
   // 统一 reason 弹窗编排：{kind: "suspend"|"unsuspend"|"quotas"|"grant"|"revoke"} | null
   const [prompt, setPrompt] = useState(null);
 
+  // latest-call 守卫（Phase 9 T7）：过滤条件逐键变化会并发多个列表请求，
+  // 乱序响应可能以旧数据覆盖新筛选结果；只接受序号最新的一次落状态。
+  const loadSeqRef = useRef(0);
+  const detailSeqRef = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     setAlert("");
     try {
@@ -102,22 +111,34 @@ export default function UsersPage() {
         emailPrefix: filters.emailPrefix || undefined,
         status: filters.status || undefined,
       });
+      if (seq !== loadSeqRef.current) {
+        return;
+      }
       setList(result.data ?? { items: [], total: 0, page: 1, size: 20 });
     } catch (error) {
+      if (seq !== loadSeqRef.current) {
+        return;
+      }
       if (gateRef.current.reportAdminError(error, load)) {
         return;
       }
       setAlert(error instanceof Error ? error.message : FALLBACK_MESSAGE);
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) {
+        setLoading(false);
+      }
     }
   }, [filters]);
 
   const loadDetail = useCallback(async (userId, { reset = true } = {}) => {
+    const seq = ++detailSeqRef.current;
     setDetailLoading(true);
     setDetailAlert("");
     try {
       const result = await getUserDetail(userId);
+      if (seq !== detailSeqRef.current) {
+        return;
+      }
       const next = result.data ?? null;
       setDetail(next);
       // 配额表单以当前值为初值（缺值留空）；提交时仅上送相对当前的改动维度
@@ -138,12 +159,17 @@ export default function UsersPage() {
         setUserTasks(null);
       }
     } catch (error) {
+      if (seq !== detailSeqRef.current) {
+        return;
+      }
       if (gateRef.current.reportAdminError(error, () => loadDetail(userId, { reset }))) {
         return;
       }
       setDetailAlert(error instanceof Error ? error.message : FALLBACK_MESSAGE);
     } finally {
-      setDetailLoading(false);
+      if (seq === detailSeqRef.current) {
+        setDetailLoading(false);
+      }
     }
   }, []);
 
@@ -152,11 +178,13 @@ export default function UsersPage() {
   }, [load]);
 
   function openDetail(user) {
+    setDetailTarget(user);
     setDetail(null);
     loadDetail(user.id);
   }
 
   function closeDetail() {
+    setDetailTarget(null);
     setDetail(null);
   }
 
@@ -236,7 +264,8 @@ export default function UsersPage() {
   }
 
   const items = list?.items ?? [];
-  const detailUser = detail?.user ?? null;
+  // 目标行（未落定时取列表行）——抽屉首开即渲染，落定后以详情覆盖
+  const detailUser = detail?.user ?? detailTarget;
   const isSuspended = detailUser?.status === "suspended";
 
   return (
@@ -359,6 +388,9 @@ export default function UsersPage() {
               </p>
             </section>
 
+            {/* 数据依赖区块：详情未落定前不渲染——规避 detail 为空时的操作入口 */}
+            {detail ? (
+              <>
             <section>
               <h3>配额调整</h3>
               {quotaAlert ? (
@@ -487,6 +519,8 @@ export default function UsersPage() {
                 )
               ) : null}
             </section>
+              </>
+            ) : null}
           </div>
         </aside>
       ) : null}

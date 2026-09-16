@@ -98,6 +98,10 @@ export default function AuditPage() {
   gateRef.current = gate;
 
   const [filters, setFilters] = useState(EMPTY_FILTERS);
+
+  // latest-call 守卫（Phase 9 T7）：筛选逐键变化会并发多次查询，乱序响应可能
+  // 以旧结果覆盖新筛选；只接受序号最新的一次落状态。
+  const loadSeqRef = useRef(0);
   const [list, setList] = useState(null);
   const [loading, setLoading] = useState(true);
   const [alert, setAlert] = useState("");
@@ -105,6 +109,7 @@ export default function AuditPage() {
   const [downloadTarget, setDownloadTarget] = useState(null);
 
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     setAlert("");
     try {
@@ -118,14 +123,22 @@ export default function AuditPage() {
         page: AUDIT_PAGE,
         size: AUDIT_SIZE,
       });
+      if (seq !== loadSeqRef.current) {
+        return;
+      }
       setList(result.data ?? { items: [], total: 0, page: AUDIT_PAGE, size: AUDIT_SIZE });
     } catch (error) {
+      if (seq !== loadSeqRef.current) {
+        return;
+      }
       if (gateRef.current.reportAdminError(error, load)) {
         return;
       }
       setAlert(describeError(error));
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) {
+        setLoading(false);
+      }
     }
   }, [filters]);
 

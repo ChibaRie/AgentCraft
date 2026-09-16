@@ -5,7 +5,7 @@
   V2 双轨（Phase 8 T5b，Sup §10.10）：V2 aud 令牌（decode_v2_task_token）先行
   识别 → 控制面 /internal/provider-grant 兑换（X-Proxy-Grant-Secret 凭据头 +
   X-Task-Token）→ Key 进程内存缓存（per round_id，无持久化）→ model scope 依
-  grant 下发强制；V1 aud 快照分支原样保留（cutover T13 清理）
+  grant 下发强制；V1 aud 快照分支原样保留（D15-Option1 存续语义，冻结面）
 - 路由：V1 task.provider_snapshot → source=user 解密信封 Key 转发
   snapshot.base_url；source=system 转发 PROVIDER_PROXY_UPSTREAM + OPENAI_API_KEY。
   V2 → grant 下发 base_target 直连
@@ -301,7 +301,7 @@ async def chat_completions(
     """认证 → model scope → 路由上游 → 透传。
 
     V2 令牌（D16①）先行识别：V2 aud 解码成功即走 grant 兑换分支（Key 进程
-    内存缓存）；解码失败静默回退 V1 快照分支（原样保留至 T13 cutover 清理）。
+    内存缓存）；解码失败静默回退 V1 快照分支（D15-Option1 存续语义，冻结面不删）。
     """
     auth = request.headers.get("authorization", "")
     token = auth[len("Bearer ") :].strip() if auth.startswith("Bearer ") else ""
@@ -317,7 +317,7 @@ async def chat_completions(
             return _error(400, "invalid json body")
         return await _chat_completions_v2(token, v2_claims, body, settings)
 
-    # V1 分支（§7.7 快照路径；保留至 T13）
+    # V1 分支（§7.7 快照路径；D15-Option1 存续，冻结面不删）
     try:
         claims = _auth_claims(request)
     except TaskTokenInvalid:
