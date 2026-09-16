@@ -92,6 +92,11 @@ async def _resolve_provider_snapshot(
             candidate = await session.get(UserProvider, provider_config_id)
             if candidate is not None and candidate.user_id == user_id:
                 row = candidate
+            # 申报（cutover 审查 M1，D15-Option1 dead-but-alive 登记）：此处相对原
+            # provider_service.resolve_task_provider 内联收编时丢弃了「显式配置不存在
+            # /非本人 → ProviderNotFoundError」分支——现同场景静默滑落用户默认→系统
+            # 默认。生产零可达（manager 为冻结观察面，无 run_round/ensure_container
+            # 调用方；V2 executor 独立自持），按注释申报保留，不恢复 raise。
         if row is None:
             row = (
                 await session.execute(

@@ -5,16 +5,15 @@ import { useAuth } from "../auth/AuthContext.jsx";
 import NavBar from "./NavBar.jsx";
 
 // NavBar admin 条件入口（Phase 8 T12a）：仅 v2User.role==='admin' 渲染「管理」
-// 导航链接；非 admin / 匿名 / V1-only 会话一律不渲染（T11 既有行为不受影响）。
+// 导航链接；非 admin / 匿名一律不渲染。
+// mock 形状对齐 V2-only 会话域（cutover 审查 M2 清理）：T14 会话归一后组件仅
+// 消费 v2User/isExpert/logoutV2，V1 会话键（user/isAuthenticated/logout）已消亡。
 vi.mock("../auth/AuthContext.jsx", () => ({ useAuth: vi.fn() }));
 
 function renderNav(authOverrides = {}) {
   useAuth.mockReturnValue({
-    user: null,
     v2User: null,
-    isAuthenticated: false,
     isExpert: false,
-    logout: vi.fn(),
     logoutV2: vi.fn(),
     ...authOverrides,
   });
@@ -45,11 +44,8 @@ describe("管理入口条件渲染（T12a）", () => {
     expect(screen.queryByRole("link", { name: "管理" })).toBeNull();
   });
 
-  it("匿名与 V1-only 会话不渲染管理入口（V1 role 与 admin 面无关）", () => {
+  it("匿名会话不渲染管理入口", () => {
     renderNav();
-    expect(screen.queryByRole("link", { name: "管理" })).toBeNull();
-
-    renderNav({ user: { id: 1, username: "alice", email: "a@x.com", role: "expert" } });
     expect(screen.queryByRole("link", { name: "管理" })).toBeNull();
   });
 });

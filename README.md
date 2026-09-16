@@ -62,12 +62,17 @@ cd frontend && npm install && npm run dev   # http://127.0.0.1:5173
 docker compose -f docker/docker-compose.yml --profile pi-worker build pi-worker
 ```
 
-演示数据（可选，幂等）：
+演示数据（可选，幂等；V2 域，须先 `alembic -c alembic_v2.ini upgrade head`）：
 
 ```bash
-python tools/seed_demo.py                 # 写入 .env 指向的库
-python tools/seed_demo.py --database sqlite+aiosqlite:///./demo.db   # 隔离库
-# 登录账号：demo / secret123
+# 1) admin 引导（superuser DSN；首次登录完成 TOTP 注册后过 admin 门）
+V2_DATABASE_URL=postgresql+asyncpg://<superuser>:<pw>@localhost:5432/<db> \
+  uv run python tools/seed_v2_admin.py admin@example.com --password '<初始密码>'
+
+# 2) V2 演示种子（仅限本地开发；须显式 bypass flag——published 直插绕审核，
+#    非 localhost DSN 拒绝执行 published 段。邀请 token 明文一次性打印，
+#    demo 用户经 API 激活后重跑补建示例任务）
+uv run python tools/seed_v2_demo.py --i-know-demo-bypasses-review
 ```
 
 ## 测试
@@ -90,7 +95,7 @@ backend/
 docker/           # control / pi-worker / provider-proxy
 frontend/src/     # pages（P01-P10）/ components / api / lib
 tests/            # 全量测试（含沙箱隔离性与契约占位校验）
-tools/            # seed_demo.py 演示种子
+tools/            # seed_v2_admin.py admin 引导 / seed_v2_demo.py 演示种子
 docs/             # 开发计划 / 进度 / 开发记录 / 阶段手册
 ```
 

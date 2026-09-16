@@ -40,7 +40,9 @@ jobs:
           # （缓存键基于 uv.lock，speed-only）
           enable-cache: true
       - name: Lint
-        run: uv run ruff check backend tests
+        run: |
+          uv run ruff check backend tests
+          uv run ruff format --check backend tests
       - name: Create CI database
         run: |
           uv run python - <<'PY'
@@ -92,4 +94,5 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
+      - run: npm test
       - run: npm run build
