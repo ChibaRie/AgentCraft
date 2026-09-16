@@ -142,7 +142,7 @@ async def test_endpoint_rate_limited_10_per_hour(provider_env, pg):
     pid = await _seed_provider_with_real_key(pg, uid)
     async with auth_client() as client:
         await login(client, "t6@example.com", "User-Passw0rd!")
-        resp = await client.post(f"/api/v2/providers/{pid}/test")
+        resp = await client.post(f"/api/providers/{pid}/test")
     assert resp.status_code == 429
     assert "retry-after" in {k.lower() for k in resp.headers}
 
@@ -157,7 +157,7 @@ async def test_endpoint_disabled_catalog_400(provider_env, pg):
         )
     async with auth_client() as client:
         await login(client, "t7@example.com", "User-Passw0rd!")
-        resp = await client.post(f"/api/v2/providers/{pid}/test")
+        resp = await client.post(f"/api/providers/{pid}/test")
     assert resp.status_code == 400 and resp.json()["error"]["code"] == "CATALOG_ITEM_DISABLED"
 
 
@@ -176,7 +176,7 @@ async def test_endpoint_revoked_or_foreign_404(provider_env, pg):
         )
     async with auth_client() as client:
         await login(client, "t8a@example.com", "User-Passw0rd!")
-        cross = await client.post(f"/api/v2/providers/{pid_revoked}/test")
+        cross = await client.post(f"/api/providers/{pid_revoked}/test")
     assert cross.status_code == 404
 
 
@@ -208,4 +208,4 @@ async def client_post_test(email: str, pid: str):
     """登录 + POST /{id}/test（独立 helper：坏 UUID 用例与限流计数隔离）。"""
     async with auth_client() as client:
         await login(client, email, "User-Passw0rd!")
-        return await client.post(f"/api/v2/providers/{pid}/test")
+        return await client.post(f"/api/providers/{pid}/test")

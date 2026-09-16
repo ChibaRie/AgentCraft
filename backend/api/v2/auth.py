@@ -1,7 +1,7 @@
 """V2 认证面路由。
 
 Task 4 占位 ``GET /health``（503 语义探针）；Task 9 增加
-``POST /auth/invitations/accept``（挂载于 /api/v2，公开端点：无会话无 CSRF，
+``POST /auth/invitations/accept``（挂载于 /api 契约路径，公开端点：无会话无 CSRF，
 Idempotency-Key 必带）；Task 10 增加 ``POST /auth/email-verification/confirm``
 （公开端点：无会话无 CSRF，Idempotency-Key 必带，无限流）与
 ``POST /auth/email-verification/resend``（认证端点：get_v2_auth 门序 + 限流）；

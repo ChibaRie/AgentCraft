@@ -1,4 +1,4 @@
-"""V2 Provider 面路由（契约：Supplement §3，A1 前缀 /api/v2——裁决 D1）。
+"""V2 Provider 面路由（契约：Supplement §3，A1 实现期前缀 /api/v2 已随 Phase 8 切契约路径 /api）。
 
 端点分类（Phase 3 交付节奏）：
 - Task 6：GET /providers/catalog（认证只读）、GET /providers（认证只读，active 行）；

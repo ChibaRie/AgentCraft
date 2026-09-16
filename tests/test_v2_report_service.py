@@ -605,7 +605,7 @@ async def test_resolve_ban_author_suspended_author_409_no_side_effects(pg, provi
 
 
 def test_report_brief_public_direct_shape():
-    """report_brief 模块级公开直测：admin 队列（backend/api/v2/admin/reports.py）
+    """report_brief 模块级公开直测：admin 队列（backend/api/admin/reports.py）
     跨模块消费点改走公开函数（不再触私有名 _report_brief）；brief 字段形状冻结
     ——与 create_report 响应体同构（id/target_type/target_id/status/reason/
     created_at）。纯函数直测，无 DB 依赖。"""

@@ -33,7 +33,7 @@ async def main() -> None:  # noqa: C901 - 探针脚本，分支多为实验场�
     scenario = sys.argv[4] if len(sys.argv) > 4 else "basic"
 
     # 工具选择子（V1 面冻结：仅 check_code_style，经 forwarder 回调
-    # /internal/harness/*；Phase 8 随 V1 消亡。与 pi_engine_manager
+    # /internal/harness/*。与 pi_engine_manager
     # ._V1_TRANSITION_TOOLS 一致；probe 保持轻量，不引入引擎模块依赖）
     extension = ExtensionGenerator(workdir / "extensions").generate(
         task_id=1, tools=[("check_code_style", "1")], provider="faux"

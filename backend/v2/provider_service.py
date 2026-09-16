@@ -185,7 +185,7 @@ async def resolve_task_provider(
     )
 
 
-ROUTE_CREATE = "/api/v2/providers"
+ROUTE_CREATE = "/api/providers"
 
 _ACTIVE_ENTRY_UQ = "uq_user_providers_active_entry"
 _ONE_DEFAULT_UQ = "uq_user_providers_one_default"
@@ -448,7 +448,7 @@ async def update_provider(
     model_id 变更与目录禁用正交（D11：PUT 允许）；白名单按原目录 models 校验。
     updates 为 ProviderUpdateRequest.model_dump(exclude_unset=True)。
     """
-    route = f"/api/v2/providers/{provider_id}"
+    route = f"/api/providers/{provider_id}"
     async with runtime.app_factory() as db:
         replay = await begin(
             db, subject_hash=subject_user(user_id), route=route, key=idem_key, req_hash=idem_hash
@@ -525,7 +525,7 @@ async def revoke_provider(
     DELETE 无请求体：request_hash(None)。幂等 begin 先于 404 门——同 key 的
     DELETE 重放在行已 revoked 后仍原样重放 200（§7 重放优先）。
     """
-    route = f"/api/v2/providers/{provider_id}"
+    route = f"/api/providers/{provider_id}"
     async with runtime.app_factory() as db:
         replay = await begin(
             db, subject_hash=subject_user(user_id), route=route, key=idem_key, req_hash=idem_hash

@@ -40,7 +40,6 @@ from backend.engine.extension_generator import ExtensionGenerator
 from backend.engine.pi_engine import PiEngine, PiEngineError
 from backend.engine.skill_loader import SkillLoader
 from backend.engine.subprocess_transport import SubprocessPiTransport, resolve_pi_cli_js
-from backend.services.provider_service import provider_fingerprint
 from backend.services.task_token import create_task_token
 
 logger = logging.getLogger("agentcraft")
@@ -64,6 +63,27 @@ def _human_bytes(num_bytes: int) -> str:
             return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
         value /= 1024
     return f"{value:.1f} PB"
+
+
+def provider_fingerprint(snapshot: dict) -> str:
+    """Provider 指纹：容器重建判定用（协议+端点+模型+密文指纹）。
+
+    原 backend.services.provider_service 同名函数内联收编（D2：V1 服务层随
+    cutover 删除；manager 冻结保留，行为逐字节不变）。
+    """
+    import hashlib
+    import json
+
+    material = {
+        "protocol": snapshot.get("protocol"),
+        "base_url": snapshot.get("base_url"),
+        "model_id": snapshot.get("model_id"),
+        "source": snapshot.get("source"),
+        # 密文逐字节参与指纹：换 Key 即换指纹（信封含随机 nonce，天然不同）
+        "key": snapshot.get("api_key_encrypted"),
+    }
+    canonical = json.dumps(material, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 # 轮事件队列上限：text_delta 洪泛时的内存防线（超出部分丢弃流式增量）

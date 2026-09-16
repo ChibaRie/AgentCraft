@@ -33,7 +33,7 @@ from backend.v2.runtime import V2Runtime, owner_session
 from backend.v2.security import generate_token, hash_password, hash_token
 from backend.v2.session_service import create_session
 
-ROUTE = "/api/v2/auth/invitations/accept"
+ROUTE = "/api/auth/invitations/accept"
 _INVALID_MESSAGE = "邀请无效或已过期"
 
 # 单语句锁定读：行存活判定（expires_at > now()）在 DB 时钟内求值，与消费 UPDATE 的

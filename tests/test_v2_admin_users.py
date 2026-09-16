@@ -962,7 +962,7 @@ async def test_suspend_full_chain_row_changes_audit_receipts_and_old_cookie_401(
             cookies={COOKIE_NAME: stale_cookie},
         )
         try:
-            r = await stale.get("/api/v2/auth/sessions")
+            r = await stale.get("/api/auth/sessions")
             assert r.status_code == 401
             assert r.json()["error"]["code"] == "SESSION_EXPIRED"
         finally:

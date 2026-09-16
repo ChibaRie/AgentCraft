@@ -640,8 +640,12 @@ async def test_dispatcher_loop_survives_cycle_error_and_cancels(pg, rt, monkeypa
 
 
 def test_v1_only_startup_starts_no_dispatcher(test_db, caplog):
-    """双 DSN 空环境（conftest neutralize）下 TestClient 启动：V1-only 行为完全不变——
-    不创建任务 dispatcher 协程、启动日志零 dispatcher 异常。"""
+    """双 DSN 空环境（conftest neutralize）下 TestClient 启动：V1-only 形态下
+    不创建任务 dispatcher 协程、启动日志零 dispatcher 异常。
+
+    Phase 8 T13 cutover：/api/health 由带 runtime 门的 V2 探针接位——V1-only
+    （未配置双 DSN）启动成功但探针 503 SERVICE_UNAVAILABLE（§10.1 接位语义）。
+    """
     captured: list[str] = []
 
     async def override_get_db():
@@ -651,7 +655,9 @@ def test_v1_only_startup_starts_no_dispatcher(test_db, caplog):
     app.dependency_overrides[get_db] = override_get_db
     try:
         with TestClient(app) as http:
-            assert http.get("/api/health").status_code == 200
+            resp = http.get("/api/health")
+            assert resp.status_code == 503
+            assert resp.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
     finally:
         app.dependency_overrides.pop(get_db, None)
         captured.append("done")

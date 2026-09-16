@@ -279,7 +279,7 @@ async def test_offline_published_expert_to_draft(pg, provider_env):
     assert out["entity"]["published_revision_id"] == rid  # 指针保留
     # discover 立即不可见（游客视角回归断言）
     client = auth_client()
-    resp = await client.get("/api/v2/discover/experts")
+    resp = await client.get("/api/discover/experts")
     assert resp.status_code == 200
     assert resp.json()["data"]["items"] == []
     # 同事务审计（四枚登记之一）
@@ -567,10 +567,10 @@ async def test_offline_delete_require_idempotency_key(pg):
     )
     client = auth_client()
     await login(client, email, "User-Passw0rd!")
-    missing = await client.post(f"/api/v2/experts/{_uuid.uuid4()}/offline")
+    missing = await client.post(f"/api/experts/{_uuid.uuid4()}/offline")
     assert missing.status_code == 400
     assert missing.json()["error"]["code"] == "VALIDATION_ERROR"
-    missing_del = await client.delete(f"/api/v2/experts/{_uuid.uuid4()}")
+    missing_del = await client.delete(f"/api/experts/{_uuid.uuid4()}")
     assert missing_del.status_code == 400
     assert missing_del.json()["error"]["code"] == "VALIDATION_ERROR"
 
@@ -670,7 +670,7 @@ async def test_offline_endpoint_happy_path(pg):
     await login(client, email, "User-Passw0rd!")
     created = (
         await client.post(
-            "/api/v2/experts",
+            "/api/experts",
             json=dict(EXPERT_CONTENT, name="下架对象"),
             headers={"Idempotency-Key": "ho0"},
         )
@@ -690,13 +690,13 @@ async def test_offline_endpoint_happy_path(pg):
             {"r": created["revision"]["revision_id"]},
         )
     resp = await client.post(
-        f"/api/v2/experts/{created['entity']['id']}/offline",
+        f"/api/experts/{created['entity']['id']}/offline",
         headers={"Idempotency-Key": "ho1"},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["entity"]["status"] == "draft"
     replay = await client.post(
-        f"/api/v2/experts/{created['entity']['id']}/offline",
+        f"/api/experts/{created['entity']['id']}/offline",
         headers={"Idempotency-Key": "ho1"},
     )
     assert replay.status_code == 200
@@ -716,19 +716,19 @@ async def test_delete_endpoint_roundtrip(pg):
     await login(client, email, "User-Passw0rd!")
     created = (
         await client.post(
-            "/api/v2/experts",
+            "/api/experts",
             json=dict(EXPERT_CONTENT, name="删除对象"),
             headers={"Idempotency-Key": "hd0"},
         )
     ).json()["data"]
     resp = await client.delete(
-        f"/api/v2/experts/{created['entity']['id']}",
+        f"/api/experts/{created['entity']['id']}",
         headers={"Idempotency-Key": "hd1"},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["deleted"] is True
     replay = await client.delete(
-        f"/api/v2/experts/{created['entity']['id']}",
+        f"/api/experts/{created['entity']['id']}",
         headers={"Idempotency-Key": "hd1"},
     )
     assert replay.status_code == 200

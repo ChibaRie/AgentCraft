@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class TaskCreateRequest(BaseModel):
-    """POST /api/v2/tasks 请求体（Sup §4：{expert_revision_id, provider_id,
+    """POST /api/tasks 请求体（Sup §4：{expert_revision_id, provider_id,
     initial_message}）。
 
     provider_id 两态：缺席/None → 走默认位 Provider 解析（resolve_task_provider
@@ -28,7 +28,7 @@ class TaskCreateRequest(BaseModel):
 
 
 class TaskCommitRequest(BaseModel):
-    """POST /api/v2/tasks/{id}/input/commit 请求体（Sup §4：manifest 清单）。
+    """POST /api/tasks/{id}/input/commit 请求体（Sup §4：manifest 清单）。
 
     manifest 仅作整体规范化哈希（canonical SHA-256 落 input_manifest_sha256），
     条目结构不做 schema 收紧（T3 服务层契约：零文件任务也必须显式 commit，
@@ -40,7 +40,7 @@ class TaskCommitRequest(BaseModel):
 
 
 class TaskSendMessageRequest(BaseModel):
-    """POST /api/v2/tasks/{id}/messages 请求体（Sup §1.2:25：消息正文）。
+    """POST /api/tasks/{id}/messages 请求体（Sup §1.2:25：消息正文）。
 
     content 字符级粗闸仅挡量级异常载荷（先于业务零 DB 副作用）；服务层按
     UTF-8 字节对 Settings.SKILL_PROMPT_MAX_BYTES=65,536 精确校验（D7d，与

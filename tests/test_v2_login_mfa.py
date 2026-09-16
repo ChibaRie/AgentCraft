@@ -46,11 +46,11 @@ from tests.conftest import PgDb
 from tests.test_v2_runtime import make_v2_runtime
 from tests.test_v2_verification_flow import authenticated_client, http_client
 
-_ROUTE_LOGIN = "/api/v2/auth/login"
-_ROUTE_LOGIN_MFA = "/api/v2/auth/login/mfa"
-_ROUTE_MFA_SETUP = "/api/v2/auth/mfa/setup"
-_ROUTE_MFA_ACTIVATE = "/api/v2/auth/mfa/activate"
-_ROUTE_MFA_DISABLE = "/api/v2/auth/mfa"
+_ROUTE_LOGIN = "/api/auth/login"
+_ROUTE_LOGIN_MFA = "/api/auth/login/mfa"
+_ROUTE_MFA_SETUP = "/api/auth/mfa/setup"
+_ROUTE_MFA_ACTIVATE = "/api/auth/mfa/activate"
+_ROUTE_MFA_DISABLE = "/api/auth/mfa"
 _KEY_MATERIAL = base64.urlsafe_b64encode(bytes(range(32))).decode()  # 仅测试材料
 
 # 统一失败文案（契约钉死；响应体形状见 backend/main.py 错误处理器）

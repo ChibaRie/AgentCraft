@@ -56,7 +56,7 @@ async def create_report(
     idem_hash: str,
 ) -> "dict | Replay":
     reporter_id = str(reporter_id)  # D26 归一（种子实返 UUID 对象）
-    route = "/api/v2/reports"
+    route = "/api/reports"
     async with runtime.app_factory() as db:
         replay = await begin(
             db,
@@ -137,7 +137,7 @@ def report_brief(report: Report) -> dict:
     """举报摘要（create_report 响应体与 admin 队列表项的同构 brief）。
 
     Phase 8 T7（Progress §5.6 转办）：私有 `_report_brief` 公开化为模块级函数——
-    admin 队列（backend/api/v2/admin/reports.py）跨模块消费点不再触私有名；
+    admin 队列（backend/api/admin/reports.py）跨模块消费点不再触私有名；
     字段形状冻结：id/target_type/target_id/status/reason/created_at。
     """
     return {

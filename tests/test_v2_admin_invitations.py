@@ -221,7 +221,7 @@ async def test_create_invitation_201_full_chain_and_token_red_lines(pg, outbox_e
         # 跨面闭环：admin 创建的邀请（明文 token 只经 outbox payload 投递）可被既有
         # owner 面接受流程消费——同款 hash_token/generate_token 原语 + 小写归一匹配
         accept = await client.post(
-            "/api/v2/auth/invitations/accept",
+            "/api/auth/invitations/accept",
             json={
                 "invitation_token": token,
                 "email": "invitee@example.com",

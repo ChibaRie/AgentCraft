@@ -14,17 +14,30 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-from backend.services.user_service import UserSystemError
-
 logger = logging.getLogger("agentcraft")
 
 
-class HarnessPathInvalidError(UserSystemError):
+class HarnessServiceError(Exception):
+    """/internal/harness 冻结面错误基类（Phase 8 T13 cutover 收编）。
+
+    原 V1 面由 user_service.UserSystemError 承载（{error:{code,message}} 信封，
+    main.py 全局处理器转换）；V1 应用面删除后本地承接同形状——status_code/code
+    由子类声明，main.py 的 HarnessServiceError 处理器维持 400/502 语义不变。
+    """
+
+    status_code: int = 400
+    code: str = "VALIDATION_ERROR"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
+class HarnessPathInvalidError(HarnessServiceError):
     status_code = 400
     code = "INVALID_PATH"
 
 
-class RuffExecutionError(UserSystemError):
+class RuffExecutionError(HarnessServiceError):
     status_code = 502
     code = "RUFF_EXECUTION_FAILED"
 

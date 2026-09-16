@@ -40,8 +40,8 @@ from backend.v2.session_service import create_session
 from tests.conftest import PgDb
 from tests.test_v2_runtime import make_v2_runtime
 
-_ROUTE_CONFIRM = "/api/v2/auth/email-verification/confirm"
-_ROUTE_RESEND = "/api/v2/auth/email-verification/resend"
+_ROUTE_CONFIRM = "/api/auth/email-verification/confirm"
+_ROUTE_RESEND = "/api/auth/email-verification/resend"
 _KEY_MATERIAL = base64.urlsafe_b64encode(bytes(range(32))).decode()  # 仅测试材料
 _UA = "AgentCraft-FlowTest/1.0"
 

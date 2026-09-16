@@ -42,10 +42,10 @@ from tests.conftest import PgDb
 from tests.test_v2_runtime import make_v2_runtime
 from tests.test_v2_verification_flow import http_client
 
-_ROUTE_RESET_REQUEST = "/api/v2/auth/password-reset/request"
-_ROUTE_RESET_CONFIRM = "/api/v2/auth/password-reset/confirm"
-_ROUTE_PASSWORD_CHANGE = "/api/v2/auth/password-change"
-_ROUTE_LOGIN = "/api/v2/auth/login"
+_ROUTE_RESET_REQUEST = "/api/auth/password-reset/request"
+_ROUTE_RESET_CONFIRM = "/api/auth/password-reset/confirm"
+_ROUTE_PASSWORD_CHANGE = "/api/auth/password-change"
+_ROUTE_LOGIN = "/api/auth/login"
 _KEY_MATERIAL = base64.urlsafe_b64encode(bytes(range(32))).decode()  # 仅测试材料
 _UA = "AgentCraft-FlowTest/1.0"
 

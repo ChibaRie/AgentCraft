@@ -67,7 +67,7 @@ async def test_guest_sees_only_published(pg, provider_env):
     author = await seed_active_user(pg, "disc-draft@x.com")
     await seed_entity_with_revision(pg, author, "experts")  # draft 不可见
     client = auth_client()
-    resp = await client.get("/api/v2/discover/experts")
+    resp = await client.get("/api/discover/experts")
     assert resp.status_code == 200
     items = resp.json()["data"]["items"]
     assert [i["name"] for i in items] == ["公开专家甲"]
@@ -80,11 +80,11 @@ async def test_search_and_category_filter(pg, provider_env):
     await _published_expert(pg, "disc-s1@x.com", "数据库调优专家")
     await _published_expert(pg, "disc-s2@x.com", "文案写作专家", category="writing")
     client = auth_client()
-    hit = await client.get("/api/v2/discover/experts", params={"search": "数据库"})
+    hit = await client.get("/api/discover/experts", params={"search": "数据库"})
     assert [i["name"] for i in hit.json()["data"]["items"]] == ["数据库调优专家"]
-    cat = await client.get("/api/v2/discover/experts", params={"category": "writing"})
+    cat = await client.get("/api/discover/experts", params={"category": "writing"})
     assert [i["name"] for i in cat.json()["data"]["items"]] == ["文案写作专家"]
-    none = await client.get("/api/v2/discover/experts", params={"search": "不存在的词组"})
+    none = await client.get("/api/discover/experts", params={"search": "不存在的词组"})
     assert none.json()["data"]["items"] == []
 
 
@@ -97,7 +97,7 @@ async def test_detail_includes_skills_tools_and_notice(pg, provider_env):
     await seed_revision_tools(pg, revision_id, [("check_code_style", "1")])
     client = auth_client()
     entity_id = await _entity_id_by_revision(pg, revision_id)
-    resp = await client.get(f"/api/v2/discover/experts/{entity_id}")
+    resp = await client.get(f"/api/discover/experts/{entity_id}")
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["tools"] == [{"tool_id": "check_code_style", "version": "1"}]
@@ -110,7 +110,7 @@ async def test_draft_detail_404(pg, provider_env):
     author = await seed_active_user(pg, "disc-404@x.com")
     entity_id, _ = await seed_entity_with_revision(pg, author, "experts")  # draft
     client = auth_client()
-    resp = await client.get(f"/api/v2/discover/experts/{entity_id}")
+    resp = await client.get(f"/api/discover/experts/{entity_id}")
     assert resp.status_code == 404
 
 
@@ -119,12 +119,12 @@ async def test_draft_detail_404(pg, provider_env):
 async def test_discover_rate_limited_60_per_hour(pg, provider_env):
     client = auth_client()
     for i in range(60):
-        resp = await client.get("/api/v2/discover/experts")
+        resp = await client.get("/api/discover/experts")
         assert resp.status_code == 200, f"第 {i} 次即被限流"
-    resp = await client.get("/api/v2/discover/experts")
+    resp = await client.get("/api/discover/experts")
     assert resp.status_code == 429
     # 详情端点同桶限流（D12：列表与详情都挂 enforce）——合法 UUID 也先被限流拦下
-    detail = await client.get(f"/api/v2/discover/experts/{_uuid.uuid4()}")
+    detail = await client.get(f"/api/discover/experts/{_uuid.uuid4()}")
     assert detail.status_code == 429
 
 
@@ -132,7 +132,7 @@ async def test_discover_rate_limited_60_per_hour(pg, provider_env):
 @pytest.mark.asyncio
 async def test_search_param_capped(pg, provider_env):
     client = auth_client()
-    resp = await client.get("/api/v2/discover/experts", params={"search": "字" * 101})
+    resp = await client.get("/api/discover/experts", params={"search": "字" * 101})
     assert resp.status_code == 400  # Query(max_length=100) → RequestValidationError
     # → main.py 统一 handler 渲染 400 VALIDATION_ERROR 信封
 
@@ -162,7 +162,7 @@ async def test_detail_resolves_skills(pg, provider_env):
     await _backfill_expert_content(pg, revision_id, content)
     entity_id = await _entity_id_by_revision(pg, revision_id)
     client = auth_client()
-    resp = await client.get(f"/api/v2/discover/experts/{entity_id}")
+    resp = await client.get(f"/api/discover/experts/{entity_id}")
     assert resp.status_code == 200
     assert resp.json()["data"]["skills"] == [
         {"skill_id": skill_entity_id, "name": "代码评审技能", "revision_no": 1}
@@ -183,7 +183,7 @@ async def test_detail_unpublished_skill_ref_omitted(pg, provider_env):
     await _backfill_expert_content(pg, revision_id, content)
     entity_id = await _entity_id_by_revision(pg, revision_id)
     client = auth_client()
-    resp = await client.get(f"/api/v2/discover/experts/{entity_id}")
+    resp = await client.get(f"/api/discover/experts/{entity_id}")
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["skills"] == []
@@ -196,7 +196,7 @@ async def test_pagination(pg, provider_env):
     for i in range(3):
         await _published_expert(pg, f"disc-page-{i}@x.com", f"分页专家{i}")
     client = auth_client()
-    resp = await client.get("/api/v2/discover/experts", params={"page": 2, "page_size": 2})
+    resp = await client.get("/api/discover/experts", params={"page": 2, "page_size": 2})
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert len(data["items"]) == 1
@@ -208,7 +208,7 @@ async def test_pagination(pg, provider_env):
 @pytest.mark.asyncio
 async def test_page_size_capped(pg, provider_env):
     client = auth_client()
-    resp = await client.get("/api/v2/discover/experts", params={"page_size": 51})
+    resp = await client.get("/api/discover/experts", params={"page_size": 51})
     assert resp.status_code == 400  # Query le=50 → 统一 handler 渲染 VALIDATION_ERROR 信封
 
 
@@ -233,12 +233,12 @@ async def test_list_and_detail_expose_published_revision_id(pg, provider_env):
     draft_author = await seed_active_user(pg, "disc-rev-id-draft@x.com")
     await seed_entity_with_revision(pg, draft_author, "experts")  # draft 不可见
     client = auth_client()
-    listing = await client.get("/api/v2/discover/experts")
+    listing = await client.get("/api/discover/experts")
     assert listing.status_code == 200
     items = listing.json()["data"]["items"]
     assert [i["name"] for i in items] == ["指针暴露专家"]
     assert items[0]["published_revision_id"] == revision_id
     entity_id = await _entity_id_by_revision(pg, revision_id)
-    detail = await client.get(f"/api/v2/discover/experts/{entity_id}")
+    detail = await client.get(f"/api/discover/experts/{entity_id}")
     assert detail.status_code == 200
     assert detail.json()["data"]["published_revision_id"] == revision_id

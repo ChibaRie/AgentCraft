@@ -28,7 +28,7 @@ async def test_report_endpoint_happy(pg, provider_env):
         with_pointer=True,
     )
     resp = await client.post(
-        "/api/v2/reports",
+        "/api/reports",
         json={"target_type": "expert_revision", "target_id": revision_id, "reason": "内容违规"},
         headers={"Idempotency-Key": "rep-1"},
     )
@@ -44,13 +44,13 @@ async def test_report_rate_limited_10_per_day(pg, provider_env):
     missing = str(uuid7())  # 合法 UUID → 服务层 404（非法 UUID 是 400，别混用）
     for i in range(10):
         resp = await client.post(
-            "/api/v2/reports",
+            "/api/reports",
             json={"target_type": "expert_revision", "target_id": missing, "reason": "x"},
             headers={"Idempotency-Key": f"rep-lim-{i}"},
         )
         assert resp.status_code == 404
     resp = await client.post(
-        "/api/v2/reports",
+        "/api/reports",
         json={"target_type": "expert_revision", "target_id": missing, "reason": "x"},
         headers={"Idempotency-Key": "rep-lim-over"},
     )
@@ -73,8 +73,6 @@ async def test_report_idempotent_replay(pg, provider_env):
         with_pointer=True,
     )
     body = {"target_type": "expert_revision", "target_id": revision_id, "reason": "r"}
-    first = await client.post("/api/v2/reports", json=body, headers={"Idempotency-Key": "rep-rp-1"})
-    replay = await client.post(
-        "/api/v2/reports", json=body, headers={"Idempotency-Key": "rep-rp-1"}
-    )
+    first = await client.post("/api/reports", json=body, headers={"Idempotency-Key": "rep-rp-1"})
+    replay = await client.post("/api/reports", json=body, headers={"Idempotency-Key": "rep-rp-1"})
     assert replay.json() == first.json()

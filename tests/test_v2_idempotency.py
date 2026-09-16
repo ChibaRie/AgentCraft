@@ -27,7 +27,7 @@ from backend.v2.security import hash_token
 from tests.conftest import PgDb
 from tests.test_v2_runtime import make_v2_runtime
 
-ROUTE = "POST /api/v2/auth/register"
+ROUTE = "POST /api/auth/register"
 
 
 def _subject() -> str:
@@ -49,7 +49,7 @@ def _starlette_request(headers: list[tuple[str, str]]):
     scope = {
         "type": "http",
         "method": "POST",
-        "path": "/api/v2/auth/register",
+        "path": "/api/auth/register",
         "headers": [(k.lower().encode("ascii"), v.encode("utf-8")) for k, v in headers],
         "query_string": b"",
     }

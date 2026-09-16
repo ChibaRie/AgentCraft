@@ -49,8 +49,9 @@ async def test_owner_session_sets_guc_within_transaction(pg, v2_runtime):
 
 
 def test_unconfigured_runtime_returns_503(client):
-    # /api/v2/health 是 Task 4 唯一路由且挂 get_v2_runtime 依赖；users/me 至 T13/14 才存在
-    resp = client.get("/api/v2/health")
+    # /api/health 为带 runtime 门的 V2 探针（Phase 8 T13 cutover：V1 无门探针
+    # 随 V1 面删除，本探针自实现期 /api/v2/health 前缀切契约路径接位）
+    resp = client.get("/api/health")
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
 

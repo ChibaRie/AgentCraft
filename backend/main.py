@@ -1,7 +1,6 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -9,18 +8,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from backend.api import api_router, internal_router
+from backend.api import internal_router
 from backend.api.v2 import v2_api_router
 from backend.api.v2.admin import admin_api_router
 from backend.config import get_settings
-from backend.database import async_session_factory
 from backend.dependencies import get_pi_engine_manager
 from backend.errors import AgentCraftError
 from backend.logging_config import configure_logging
 from backend.middleware.upload_guard import UploadSizeGuardMiddleware
-from backend.services.file_service import sweep_stale_storage
-from backend.services.user_service import UserSystemError
-from backend.services.workspace import CANONICAL_AGENT_ROOT
+from backend.services.harness_service import HarnessServiceError
 from backend.v2.deletion_service import deletion_sweep_loop
 from backend.v2.mailer import transport_from_settings
 from backend.v2.outbox import outbox_loop
@@ -34,28 +30,12 @@ logger = logging.getLogger("agentcraft")
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """启动巡检（§6.6/§10.2）：校验配置一致性、确保存储根存在、清理崩溃遗留。"""
+    """启动巡检：密钥逃生舱告警、引擎后台巡检循环、V2 后台作业编排。"""
     settings = get_settings()
     configure_logging(settings.LOG_LEVEL)
     if settings.ALLOW_INSECURE_SECRETS:
         # 逃生舱不可静默：置 true 时必须留下可见告警（生产禁止）
         logger.warning("ALLOW_INSECURE_SECRETS=true：密钥校验已跳过，仅限开发/测试环境")
-    if settings.AGENTCRAFT_WORKSPACE_ROOT != CANONICAL_AGENT_ROOT:
-        # tasks.workdir 的 CHECK 约束硬编码此前缀；可配置化需同步迁移约束
-        raise RuntimeError(
-            "AGENTCRAFT_WORKSPACE_ROOT 必须为 /workspaces/authorized"
-            "（tasks.workdir CHECK 约束硬编码）"
-        )
-    Path(settings.HOST_WORKSPACE_ROOT).mkdir(parents=True, exist_ok=True)
-    task_file_root = Path(settings.HOST_DATA_ROOT) / "task-files"
-    task_file_root.mkdir(parents=True, exist_ok=True)
-    try:
-        stats = await sweep_stale_storage(async_session_factory, task_file_root)
-        if stats["staging_batches"] or stats["orphan_files"]:
-            logger.info("启动清理完成：%s", stats)
-    except Exception:
-        # 清理失败不阻塞启动，下次启动重试
-        logger.exception("启动文件巡检失败")
     # §7.2 空闲回收 / §7.8.1 看门狗：后台巡检循环
     get_pi_engine_manager().ensure_background()
     # V2 outbox 派发循环：仅双 DSN 齐备的 V2 模式启动（V1-only 行为完全不变）。
@@ -119,9 +99,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(api_router, prefix="/api")
 app.include_router(internal_router, prefix="/internal")
-app.include_router(v2_api_router, prefix="/api/v2")
+# V2 契约路径挂载（Phase 8 T13，Sup §10.1 路径切换总表）：/api/auth/*、
+# /api/tasks/*、/api/health 等一律为契约路径（实现期暂挂 /api/v2 前缀已随
+# cutover 摘除；V1 无门 /api/health 随 V1 面删除，由带 runtime 门的 V2 探针接位）。
+# admin 面本就在契约路径 /api/admin，不变。
+app.include_router(v2_api_router, prefix="/api")
 app.include_router(admin_api_router, prefix="/api/admin")
 
 
@@ -148,8 +131,13 @@ _STATUS_CODE_NAMES = {
 }
 
 
-@app.exception_handler(UserSystemError)
-async def user_system_error_handler(_request: Request, exc: UserSystemError) -> JSONResponse:
+@app.exception_handler(HarnessServiceError)
+async def harness_service_error_handler(
+    _request: Request, exc: HarnessServiceError
+) -> JSONResponse:
+    # /internal/harness 冻结面错误信封（D15-Option1 保留语义）：形状与原
+    # UserSystemError 处理器一致 {error:{code,message}}，status_code/code
+    # 由 harness_service 错误类自带（400 INVALID_PATH / 502 RUFF_EXECUTION_FAILED）
     return JSONResponse(
         status_code=exc.status_code,
         content=_error_payload(exc.code, str(exc)),
@@ -205,8 +193,3 @@ async def unhandled_exception_handler(_request: Request, exc: Exception) -> JSON
         status_code=500,
         content=_error_payload("INTERNAL_ERROR", "服务器内部错误，请稍后重试"),
     )
-
-
-@app.get("/api/health")
-async def health() -> dict[str, object]:
-    return {"data": {"status": "ok", "version": "0.4.0"}}

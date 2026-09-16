@@ -9,10 +9,11 @@
   users 表 ENABLE+FORCE RLS，app role 仅 owner 自插、admin role 无 INSERT policy
   （0003/0009），只有 superuser 能播种。
 - 幂等：email 已存在即跳过（exists），不改动既有行。
-- mfa_secret_enc 置 NULL：首次使用经 /api/v2/auth/mfa/setup + activate 注册 TOTP
+- mfa_secret_enc 置 NULL：首次使用经 /api/auth/mfa/setup + activate 注册 TOTP
   后方可过 admin 三重门（Phase 7 D2②——未配置者永不过门）。
 - 不跑迁移：假设已 ``uv run alembic -c alembic_v2.ini upgrade head``。
-- 独立脚本（D9）：与 tools/seed_demo.py（V1 SQLite 工具）无关。
+- 独立脚本（D9）：V1 演示种子 seed_demo 已随 Phase 8 T13 cutover 删除，
+  演示链在 T16 交付 seed_v2_demo 前依赖本脚本 + admin API 邀请流。
 """
 
 from __future__ import annotations

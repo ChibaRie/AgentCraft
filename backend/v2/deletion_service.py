@@ -74,8 +74,8 @@ from backend.v2.session_service import create_session, revoke_all
 
 logger = logging.getLogger("agentcraft.account")
 
-ROUTE_REQUEST = "/api/v2/account/deletion/request"
-ROUTE_CANCEL = "/api/v2/account/deletion/cancel"
+ROUTE_REQUEST = "/api/account/deletion/request"
+ROUTE_CANCEL = "/api/account/deletion/cancel"
 
 GRACE_DAYS = 14  # 注销宽限期（天）：deadline = now()+14d；cancel 令牌有效期同源
 

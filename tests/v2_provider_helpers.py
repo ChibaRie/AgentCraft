@@ -221,7 +221,7 @@ async def login(client: httpx.AsyncClient, email: str, password: str) -> str:
     {"data": {"user", "csrf_token"}} 契约，A14 交付信道；auth.py:69 同源取值），
     与 tests/test_v2_login_mfa.py:188 等既有用例读法一致。
     """
-    resp = await client.post("/api/v2/auth/login", json={"email": email, "password": password})
+    resp = await client.post("/api/auth/login", json={"email": email, "password": password})
     assert resp.status_code == 200, resp.text
     csrf = resp.json()["data"]["csrf_token"]
     client.headers["X-CSRF-Token"] = csrf

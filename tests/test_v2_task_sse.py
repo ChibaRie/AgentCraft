@@ -217,7 +217,7 @@ async def test_messages_send_202_shape_busy_gate_and_events(pg, api_env):
     tid = await _make_ready(pg, uid, pid)
 
     resp = await client.post(
-        f"/api/v2/tasks/{tid}/messages",
+        f"/api/tasks/{tid}/messages",
         json={"content": "下一句话"},
         headers={"Idempotency-Key": "t8b-send-1"},
     )
@@ -261,7 +261,7 @@ async def test_messages_send_202_shape_busy_gate_and_events(pg, api_env):
 
     # 活跃轮在握：新 key 再发 → 429 TASK_ROUND_BUSY + Retry-After
     busy = await client.post(
-        f"/api/v2/tasks/{tid}/messages",
+        f"/api/tasks/{tid}/messages",
         json={"content": "再发一句"},
         headers={"Idempotency-Key": "t8b-send-2"},
     )
@@ -279,25 +279,25 @@ async def test_messages_idempotent_replay_regardless_of_state(pg, api_env):
     body = {"content": "幂等重放"}
 
     first = await client.post(
-        f"/api/v2/tasks/{tid}/messages", json=body, headers={"Idempotency-Key": "t8b-idem-1"}
+        f"/api/tasks/{tid}/messages", json=body, headers={"Idempotency-Key": "t8b-idem-1"}
     )
     assert first.status_code == 202, first.text
 
     replay = await client.post(
-        f"/api/v2/tasks/{tid}/messages", json=body, headers={"Idempotency-Key": "t8b-idem-1"}
+        f"/api/tasks/{tid}/messages", json=body, headers={"Idempotency-Key": "t8b-idem-1"}
     )
     assert replay.status_code == 202
     assert replay.json() == first.json()
 
     # 同 key 异载荷 → 409 IDEMPOTENCY_CONFLICT；缺 key → 400
     conflict = await client.post(
-        f"/api/v2/tasks/{tid}/messages",
+        f"/api/tasks/{tid}/messages",
         json={"content": "换一句话"},
         headers={"Idempotency-Key": "t8b-idem-1"},
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
-    nokey = await client.post(f"/api/v2/tasks/{tid}/messages", json=body)
+    nokey = await client.post(f"/api/tasks/{tid}/messages", json=body)
     assert nokey.status_code == 400
 
 
@@ -440,7 +440,7 @@ async def test_events_mapping_pins_d11_all_types(pg, api_env):
     client = await _login(pg, "t8b-d11@example.com")
     tid, round_id = await _seed_all_event_types(pg, uid, pid)
 
-    resp = await client.get(f"/api/v2/tasks/{tid}/events", params={"after": 1})
+    resp = await client.get(f"/api/tasks/{tid}/events", params={"after": 1})
     assert resp.status_code == 200, resp.text
     data = resp.json()["data"]
     assert data["snapshot"] == {"status": "queued", "event_sequence": 8}
@@ -479,7 +479,7 @@ async def test_events_after_watermark_empty_with_snapshot(pg, api_env):
     client = await _login(pg, "t8b-empty@example.com")
     tid, _round_id = await _seed_all_event_types(pg, uid, pid)
 
-    resp = await client.get(f"/api/v2/tasks/{tid}/events", params={"after": 999})
+    resp = await client.get(f"/api/tasks/{tid}/events", params={"after": 999})
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["events"] == []
@@ -487,8 +487,8 @@ async def test_events_after_watermark_empty_with_snapshot(pg, api_env):
 
     await seed_active_user(pg, "t8b-empty-intruder@example.com")
     intruder = await _login(pg, "t8b-empty-intruder@example.com")
-    seen_events = await intruder.get(f"/api/v2/tasks/{tid}/events")
-    seen_messages = await intruder.get(f"/api/v2/tasks/{tid}/messages")
+    seen_events = await intruder.get(f"/api/tasks/{tid}/events")
+    seen_messages = await intruder.get(f"/api/tasks/{tid}/messages")
     assert seen_events.status_code == 404
     assert seen_events.json()["error"]["code"] == "TASK_NOT_FOUND"
     assert seen_messages.status_code == 404
@@ -513,22 +513,22 @@ async def test_messages_pagination_boundaries(pg, api_env):
                 {"t": tid, "u": uid, "s": i, "c": f"m{i}"},
             )
 
-    default_all = await client.get(f"/api/v2/tasks/{tid}/messages")
+    default_all = await client.get(f"/api/tasks/{tid}/messages")
     assert default_all.status_code == 200
     items = default_all.json()["data"]
     assert [m["event_sequence"] for m in items] == [1, 2, 3, 4, 5, 6]
     assert set(items[0].keys()) == {"id", "event_sequence", "author", "content", "created_at"}
     assert items[0]["content"] == "seed"  # 全量正文（非摘要）
 
-    paged = await client.get(f"/api/v2/tasks/{tid}/messages", params={"after": 4, "limit": 2})
+    paged = await client.get(f"/api/tasks/{tid}/messages", params={"after": 4, "limit": 2})
     assert [m["event_sequence"] for m in paged.json()["data"]] == [5, 6]
     assert all(m["content"] == f"m{m['event_sequence']}" for m in paged.json()["data"])
 
-    beyond = await client.get(f"/api/v2/tasks/{tid}/messages", params={"after": 100})
+    beyond = await client.get(f"/api/tasks/{tid}/messages", params={"after": 100})
     assert beyond.json()["data"] == []
 
     for params in ({"limit": 201}, {"limit": 0}, {"after": -1}):
-        bad = await client.get(f"/api/v2/tasks/{tid}/messages", params=params)
+        bad = await client.get(f"/api/tasks/{tid}/messages", params=params)
         assert bad.status_code == 400, params
         assert bad.json()["error"]["code"] == "VALIDATION_ERROR"
 
@@ -619,7 +619,7 @@ async def test_sse_reconnect_replay_no_gap_no_dup(pg, api_env):
     assert created.status_code == 201, created.text
     tid = created.json()["data"]["task"]["id"]
     committed = await client.post(
-        f"/api/v2/tasks/{tid}/input/commit",
+        f"/api/tasks/{tid}/input/commit",
         json={"manifest": []},
         headers={"Idempotency-Key": "t8b-rc-commit"},
     )
@@ -822,7 +822,7 @@ async def test_rate_limit_send_message_429_and_replay_bypasses(pg, api_env, monk
 
     async def send(key: str):
         return await client.post(
-            f"/api/v2/tasks/{tid}/messages", json=body, headers={"Idempotency-Key": key}
+            f"/api/tasks/{tid}/messages", json=body, headers={"Idempotency-Key": key}
         )
 
     first = await send("t8b-rl-1")
@@ -864,7 +864,7 @@ async def test_rate_limit_sse_connect_dependency_and_429(pg, stream_env, monkeyp
         await task_routes._enforce_sse_connect_limit(other, user_ctx=ctx, runtime=stream_env)
 
     # 路由级：限流依赖先于流建立——窗口满后 GET 直接 429 JSON（非 SSE）
-    denied = await client.get(f"/api/v2/tasks/{tid}/events/stream")
+    denied = await client.get(f"/api/tasks/{tid}/events/stream")
     assert denied.status_code == 429
     assert denied.json()["error"]["code"] == "TOO_MANY_REQUESTS"
     assert "retry-after" in denied.headers
@@ -898,7 +898,7 @@ async def test_send_message_publishes_three_frames_after_commit(pg, stream_env):
         assert meta["data"] == {"task_id": tid, "status": "ready", "event_sequence": 1}
 
         sent = await client.post(
-            f"/api/v2/tasks/{tid}/messages",
+            f"/api/tasks/{tid}/messages",
             json={"content": "实时三帧"},
             headers={"Idempotency-Key": "t8b-pub-send-1"},
         )
@@ -952,7 +952,7 @@ async def test_dispatch_claim_publishes_status_running_live(pg, api_env):
             {"u": uid},
         )
     sent = await client.post(
-        f"/api/v2/tasks/{tid}/messages",
+        f"/api/tasks/{tid}/messages",
         json={"content": "排队领槽"},
         headers={"Idempotency-Key": "t8b-pub-dispatch-1"},
     )

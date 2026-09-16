@@ -1,45 +1,154 @@
-"""跨路由共享的设置类依赖；测试通过 app.dependency_overrides 覆盖根目录与限额。"""
+"""引擎装配依赖（Phase 8 T13 cutover 后收窄）。
+
+V1 应用面删除（D2）后，本模块仅存容器池单例 ``get_pi_engine_manager``：
+main.py lifespan 的后台巡检循环与 /internal/harness 冻结面（D15-Option1）
+消费。原 workspace/file_service/skill_loader 等依赖随 V1 路由一并消亡；
+manager 的 history/provider 回调改为本地内联实现（V1 服务层已删，ORM 模型
+保留），回调消费面（run_round/ensure_container 重播种与容器重建）为冻结
+保留逻辑。
+"""
 
 from functools import lru_cache
 from pathlib import Path
 
-from fastapi import Depends
-
-from backend.config import Settings, get_settings
+from backend.config import get_settings
 from backend.engine.extension_generator import ExtensionGenerator
 from backend.engine.pi_engine_manager import PiEngineManager
-from backend.engine.skill_loader import SkillLoader
-from backend.services import task_service
-from backend.services.file_service import FileService
 
 
-def get_workspace_root(settings: Settings = Depends(get_settings)) -> Path:
-    """授权工作区根目录（宿主机路径），对应 Agent 侧 /workspaces/authorized。"""
-    return Path(settings.HOST_WORKSPACE_ROOT)
+async def _fetch_recent_history(task_id: int, limit: int) -> list[dict]:
+    """重播种取数（§7.6）：最近 limit 条持久化消息，时间升序。
 
-
-def get_file_service(settings: Settings = Depends(get_settings)) -> FileService:
-    """任务文件存储服务，限额来自环境配置（§6.6 默认 20MB/10 个/100MB）。"""
-    return FileService(
-        Path(settings.HOST_DATA_ROOT) / "task-files",
-        max_single_bytes=settings.UPLOAD_MAX_FILE_BYTES,
-        max_files_per_request=settings.UPLOAD_MAX_FILES_PER_REQUEST,
-        max_task_bytes=settings.UPLOAD_MAX_TASK_BYTES,
-    )
-
-
-def get_skill_loader(settings: Settings = Depends(get_settings)) -> SkillLoader:
-    """系统提示词组装器（§7.5），64KiB 上限可经 SKILL_PROMPT_MAX_BYTES 调整。"""
-    return SkillLoader(max_bytes=settings.SKILL_PROMPT_MAX_BYTES)
-
-
-def get_extension_generator(settings: Settings = Depends(get_settings)) -> ExtensionGenerator:
-    """任务扩展生成器（§7.4）：task.ts 写盘到控制面扩展目录。
-
-    路径必须绝对化：生成产物将作为 Docker bind mount source（相对路径
-    在 docker CLI 会直接报 invalid Windows path）。
+    原 backend.services.task_service.fetch_recent_messages 内联收编
+    （V1 服务层随 cutover 删除，Conversation/Message 模型保留）。
     """
-    return ExtensionGenerator((Path(settings.HOST_DATA_ROOT) / "extensions").resolve())
+    from sqlalchemy import select
+
+    from backend.database import async_session_factory
+    from backend.models.conversation import Conversation
+    from backend.models.message import Message
+
+    async with async_session_factory() as session:
+        conversation = (
+            await session.execute(select(Conversation).where(Conversation.task_id == task_id))
+        ).scalar_one_or_none()
+        if conversation is None:
+            return []
+        rows = list(
+            (
+                await session.execute(
+                    select(Message)
+                    .where(Message.conversation_id == conversation.id)
+                    .order_by(Message.created_at.desc(), Message.id.desc())
+                    .limit(limit)
+                )
+            ).scalars()
+        )
+        rows.reverse()
+        return [{"role": item.role, "content": item.content} for item in rows]
+
+
+def _build_provider_snapshot(
+    *,
+    source: str,
+    protocol: str,
+    base_url: str,
+    model_id: str,
+    user_provider_id: int | None = None,
+    api_key_encrypted: str | None = None,
+) -> dict:
+    """任务级 Provider 快照（§7.7；原 provider_service.build_provider_snapshot 内联）。"""
+    import json
+    from datetime import datetime, timezone
+
+    snapshot = {
+        "source": source,
+        "protocol": protocol,
+        "base_url": base_url,
+        "model_id": model_id,
+        "loaded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if source == "user":
+        snapshot["user_provider_id"] = user_provider_id
+        snapshot["api_key_encrypted"] = json.loads(api_key_encrypted) if api_key_encrypted else None
+    return snapshot
+
+
+async def _resolve_provider_snapshot(
+    user_id: int, provider_config_id: int | None, settings
+) -> dict:
+    """Provider 快照解析（§7.7 回退链）：显式配置 → 用户默认 → 系统默认。
+
+    原 backend.services.provider_service.resolve_task_provider 内联收编。
+    """
+    from sqlalchemy import select
+
+    from backend.database import async_session_factory
+    from backend.models.user_provider import UserProvider
+
+    async with async_session_factory() as session:
+        row: UserProvider | None = None
+        if provider_config_id is not None:
+            candidate = await session.get(UserProvider, provider_config_id)
+            if candidate is not None and candidate.user_id == user_id:
+                row = candidate
+        if row is None:
+            row = (
+                await session.execute(
+                    select(UserProvider).where(
+                        UserProvider.user_id == user_id, UserProvider.is_default == 1
+                    )
+                )
+            ).scalar_one_or_none()
+        if row is None:
+            return _build_provider_snapshot(
+                source="system",
+                protocol=settings.PI_PROVIDER,
+                base_url=settings.PI_PROXY_BASE_URL,
+                model_id=settings.PI_MODEL,
+            )
+        return _build_provider_snapshot(
+            source="user",
+            protocol=row.protocol,
+            base_url=row.base_url,
+            model_id=row.model_id,
+            user_provider_id=row.id,
+            api_key_encrypted=row.api_key_encrypted,
+        )
+
+
+async def _fetch_running_tasks() -> list[dict]:
+    """§7.8.1 看门狗取数：running 任务的 id 与 running 起点（updated_at）。"""
+    from sqlalchemy import select
+
+    from backend.database import async_session_factory
+    from backend.models.task import Task
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(Task.id, Task.updated_at).where(Task.status == "running")
+        )
+        return [
+            {"id": row[0], "running_since": row[1]} for row in result.all() if row[1] is not None
+        ]
+
+
+async def _mark_task_failed(task_id: int) -> None:
+    """§7.8.1 看门狗落库：仅 running → failed（不覆盖 completed）。"""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import update
+
+    from backend.database import async_session_factory
+    from backend.models.task import Task
+
+    async with async_session_factory() as session:
+        await session.execute(
+            update(Task)
+            .where(Task.id == task_id, Task.status == "running")
+            .values(status="failed", updated_at=datetime.now(timezone.utc))
+        )
+        await session.commit()
 
 
 @lru_cache(maxsize=1)
@@ -48,58 +157,14 @@ def get_pi_engine_manager() -> PiEngineManager:
 
     settings = get_settings()
 
-    async def fetch_history(task_id: int, limit: int) -> list[dict]:
-        return await task_service.fetch_recent_messages(None, task_id, limit)
-
     async def resolve_provider(user_id: int, provider_config_id: int | None) -> dict:
-        from backend.database import async_session_factory
-        from backend.services import provider_service
-
-        async with async_session_factory() as session:
-            snapshot, _ = await provider_service.resolve_task_provider(
-                session, user_id, provider_config_id, settings
-            )
-            return snapshot
-
-    async def fetch_running_tasks() -> list[dict]:
-        """§7.8.1 看门狗取数：running 任务的 id 与 running 起点（updated_at）。"""
-        from sqlalchemy import select
-
-        from backend.database import async_session_factory
-        from backend.models.task import Task
-
-        async with async_session_factory() as session:
-            result = await session.execute(
-                select(Task.id, Task.updated_at).where(Task.status == "running")
-            )
-            return [
-                {"id": row[0], "running_since": row[1]}
-                for row in result.all()
-                if row[1] is not None
-            ]
-
-    async def mark_task_failed(task_id: int) -> None:
-        """§7.8.1 看门狗落库：仅 running → failed（不覆盖 completed）。"""
-        from datetime import datetime, timezone
-
-        from sqlalchemy import update
-
-        from backend.database import async_session_factory
-        from backend.models.task import Task
-
-        async with async_session_factory() as session:
-            await session.execute(
-                update(Task)
-                .where(Task.id == task_id, Task.status == "running")
-                .values(status="failed", updated_at=datetime.now(timezone.utc))
-            )
-            await session.commit()
+        return await _resolve_provider_snapshot(user_id, provider_config_id, settings)
 
     return PiEngineManager(
         settings,
-        history_fetcher=fetch_history,
+        history_fetcher=_fetch_recent_history,
         provider_resolver=resolve_provider,
         extension_generator=ExtensionGenerator(Path(settings.HOST_DATA_ROOT) / "extensions"),
-        running_tasks_fetcher=fetch_running_tasks,
-        mark_task_failed=mark_task_failed,
+        running_tasks_fetcher=_fetch_running_tasks,
+        mark_task_failed=_mark_task_failed,
     )

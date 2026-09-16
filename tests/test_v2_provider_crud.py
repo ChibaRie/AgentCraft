@@ -14,7 +14,7 @@ from tests.v2_provider_helpers import (
     seed_task_for_provider,  # noqa: F401  # T9 更新撤销用例预载（helpers 共享面）
 )
 
-_CREATE = "/api/v2/providers"
+_CREATE = "/api/providers"
 _OPENAI_CID = None  # 每用例内经 catalog_id_by_host 取
 
 
@@ -242,7 +242,7 @@ async def test_put_rotate_key_bumps_version_and_fails_unstarted(provider_env, pg
     async with auth_client() as client:
         await login(client, "rot@example.com", "User-Passw0rd!")
         resp = await client.put(
-            f"/api/v2/providers/{pid}",
+            f"/api/providers/{pid}",
             json={"api_key": "sk-rotated-key-987654"},
             headers={"Idempotency-Key": "idem-rot-1"},
         )
@@ -269,7 +269,7 @@ async def test_put_null_api_key_rejected(provider_env, pg):
     async with auth_client() as client:
         await login(client, "null@example.com", "User-Passw0rd!")
         resp = await client.put(
-            f"/api/v2/providers/{pid}",
+            f"/api/providers/{pid}",
             json={"api_key": None},
             headers={"Idempotency-Key": "idem-null-1"},
         )
@@ -291,7 +291,7 @@ async def test_put_null_model_id_rejected(provider_env, pg):
     async with auth_client() as client:
         await login(client, "nullmdl@example.com", "User-Passw0rd!")
         resp = await client.put(
-            f"/api/v2/providers/{pid}",
+            f"/api/providers/{pid}",
             json={"model_id": None},
             headers={"Idempotency-Key": "idem-null-m1"},
         )
@@ -314,7 +314,7 @@ async def test_put_null_is_default_rejected(provider_env, pg):
     async with auth_client() as client:
         await login(client, "nulldf@example.com", "User-Passw0rd!")
         resp = await client.put(
-            f"/api/v2/providers/{pid}",
+            f"/api/providers/{pid}",
             json={"is_default": None},
             headers={"Idempotency-Key": "idem-null-d1"},
         )
@@ -336,7 +336,7 @@ async def test_put_absent_api_key_unchanged(provider_env, pg):
     async with auth_client() as client:
         await login(client, "keep@example.com", "User-Passw0rd!")
         resp = await client.put(
-            f"/api/v2/providers/{pid}",
+            f"/api/providers/{pid}",
             json={"is_default": True},
             headers={"Idempotency-Key": "idem-keep-1"},
         )
@@ -351,12 +351,12 @@ async def test_put_model_id_whitelist_enforced(provider_env, pg):
     async with auth_client() as client:
         await login(client, "mdl@example.com", "User-Passw0rd!")
         ok = await client.put(
-            f"/api/v2/providers/{pid}",
+            f"/api/providers/{pid}",
             json={"model_id": "gpt-4o"},
             headers={"Idempotency-Key": "idem-m1"},
         )
         bad = await client.put(
-            f"/api/v2/providers/{pid}",
+            f"/api/providers/{pid}",
             json={"model_id": "deepseek-chat"},
             headers={"Idempotency-Key": "idem-m2"},
         )
@@ -371,7 +371,7 @@ async def test_put_extra_forbid(provider_env, pg):
     async with auth_client() as client:
         await login(client, "putx@example.com", "User-Passw0rd!")
         resp = await client.put(
-            f"/api/v2/providers/{pid}",
+            f"/api/providers/{pid}",
             json={"base_url": "https://evil.example"},
             headers={"Idempotency-Key": "idem-px-1"},
         )
@@ -386,12 +386,12 @@ async def test_put_cross_user_and_revoked_404(provider_env, pg):
     async with auth_client() as client:
         await login(client, "intruder@example.com", "User-Passw0rd!")
         cross = await client.put(
-            f"/api/v2/providers/{pid}",
+            f"/api/providers/{pid}",
             json={"is_default": True},
             headers={"Idempotency-Key": "idem-x1"},
         )
         gone = await client.put(
-            f"/api/v2/providers/{pid_revoked}", json={}, headers={"Idempotency-Key": "idem-x2"}
+            f"/api/providers/{pid_revoked}", json={}, headers={"Idempotency-Key": "idem-x2"}
         )
     assert cross.status_code == 404 and gone.status_code == 404  # RLS 0 行统一 404；revoked 不可见
     del uid_a
@@ -405,12 +405,12 @@ async def test_delete_revokes_clears_default_and_fails_unstarted(provider_env, p
     async with auth_client() as client:
         await login(client, "del@example.com", "User-Passw0rd!")
         resp = await client.delete(
-            f"/api/v2/providers/{pid}", headers={"Idempotency-Key": "idem-del-1"}
+            f"/api/providers/{pid}", headers={"Idempotency-Key": "idem-del-1"}
         )
         assert resp.status_code == 200
         assert resp.json()["data"] == {"id": str(pid), "status": "revoked"}
         again = await client.delete(
-            f"/api/v2/providers/{pid}", headers={"Idempotency-Key": "idem-del-2"}
+            f"/api/providers/{pid}", headers={"Idempotency-Key": "idem-del-2"}
         )
     assert again.status_code == 404  # revoked 不可见（新 key 故走 404 门而非重放）
     async with pg.engine.connect() as conn:
@@ -434,10 +434,10 @@ async def test_delete_replay_after_revocation(provider_env, pg):
     async with auth_client() as client:
         await login(client, "delrp@example.com", "User-Passw0rd!")
         first = await client.delete(
-            f"/api/v2/providers/{pid}", headers={"Idempotency-Key": "idem-dr-1"}
+            f"/api/providers/{pid}", headers={"Idempotency-Key": "idem-dr-1"}
         )
         replay = await client.delete(
-            f"/api/v2/providers/{pid}", headers={"Idempotency-Key": "idem-dr-1"}
+            f"/api/providers/{pid}", headers={"Idempotency-Key": "idem-dr-1"}
         )
     assert first.status_code == 200 and replay.status_code == 200
     assert replay.json() == first.json()
@@ -448,8 +448,8 @@ async def test_put_delete_require_idempotency_key(provider_env, pg):
     pid = await seed_provider(pg, uid)
     async with auth_client() as client:
         await login(client, "nokey2@example.com", "User-Passw0rd!")
-        assert (await client.put(f"/api/v2/providers/{pid}", json={})).status_code == 400
-        assert (await client.delete(f"/api/v2/providers/{pid}")).status_code == 400
+        assert (await client.put(f"/api/providers/{pid}", json={})).status_code == 400
+        assert (await client.delete(f"/api/providers/{pid}")).status_code == 400
 
 
 async def test_put_bad_uuid_400(provider_env, pg):
@@ -458,7 +458,7 @@ async def test_put_bad_uuid_400(provider_env, pg):
     async with auth_client() as client:
         await login(client, "badpid@example.com", "User-Passw0rd!")
         resp = await client.put(
-            "/api/v2/providers/not-a-uuid", json={}, headers={"Idempotency-Key": "idem-bu-1"}
+            "/api/providers/not-a-uuid", json={}, headers={"Idempotency-Key": "idem-bu-1"}
         )
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "VALIDATION_ERROR"

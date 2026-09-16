@@ -38,7 +38,7 @@ from backend.v2.security import generate_token, hash_token, verify_password
 from tests.conftest import PgDb
 from tests.test_v2_runtime import make_v2_runtime
 
-_ROUTE = "/api/v2/auth/invitations/accept"
+_ROUTE = "/api/auth/invitations/accept"
 _KEY_MATERIAL = base64.urlsafe_b64encode(bytes(range(32))).decode()  # 仅测试材料
 _UA = "AgentCraft-FlowTest/1.0"
 

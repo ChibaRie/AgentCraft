@@ -18,7 +18,7 @@ async def test_catalog_lists_enabled_only(provider_env, pg):
     async with auth_client() as client:
         await seed_active_user(pg, "cat@example.com")
         await login(client, "cat@example.com", "User-Passw0rd!")
-        resp = await client.get("/api/v2/providers/catalog")
+        resp = await client.get("/api/providers/catalog")
     assert resp.status_code == 200
     items = resp.json()["data"]
     hosts = {i["allowed_host"] for i in items}
@@ -36,7 +36,7 @@ async def test_catalog_requires_auth(provider_env):
     真实引擎并污染 runtime 模块级单例（Phase 2 惯例：401 断言也在 override 下）。
     """
     async with auth_client() as client:
-        resp = await client.get("/api/v2/providers/catalog")
+        resp = await client.get("/api/providers/catalog")
     assert resp.status_code == 401
     assert resp.json()["error"]["code"] == "SESSION_EXPIRED"
 
@@ -49,7 +49,7 @@ async def test_provider_list_active_only_and_exact_fields(provider_env, pg):
     await seed_provider(pg, other)  # RLS 隔离：他人行不可见
     async with auth_client() as client:
         await login(client, "list@example.com", "User-Passw0rd!")
-        resp = await client.get("/api/v2/providers")
+        resp = await client.get("/api/providers")
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert [p["id"] for p in data] == [str(keep)]

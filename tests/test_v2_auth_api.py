@@ -1,7 +1,7 @@
 """会话面（logout/设备列表/删除）与 users/me 端到端测试（Task 14）。
 
 契约出处：task-14-brief + Supplement §2/§7 + 裁决 A5/A12/A14；端点契约详见
-backend/api/v2/auth.py / account.py 路由 docstring，此处不重复。覆盖要点：
+backend/api/auth.py / account.py 路由 docstring，此处不重复。覆盖要点：
 
 - logout（认证+CSRF，豁免幂等 A5）：撤销当前会话 + 双 cookie 清除 + 200 ok；
   同一死 cookie 复用 → 401 SESSION_EXPIRED（自然形态，无特殊处理，钉死）。
@@ -55,11 +55,11 @@ from tests.test_v2_password_flows import (
 )
 from tests.test_v2_runtime import make_v2_runtime
 
-_ROUTE_LOGOUT = "/api/v2/auth/logout"
-_ROUTE_SESSIONS = "/api/v2/auth/sessions"
-_ROUTE_ME = "/api/v2/users/me"
-_ROUTE_ACCEPT = "/api/v2/auth/invitations/accept"
-_ROUTE_LOGIN = "/api/v2/auth/login"
+_ROUTE_LOGOUT = "/api/auth/logout"
+_ROUTE_SESSIONS = "/api/auth/sessions"
+_ROUTE_ME = "/api/users/me"
+_ROUTE_ACCEPT = "/api/auth/invitations/accept"
+_ROUTE_LOGIN = "/api/auth/login"
 _UA = "AgentCraft-FlowTest/1.0"
 
 # 统一成功/失败载荷（契约钉死；响应体形状见 backend/main.py 错误处理器）
@@ -244,7 +244,7 @@ async def test_delete_current_session_revokes_and_clears_cookies(pg, flow_env):
     assert await _session_revoked(pg, token)
     rec = await _one(pg, "SELECT status_code, response_json, route FROM idempotency_records")
     assert rec["status_code"] == 200 and rec["response_json"] == _OK_200
-    assert rec["route"] == f"/api/v2/auth/sessions/{current_id}"  # route 含资源 ID（A5）
+    assert rec["route"] == f"/api/auth/sessions/{current_id}"  # route 含资源 ID（A5）
 
 
 async def test_delete_other_own_device_keeps_current_alive(pg, flow_env):

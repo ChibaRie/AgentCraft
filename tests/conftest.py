@@ -258,20 +258,6 @@ class TestDatabase:
 
 
 @pytest.fixture(autouse=True)
-def reset_task_locks():
-    """task_locks 是模块级 dict；测试各自独占事件循环，跨测试残留的
-    asyncio.Lock 会绑定已死循环（RuntimeError）或保持已锁状态（429）。
-    每用例前清空（生产单循环不受影响）。"""
-    from backend.services import task_locks
-
-    task_locks._data_locks.clear()
-    task_locks._round_locks.clear()
-    yield
-    task_locks._data_locks.clear()
-    task_locks._round_locks.clear()
-
-
-@pytest.fixture(autouse=True)
 def v2_executor_streams_hygiene():
     """executor/streams 模块级登记的同步清场（T6a M-4 交接，T6b 落地）。
 

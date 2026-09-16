@@ -61,7 +61,7 @@ from backend.v2.runtime import V2Runtime, owner_session
 from backend.v2.security import generate_token, hash_password, hash_token, verify_password
 from backend.v2.session_service import revoke_all
 
-ROUTE_CONFIRM = "/api/v2/auth/password-reset/confirm"
+ROUTE_CONFIRM = "/api/auth/password-reset/confirm"
 _INVALID_MESSAGE = "链接无效或已过期"  # 契约钉死（brief A10；与验证 confirm 文案区分）
 _MFA_INVALID_MESSAGE = "验证码无效"  # 契约钉死（change 端点 400 形态）
 _INVALID_CURRENT_MESSAGE = "当前密码不正确"

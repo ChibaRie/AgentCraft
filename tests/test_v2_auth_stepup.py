@@ -2,7 +2,7 @@
 
 契约出处：task-3-brief + Supplement §10.4（D7）。
 
-- POST /api/v2/auth/mfa/verify（实现期挂载；T14 后切契约路径 /api/auth/mfa/verify）：
+- POST /api/auth/mfa/verify（实现期挂载；T14 后切契约路径 /api/auth/mfa/verify）：
   认证端点（get_v2_auth 门序：会话 cookie → CSRF → 状态门），普通用户即可（非
   admin 门）；载荷 {totp_code}。
 - 正确码 → 200 {data:{mfa_verified:true}} 且 sessions.mfa_verified_at=now()（12h
@@ -49,7 +49,7 @@ from tests.test_v2_verification_flow import http_client
 # 会触发 ruff F811（参数遮蔽未使用的 import）——以赋值别名引入（test_v2_admin_deps 同型）。
 admin_env = _vah.admin_env
 
-_ROUTE_VERIFY = "/api/v2/auth/mfa/verify"
+_ROUTE_VERIFY = "/api/auth/mfa/verify"
 _ROUTE_ADMIN_INVITATIONS = "/api/admin/invitations"
 _KEY_MATERIAL = base64.urlsafe_b64encode(bytes(range(32))).decode()  # 仅测试材料
 _UA = "AgentCraft-StepupTest/1.0"

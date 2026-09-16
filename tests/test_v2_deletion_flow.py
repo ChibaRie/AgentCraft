@@ -66,9 +66,9 @@ from tests.test_v2_password_flows import (
 from tests.test_v2_runtime import make_v2_runtime
 from tests.v2_provider_helpers import seed_active_user, seed_provider
 
-_ROUTE_REQUEST = "/api/v2/account/deletion/request"
-_ROUTE_CANCEL = "/api/v2/account/deletion/cancel"
-_ROUTE_STATUS = "/api/v2/account/deletion/status"
+_ROUTE_REQUEST = "/api/account/deletion/request"
+_ROUTE_CANCEL = "/api/account/deletion/cancel"
+_ROUTE_STATUS = "/api/account/deletion/status"
 _UA = "AgentCraft-FlowTest/1.0"
 
 # 统一成功/失败载荷（契约钉死；响应体形状见 backend/main.py 错误处理器）

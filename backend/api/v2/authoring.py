@@ -1,4 +1,4 @@
-"""V2 作者面路由（Phase 4 裁决 D6/D7；A1 前缀 /api/v2，Phase 8 切契约路径）。
+"""V2 作者面路由（Phase 4 裁决 D6/D7；A1 实现期前缀 /api/v2 已随 Phase 8 切契约路径 /api）。
 
 端点：POST/GET /{experts|skills}、GET/PUT/DELETE /{experts|skills}/{id}、
 POST /{experts|skills}/{id}/offline、POST /{experts|skills}/{id}/revisions/

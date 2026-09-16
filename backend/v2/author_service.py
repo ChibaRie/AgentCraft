@@ -64,11 +64,9 @@ class _Domain:
 
 _DOMAINS = {
     "experts": _Domain(
-        "/api/v2/experts", Expert, ExpertRevision, "expert_id", "expert_revision", "expert"
+        "/api/experts", Expert, ExpertRevision, "expert_id", "expert_revision", "expert"
     ),
-    "skills": _Domain(
-        "/api/v2/skills", Skill, SkillRevision, "skill_id", "skill_revision", "skill"
-    ),
+    "skills": _Domain("/api/skills", Skill, SkillRevision, "skill_id", "skill_revision", "skill"),
 }
 
 # harness 闸（Sup §10.6，Phase 8 T6）：平台 harness-kind 工具不进作者工具集

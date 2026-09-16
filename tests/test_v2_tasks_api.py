@@ -82,13 +82,13 @@ async def _create_task(
     body = {"expert_revision_id": rid, "initial_message": initial}
     if pid is not None:
         body["provider_id"] = pid
-    return await client.post("/api/v2/tasks", json=body, headers={"Idempotency-Key": idem})
+    return await client.post("/api/tasks", json=body, headers={"Idempotency-Key": idem})
 
 
 async def _upload(client, task_id: str, idem: str, payloads: list[tuple[str, bytes]]):
     files = [("files", (name, content)) for name, content in payloads]
     return await client.post(
-        f"/api/v2/tasks/{task_id}/files", files=files, headers={"Idempotency-Key": idem}
+        f"/api/tasks/{task_id}/files", files=files, headers={"Idempotency-Key": idem}
     )
 
 
@@ -141,7 +141,7 @@ async def test_create_default_provider_fallback_and_not_configured(pg, api_env):
     await seed_provider(pg, nodata_uid, is_default=False)
     nodata_client = await _login(pg, "t8a-nodefault@example.com")
     denied = await nodata_client.post(
-        "/api/v2/tasks",
+        "/api/tasks",
         json={"expert_revision_id": rid, "initial_message": "x"},
         headers={"Idempotency-Key": "t8a-nd-1"},
     )
@@ -152,9 +152,7 @@ async def test_create_default_provider_fallback_and_not_configured(pg, api_env):
 async def test_create_requires_idempotency_key(pg, api_env):
     _, pid, rid = await _seed_domain(pg, "t8a-nokey@example.com")
     client = await _login(pg, "t8a-nokey@example.com")
-    resp = await client.post(
-        "/api/v2/tasks", json={"expert_revision_id": rid, "initial_message": "x"}
-    )
+    resp = await client.post("/api/tasks", json={"expert_revision_id": rid, "initial_message": "x"})
     assert resp.status_code == 400
 
 
@@ -166,7 +164,7 @@ async def test_create_requires_idempotency_key(pg, api_env):
 async def test_auth_negative_401_and_csrf_negative_403(pg, api_env):
     _, pid, rid = await _seed_domain(pg, "t8a-auth@example.com")
     anon = auth_client()
-    resp = await anon.get("/api/v2/tasks")
+    resp = await anon.get("/api/tasks")
     assert resp.status_code == 401
     assert resp.json()["error"]["code"] == "SESSION_EXPIRED"
     client = await _login(pg, "t8a-auth@example.com")
@@ -183,11 +181,11 @@ async def test_cross_user_unified_404(pg, api_env):
     task_id = created.json()["data"]["task"]["id"]
     await seed_active_user(pg, "t8a-intruder@example.com")
     client_b = await _login(pg, "t8a-intruder@example.com")
-    seen = await client_b.get(f"/api/v2/tasks/{task_id}")
+    seen = await client_b.get(f"/api/tasks/{task_id}")
     assert seen.status_code == 404
     assert seen.json()["error"]["code"] == "TASK_NOT_FOUND"
     removed = await client_b.delete(
-        f"/api/v2/tasks/{task_id}", headers={"Idempotency-Key": "t8a-x-del-1"}
+        f"/api/tasks/{task_id}", headers={"Idempotency-Key": "t8a-x-del-1"}
     )
     assert removed.status_code == 404
     assert removed.json()["error"]["code"] == "TASK_NOT_FOUND"
@@ -205,7 +203,7 @@ async def test_commit_shape_replay_conflict_and_state_gate(pg, api_env):
     task_id = created.json()["data"]["task"]["id"]
     manifest = [{"file_name": "a.txt", "sha256": "c" * 64, "size": 5}]
     first = await client.post(
-        f"/api/v2/tasks/{task_id}/input/commit",
+        f"/api/tasks/{task_id}/input/commit",
         json={"manifest": manifest},
         headers={"Idempotency-Key": "t8a-cm-1"},
     )
@@ -215,21 +213,21 @@ async def test_commit_shape_replay_conflict_and_state_gate(pg, api_env):
     assert data["task"]["status"] == "queued"
     assert data["task"]["input_committed"] is True
     replay = await client.post(
-        f"/api/v2/tasks/{task_id}/input/commit",
+        f"/api/tasks/{task_id}/input/commit",
         json={"manifest": manifest},
         headers={"Idempotency-Key": "t8a-cm-1"},
     )
     assert replay.status_code == 200
     assert replay.json() == first.json()
     conflict = await client.post(
-        f"/api/v2/tasks/{task_id}/input/commit",
+        f"/api/tasks/{task_id}/input/commit",
         json={"manifest": []},
         headers={"Idempotency-Key": "t8a-cm-1"},
     )
     assert conflict.status_code == 409
     # 幂等未命中（新 key）→ 状态门 INPUT_COMMITTED 409
     again = await client.post(
-        f"/api/v2/tasks/{task_id}/input/commit",
+        f"/api/tasks/{task_id}/input/commit",
         json={"manifest": manifest},
         headers={"Idempotency-Key": "t8a-cm-2"},
     )
@@ -254,14 +252,14 @@ async def test_running_terminal_202_shape_and_replay(pg, api_env, endpoint, expe
     task_id = str(await seed_running_task(pg, uid, pid))
     client = await _login(pg, email)
     first = await client.post(
-        f"/api/v2/tasks/{task_id}/{endpoint}", headers={"Idempotency-Key": f"t8a-{endpoint}-1"}
+        f"/api/tasks/{task_id}/{endpoint}", headers={"Idempotency-Key": f"t8a-{endpoint}-1"}
     )
     assert first.status_code == 202, first.text
     data = first.json()["data"]
     assert data["task"]["status"] == "running"
     assert data["round"] == {"state": "cancelling"}
     replay = await client.post(
-        f"/api/v2/tasks/{task_id}/{endpoint}", headers={"Idempotency-Key": f"t8a-{endpoint}-1"}
+        f"/api/tasks/{task_id}/{endpoint}", headers={"Idempotency-Key": f"t8a-{endpoint}-1"}
     )
     assert replay.status_code == 202
     assert replay.json() == first.json()
@@ -286,7 +284,7 @@ async def test_terminal_direct_edges_200(pg, api_env):
     ready_id = str(await seed_task_for_provider(pg, uid, pid, status="ready"))
     client = await _login(pg, "t8a-direct@example.com")
     aborted = await client.post(
-        f"/api/v2/tasks/{queued_id}/abort", headers={"Idempotency-Key": "t8a-dt-1"}
+        f"/api/tasks/{queued_id}/abort", headers={"Idempotency-Key": "t8a-dt-1"}
     )
     assert aborted.status_code == 200, aborted.text
     assert aborted.json()["data"]["task"]["status"] == "aborted"
@@ -296,12 +294,12 @@ async def test_terminal_direct_edges_200(pg, api_env):
     )
     assert reason == "user_cancel"
     completed = await client.post(
-        f"/api/v2/tasks/{ready_id}/complete", headers={"Idempotency-Key": "t8a-dt-2"}
+        f"/api/tasks/{ready_id}/complete", headers={"Idempotency-Key": "t8a-dt-2"}
     )
     assert completed.status_code == 200, completed.text
     assert completed.json()["data"]["task"]["status"] == "completed"
     replay = await client.post(
-        f"/api/v2/tasks/{ready_id}/complete", headers={"Idempotency-Key": "t8a-dt-2"}
+        f"/api/tasks/{ready_id}/complete", headers={"Idempotency-Key": "t8a-dt-2"}
     )
     assert replay.status_code == 200
     assert replay.json() == completed.json()
@@ -313,16 +311,14 @@ async def test_delete_task_replay_then_404(pg, api_env):
     client = await _login(pg, "t8a-del@example.com")
     created = await _create_task(client, rid, pid, idem="t8a-dl-0")
     task_id = created.json()["data"]["task"]["id"]
-    first = await client.delete(f"/api/v2/tasks/{task_id}", headers={"Idempotency-Key": "t8a-dl-1"})
+    first = await client.delete(f"/api/tasks/{task_id}", headers={"Idempotency-Key": "t8a-dl-1"})
     assert first.status_code == 200, first.text
     assert first.json()["data"]["task"] == {"id": task_id, "status": "deleted"}
-    replay = await client.delete(
-        f"/api/v2/tasks/{task_id}", headers={"Idempotency-Key": "t8a-dl-1"}
-    )
+    replay = await client.delete(f"/api/tasks/{task_id}", headers={"Idempotency-Key": "t8a-dl-1"})
     assert replay.status_code == 200
     assert replay.json() == first.json()
     fresh_key = await client.delete(
-        f"/api/v2/tasks/{task_id}", headers={"Idempotency-Key": "t8a-dl-2"}
+        f"/api/tasks/{task_id}", headers={"Idempotency-Key": "t8a-dl-2"}
     )
     assert fresh_key.status_code == 404
     assert fresh_key.json()["error"]["code"] == "TASK_NOT_FOUND"
@@ -338,7 +334,7 @@ async def test_delete_post_commit_physical_deletion(pg, api_env, tmp_path):
     assert uploaded.status_code == 200, uploaded.text
     task_tree = tmp_path / "task-storage" / "tasks" / task_id
     assert task_tree.is_dir()
-    first = await client.delete(f"/api/v2/tasks/{task_id}", headers={"Idempotency-Key": "t8a-rm-1"})
+    first = await client.delete(f"/api/tasks/{task_id}", headers={"Idempotency-Key": "t8a-rm-1"})
     assert first.status_code == 200
     assert not task_tree.exists()
     assert not (tmp_path / "task-storage" / "artifacts" / task_id).exists()
@@ -361,7 +357,7 @@ async def test_upload_files_replay_conflict_and_list(pg, api_env):
     assert [f["file_name"] for f in files] == ["a.txt", "b.txt"]
     assert all(f["state"] == "staged" for f in files)
     assert set(files[0].keys()) == {"id", "file_name", "sha256", "size_bytes", "state"}
-    listing = await client.get(f"/api/v2/tasks/{task_id}/files", params={"direction": "input"})
+    listing = await client.get(f"/api/tasks/{task_id}/files", params={"direction": "input"})
     assert listing.status_code == 200
     # 同批文件 created_at 同值（事务时钟）——稳定序由 id 兜底，批内顺序不钉声明序
     assert {f["file_name"] for f in listing.json()["data"]} == {"a.txt", "b.txt"}
@@ -380,7 +376,7 @@ async def test_upload_files_replay_conflict_and_list(pg, api_env):
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
     # direction 词表外 → 400
-    bad = await client.get(f"/api/v2/tasks/{task_id}/files", params={"direction": "bogus"})
+    bad = await client.get(f"/api/tasks/{task_id}/files", params={"direction": "bogus"})
     assert bad.status_code == 400
 
 
@@ -392,17 +388,17 @@ async def test_delete_file_idempotent_then_404(pg, api_env):
     uploaded = await _upload(client, task_id, "t8a-df-f1", [("gone.txt", b"bye")])
     fid = uploaded.json()["data"]["files"][0]["id"]
     first = await client.delete(
-        f"/api/v2/tasks/{task_id}/files/{fid}", headers={"Idempotency-Key": "t8a-df-1"}
+        f"/api/tasks/{task_id}/files/{fid}", headers={"Idempotency-Key": "t8a-df-1"}
     )
     assert first.status_code == 200, first.text
     assert first.json()["data"]["file"] == {"id": fid, "state": "deleted"}
     replay = await client.delete(
-        f"/api/v2/tasks/{task_id}/files/{fid}", headers={"Idempotency-Key": "t8a-df-1"}
+        f"/api/tasks/{task_id}/files/{fid}", headers={"Idempotency-Key": "t8a-df-1"}
     )
     assert replay.status_code == 200
     assert replay.json() == first.json()
     fresh_key = await client.delete(
-        f"/api/v2/tasks/{task_id}/files/{fid}", headers={"Idempotency-Key": "t8a-df-2"}
+        f"/api/tasks/{task_id}/files/{fid}", headers={"Idempotency-Key": "t8a-df-2"}
     )
     assert fresh_key.status_code == 404
     assert fresh_key.json()["error"]["code"] == "FILE_NOT_FOUND"
@@ -471,7 +467,7 @@ async def test_artifacts_list_and_download_headers(pg, api_env):
     task_id = created.json()["data"]["task"]["id"]
     payload = b"artifact-bytes"
     fid = await _seed_registered_artifact(pg, api_env.storage, uid, task_id, "结果.txt", payload)
-    listing = await client.get(f"/api/v2/tasks/{task_id}/artifacts")
+    listing = await client.get(f"/api/tasks/{task_id}/artifacts")
     assert listing.status_code == 200, listing.text
     items = listing.json()["data"]
     assert len(items) == 1
@@ -484,7 +480,7 @@ async def test_artifacts_list_and_download_headers(pg, api_env):
         "produced_in_round_id",
     }
     assert items[0]["produced_in_round_id"] is not None
-    download = await client.get(f"/api/v2/tasks/{task_id}/artifacts/{fid}/download")
+    download = await client.get(f"/api/tasks/{task_id}/artifacts/{fid}/download")
     assert download.status_code == 200
     assert download.content == payload
     disposition = download.headers["content-disposition"]
@@ -499,7 +495,7 @@ async def test_task_quota_view_and_owner_quota(pg, api_env):
     created = await _create_task(client, rid, pid, idem="t8a-qt-0")
     task_id = created.json()["data"]["task"]["id"]
     await _upload(client, task_id, "t8a-qt-f1", [("a.txt", b"x" * 100)])
-    view = await client.get(f"/api/v2/tasks/{task_id}/quota")
+    view = await client.get(f"/api/tasks/{task_id}/quota")
     assert view.status_code == 200, view.text
     data = view.json()["data"]
     assert data["usage"]["inputs_count"] == 1
@@ -513,14 +509,14 @@ async def test_task_quota_view_and_owner_quota(pg, api_env):
     }
     assert data["input_frozen"] is False
     committed = await client.post(
-        f"/api/v2/tasks/{task_id}/input/commit",
+        f"/api/tasks/{task_id}/input/commit",
         json={"manifest": []},
         headers={"Idempotency-Key": "t8a-qt-1"},
     )
     assert committed.status_code == 200
-    after = await client.get(f"/api/v2/tasks/{task_id}/quota")
+    after = await client.get(f"/api/tasks/{task_id}/quota")
     assert after.json()["data"]["input_frozen"] is True
-    owner = await client.get("/api/v2/quota")
+    owner = await client.get("/api/quota")
     assert owner.status_code == 200
     owner_data = owner.json()["data"]
     assert owner_data["usage"]["tasks_started_today"] == 1
@@ -538,7 +534,7 @@ async def test_list_tasks_pagination_and_deleted_hiding(pg, api_env):
     client = await _login(pg, "t8a-list@example.com")
     first = await _create_task(client, rid, pid, idem="t8a-ls-1")
     second = await _create_task(client, rid, pid, idem="t8a-ls-2")
-    listing = await client.get("/api/v2/tasks")
+    listing = await client.get("/api/tasks")
     assert listing.status_code == 200
     data = listing.json()["data"]
     assert data["total"] == 2 and data["page"] == 1 and data["size"] == 20
@@ -548,13 +544,13 @@ async def test_list_tasks_pagination_and_deleted_hiding(pg, api_env):
     }
     assert set(data["items"][0].keys()) == _D14_VIEW_KEYS
     removed = await client.delete(
-        f"/api/v2/tasks/{first.json()['data']['task']['id']}",
+        f"/api/tasks/{first.json()['data']['task']['id']}",
         headers={"Idempotency-Key": "t8a-ls-del"},
     )
     assert removed.status_code == 200
-    after = await client.get("/api/v2/tasks")
+    after = await client.get("/api/tasks")
     assert after.json()["data"]["total"] == 1
-    bad = await client.get("/api/v2/tasks", params={"page": 0})
+    bad = await client.get("/api/tasks", params={"page": 0})
     assert bad.status_code == 400
 
 
@@ -581,9 +577,9 @@ async def test_rate_limit_task_create_429(pg, api_env):
     client = await _login(pg, "t8a-rl-create@example.com")
     # 空请求体 → 400/422 校验失败（限流依赖先于 body 校验消耗窗口）
     for i in range(30):
-        resp = await client.post("/api/v2/tasks", headers={"Idempotency-Key": f"t8a-rlc-{i}"})
+        resp = await client.post("/api/tasks", headers={"Idempotency-Key": f"t8a-rlc-{i}"})
         assert resp.status_code in (400, 422), resp.text
-    over = await client.post("/api/v2/tasks", headers={"Idempotency-Key": "t8a-rlc-over"})
+    over = await client.post("/api/tasks", headers={"Idempotency-Key": "t8a-rlc-over"})
     assert over.status_code == 429
     assert "retry-after" in {k.lower() for k in over.headers.keys()}
     assert over.json()["error"]["code"] == "TOO_MANY_REQUESTS"
@@ -592,7 +588,7 @@ async def test_rate_limit_task_create_429(pg, api_env):
 async def test_rate_limit_upload_429(pg, api_env):
     await _seed_domain(pg, "t8a-rl-upload@example.com")
     client = await _login(pg, "t8a-rl-upload@example.com")
-    target = f"/api/v2/tasks/{uuid7()}/files"
+    target = f"/api/tasks/{uuid7()}/files"
     for i in range(60):
         resp = await client.post(target, headers={"Idempotency-Key": f"t8a-rlu-{i}"})
         assert resp.status_code in (400, 422), resp.text
