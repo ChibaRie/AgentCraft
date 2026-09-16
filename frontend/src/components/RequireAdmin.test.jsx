@@ -142,7 +142,7 @@ describe("403 ADMIN_MFA_REQUIRED 分流（①）", () => {
 });
 
 describe("verify 成功后原请求重放（②）", () => {
-  it("POST /api/v2/auth/mfa/verify {totp_code} 成功 → 清门 + 重放一次", async () => {
+  it("POST /api/auth/mfa/verify {totp_code} 成功 → 清门 + 重放一次", async () => {
     requestV2.mockResolvedValue({ status: 200, data: { mfa_verified: true } });
     const replay = vi.fn();
     renderGuard();
@@ -152,7 +152,7 @@ describe("verify 成功后原请求重放（②）", () => {
     fireEvent.click(screen.getByRole("button", { name: "验证并继续" }));
     await waitFor(() => expect(replay).toHaveBeenCalledTimes(1));
 
-    expect(requestV2).toHaveBeenCalledWith("/api/v2/auth/mfa/verify", {
+    expect(requestV2).toHaveBeenCalledWith("/api/auth/mfa/verify", {
       method: "POST",
       body: { totp_code: "123456" },
     });
@@ -185,7 +185,7 @@ describe("verify 成功后原请求重放（②）", () => {
     fireEvent.click(screen.getByRole("button", { name: "验证并继续" }));
     await waitFor(() =>
       expect(requestV2).toHaveBeenCalledWith(
-        "/api/v2/auth/mfa/verify",
+        "/api/auth/mfa/verify",
         expect.objectContaining({ method: "POST" })
       )
     );

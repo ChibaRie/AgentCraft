@@ -113,7 +113,7 @@ describe("fetchEvents", () => {
     expect(result.events).toHaveLength(1);
     expect(result.events[0]).toMatchObject({ sequence: 1, type: "status_changed" });
     expect(result.snapshot).toEqual({ status: "queued", event_sequence: 1 });
-    expect(calls[0].url).toBe("/api/v2/tasks/task-1/events?after=0&limit=1000");
+    expect(calls[0].url).toBe("/api/tasks/task-1/events?after=0&limit=1000");
     expect(calls[0].init.credentials).toBe("same-origin");
   });
 });
@@ -154,7 +154,7 @@ describe("createTaskStream", () => {
     const stream = createTaskStream({ taskId: "task-1", after: 7, onFrame: () => {} });
     await flush();
 
-    expect(calls[0].url).toBe("/api/v2/tasks/task-1/events/stream?after=7");
+    expect(calls[0].url).toBe("/api/tasks/task-1/events/stream?after=7");
     expect(calls[0].init.method).toBe("GET");
     expect(calls[0].init.credentials).toBe("same-origin");
     const headers = headersOf(calls[0].init);

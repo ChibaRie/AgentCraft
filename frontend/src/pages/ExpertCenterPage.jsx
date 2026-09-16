@@ -29,7 +29,8 @@ function ExpertCard({ expert, index }) {
 }
 
 export default function ExpertCenterPage() {
-  const { isAuthenticated, isExpert } = useAuth();
+  // isExpert 单判据（V2 entitlement）蕴含有效会话——isAuthenticated 门并轨删除
+  const { isExpert } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const search = searchParams.get("search") || "";
   const category = searchParams.get("category") || "";
@@ -105,7 +106,7 @@ export default function ExpertCenterPage() {
             <h1 className="page-title">专家中心</h1>
             <p className="page-sub">浏览社区公开的专家，找到匹配你任务的那一位。</p>
           </div>
-          {isAuthenticated && isExpert && (
+          {isExpert && (
             <div className="manage-toolbar-actions">
               <Link to="/my-experts/new" className="btn btn-primary">
                 <Plus size={14} aria-hidden="true" />

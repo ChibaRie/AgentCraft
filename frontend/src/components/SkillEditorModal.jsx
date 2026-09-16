@@ -77,7 +77,7 @@ export function validateSkillField(name, value) {
 
 /**
  * Skill 创建/编辑弹窗（V2 作者面）。`skillId` 为 null 时是创建模式；
- * 编辑模式自取 detail（GET /api/v2/skills/{id}）以最新 revision 的 content_json 回填。
+ * 编辑模式自取 detail（GET /api/skills/{id}）以最新 revision 的 content_json 回填。
  * 保存 = POST/PUT 全量 content_json（draft 覆写 / 自动新 draft 由服务端两段式裁决），
  * 幂等键必带（Sup §9.8.1 写端点家族）；提审在列表页卡片上进行，弹窗只管内容。
  */

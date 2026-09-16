@@ -5,7 +5,6 @@ import {
   DoorOpen,
   Moon,
   Plug,
-  SignOut,
   Sun,
   UserCircle,
   Users,
@@ -47,7 +46,7 @@ const TASK_DOMAIN_LINKS = [
 ];
 
 function UserMenu() {
-  const { user, v2User, isExpert, logout, logoutV2 } = useAuth();
+  const { v2User, isExpert, logoutV2 } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef(null);
   const navigate = useNavigate();
@@ -74,14 +73,8 @@ function UserMenu() {
     };
   }, [isOpen]);
 
-  function handleLogout() {
-    setIsOpen(false);
-    logout();
-    navigate("/login");
-  }
-
   /**
-   * 退出账户会话（FE-T7，V2 轨登出；logout 导航收敛规则）：
+   * 退出账户会话（FE-T7；logout 导航收敛规则）：
    * - 200 路径：logoutV2 已清 csrf + v2User → 本处理器跳 /login；
    * - 401 路径（死 cookie 重放）：requestV2 已派发会话过期事件，AuthProvider
    *   订阅已跳 /login?v2=1——本处理器不再二次跳转、不展示错误（等价收敛）。
@@ -104,10 +97,9 @@ function UserMenu() {
     }
   }
 
-  // 双轨渲染源（E12）：V2 会话优先展示；无 username 时 displayName 取 email 前缀。
-  // 专家徽标与菜单同源消费上下文汇流值 isExpert（T11 ④，双判据见 AuthContext）。
-  const displayUser = v2User ?? user;
-  const name = displayName(displayUser);
+  // 渲染源 = V2 权威会话（T14 会话归一：唯一会话域）；无 username 时
+  // displayName 取 email 前缀。专家徽标与菜单同源消费上下文单判据 isExpert。
+  const name = displayName(v2User);
 
   return (
     <div className="usermenu" ref={menuRef}>
@@ -136,7 +128,7 @@ function UserMenu() {
             {name}
             {isExpert && <span className="role-badge is-expert">专家</span>}
           </div>
-          <div className="usermenu-email">{displayUser.email}</div>
+          <div className="usermenu-email">{v2User?.email}</div>
         </div>
         <Link
           role="menuitem"
@@ -191,18 +183,13 @@ function UserMenu() {
             退出账户会话
           </button>
         )}
-        <button type="button" role="menuitem" className="usermenu-item" onClick={handleLogout}>
-          <SignOut size={16} aria-hidden="true" />
-          登出
-        </button>
       </div>
     </div>
   );
 }
 
 export default function NavBar() {
-  const { isAuthenticated, v2User } = useAuth();
-  const hasAnySession = isAuthenticated || Boolean(v2User);
+  const { v2User } = useAuth();
 
   return (
     <header className="navbar">
@@ -229,7 +216,7 @@ export default function NavBar() {
         </nav>
         <div className="navbar-actions">
           <ThemeToggle />
-          {hasAnySession ? (
+          {v2User ? (
             <UserMenu />
           ) : (
             <Link to="/login" className="btn btn-primary navbar-login">

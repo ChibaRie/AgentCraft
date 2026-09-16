@@ -128,8 +128,8 @@ describe("v2User gating 与数据装载", () => {
     await renderWithProviders();
 
     expect(requestV2).toHaveBeenCalledTimes(2);
-    expect(requestV2.mock.calls[0][0]).toBe("/api/v2/providers/catalog");
-    expect(requestV2.mock.calls[1][0]).toBe("/api/v2/providers");
+    expect(requestV2.mock.calls[0][0]).toBe("/api/providers/catalog");
+    expect(requestV2.mock.calls[1][0]).toBe("/api/providers");
 
     expect(screen.getByText("DeepSeek")).toBeTruthy();
     expect(screen.getByText("Moonshot")).toBeTruthy();
@@ -211,7 +211,7 @@ describe("添加 Provider", () => {
 
     expect(requestV2).toHaveBeenCalledTimes(4);
     const [path, options] = requestV2.mock.calls[2];
-    expect(path).toBe("/api/v2/providers");
+    expect(path).toBe("/api/providers");
     expect(options.method).toBe("POST");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(options.body).toEqual({
@@ -221,7 +221,7 @@ describe("添加 Provider", () => {
       is_default: true,
     });
     // 整体 refetch：第 4 次调用是 GET providers（refreshProviders 单参调用，无 method 选项）
-    expect(requestV2.mock.calls[3][0]).toBe("/api/v2/providers");
+    expect(requestV2.mock.calls[3][0]).toBe("/api/providers");
     expect(requestV2.mock.calls[3][1]?.method).toBeUndefined();
     expect(screen.getByText("••••ff88")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "保存" })).toBeNull();
@@ -325,7 +325,7 @@ describe("测试连通性", () => {
     await flush();
 
     const [path, options] = requestV2.mock.calls[2];
-    expect(path).toBe(`/api/v2/providers/${PROVIDER_A.id}/test`);
+    expect(path).toBe(`/api/providers/${PROVIDER_A.id}/test`);
     expect(options.method).toBe("POST");
     expect(options.idempotencyKey).toBeUndefined();
     expect(screen.getByText("正常 · 123ms · 可见 7 个模型")).toBeTruthy();
@@ -416,7 +416,7 @@ describe("轮换（更换 Key）", () => {
     await flush();
 
     const [path, options] = requestV2.mock.calls[2];
-    expect(path).toBe(`/api/v2/providers/${PROVIDER_B.id}`);
+    expect(path).toBe(`/api/providers/${PROVIDER_B.id}`);
     expect(options.method).toBe("PUT");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(options.body).toEqual({ api_key: "sk-rotated-9999", is_default: true });
@@ -475,7 +475,7 @@ describe("设为默认", () => {
     await flush();
 
     const [path, options] = requestV2.mock.calls[2];
-    expect(path).toBe(`/api/v2/providers/${PROVIDER_B.id}`);
+    expect(path).toBe(`/api/providers/${PROVIDER_B.id}`);
     expect(options.method).toBe("PUT");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(options.body).toEqual({ is_default: true });
@@ -503,7 +503,7 @@ describe("删除（软撤）", () => {
     await flush();
 
     const [path, options] = requestV2.mock.calls[2];
-    expect(path).toBe(`/api/v2/providers/${PROVIDER_B.id}`);
+    expect(path).toBe(`/api/providers/${PROVIDER_B.id}`);
     expect(options.method).toBe("DELETE");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(screen.queryByText("••••cd34")).toBeNull();
@@ -522,7 +522,7 @@ describe("删除（软撤）", () => {
     await flush();
 
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(requestV2.mock.calls[3][0]).toBe("/api/v2/providers");
+    expect(requestV2.mock.calls[3][0]).toBe("/api/providers");
     expect(screen.queryByText("••••cd34")).toBeNull();
   });
 

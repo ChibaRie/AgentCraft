@@ -69,10 +69,10 @@ afterEach(() => {
 
 describe("routes", () => {
   it("导出四组 V2 路由前缀常量（后续任务消费的精确值）", () => {
-    expect(V2_AUTH).toBe("/api/v2/auth");
-    expect(V2_ACCOUNT).toBe("/api/v2/account");
-    expect(V2_USERS).toBe("/api/v2/users");
-    expect(V2_PROVIDERS).toBe("/api/v2/providers");
+    expect(V2_AUTH).toBe("/api/auth");
+    expect(V2_ACCOUNT).toBe("/api/account");
+    expect(V2_USERS).toBe("/api/users");
+    expect(V2_PROVIDERS).toBe("/api/providers");
   });
 });
 
@@ -130,30 +130,30 @@ describe("requestV2 · 幂等键", () => {
   it("V2_IDEMPOTENCY_REQUIRED 覆盖后端 9 个义务端点且不误报非义务路径", () => {
     // 与 backend/api/v2/{auth,account,providers}.py 的 Depends(require_key_header) 端点一一对应
     const mandatoryPaths = [
-      "/api/v2/providers",
-      "/api/v2/providers/p1",
-      "/api/v2/auth/sessions/s1",
-      "/api/v2/auth/invitations/accept",
-      "/api/v2/auth/email-verification/confirm",
-      "/api/v2/auth/password-reset/confirm",
-      "/api/v2/account/deletion/request",
-      "/api/v2/account/deletion/cancel",
+      "/api/providers",
+      "/api/providers/p1",
+      "/api/auth/sessions/s1",
+      "/api/auth/invitations/accept",
+      "/api/auth/email-verification/confirm",
+      "/api/auth/password-reset/confirm",
+      "/api/account/deletion/request",
+      "/api/account/deletion/cancel",
     ];
     for (const path of mandatoryPaths) {
       expect(V2_IDEMPOTENCY_REQUIRED.some((re) => re.test(path))).toBe(true);
     }
 
     const nonMandatoryPaths = [
-      "/api/v2/auth/login",
-      "/api/v2/auth/login/mfa",
-      "/api/v2/auth/logout",
-      "/api/v2/auth/email-verification/resend",
-      "/api/v2/auth/password-reset/request",
-      "/api/v2/auth/password-change",
-      "/api/v2/auth/mfa/setup",
-      "/api/v2/auth/mfa/activate",
-      "/api/v2/auth/sessions",
-      "/api/v2/providers/p1/test",
+      "/api/auth/login",
+      "/api/auth/login/mfa",
+      "/api/auth/logout",
+      "/api/auth/email-verification/resend",
+      "/api/auth/password-reset/request",
+      "/api/auth/password-change",
+      "/api/auth/mfa/setup",
+      "/api/auth/mfa/activate",
+      "/api/auth/sessions",
+      "/api/providers/p1/test",
     ];
     for (const path of nonMandatoryPaths) {
       expect(V2_IDEMPOTENCY_REQUIRED.some((re) => re.test(path))).toBe(false);

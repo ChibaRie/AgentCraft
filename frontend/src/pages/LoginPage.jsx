@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { isSafeInternalPath, useAuth, V2_LOGIN_FROM_STORAGE_KEY } from "../auth/AuthContext.jsx";
 import AuthBrandPanel from "../components/AuthBrandPanel.jsx";
 import FormField from "../components/FormField.jsx";
@@ -19,7 +19,7 @@ function readLoginFrom() {
       return raw;
     }
   } catch {
-    // sessionStorage 不可用 → 忽略（回落 location.state?.from ?? "/"）
+    // sessionStorage 不可用 → 忽略（回落 location.state?.from 白名单值 ?? "/"）
   }
   return null;
 }
@@ -36,32 +36,18 @@ function RetryHint({ retryAfter }) {
 }
 
 /**
- * 登录页双轨重写（FE-T3）：
- * - 双 Tab：「工作区登录」= V1 既有登录逻辑原样（token 存 localStorage + login()）；
- *   「账户登录」= V2（loginV2 → mfa_required 就地切换挑战卡片 → loginV2Mfa）。
- * - URL ?v2=1（V2 会话过期 401 事件跳转落点）默认激活 V2 Tab；V2 登录成功
- *   （含 MFA 挑战完成路径）恢复 401 时 sessionStorage 暂存的 from（D13/I-4：
- *   白名单站内根相对路径、消费即清除、恢复一律 navigate()），回落 state.from，再回落 /。
- * - E5：注册 Tab 删除（V2 注册走邀请制，不在登录页）。
- * - E11：/login 不设路由守卫——双轨 R1 下任一单侧会话用户都可能经 /login
- *   补建另一轨会话，已登录访问不弹回。
- * - 简单性裁决：双 Tab 切换不保留另一 Tab 的表单态（两侧瞬时态全部复位）。
+ * 登录页（Phase 8 T14 会话归一：双 Tab 拆解，唯一账户登录）：
+ * - V2 登录（loginV2 → mfa_required 就地切换挑战卡片 → loginV2Mfa）；
+ * - 登录成功（含 MFA 挑战完成路径）恢复 401 时 sessionStorage 暂存的 from
+ *   （D13/I-4：白名单站内根相对路径、消费即清除、恢复一律 navigate()），
+ *   回落 state.from（同过 isSafeInternalPath 白名单，T11 移交 M2），再回落 /；
+ * - E5：注册入口不存在（V2 注册走邀请制）；E11：/login 不设路由守卫——
+ *   已登录访问不弹回（可经 /login 重登/换账户）。
  */
 export default function LoginPage() {
-  const { login, loginV2, loginV2Mfa } = useAuth();
+  const { loginV2, loginV2Mfa } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [searchParams] = useSearchParams();
-
-  const [activeTab, setActiveTab] = useState(() =>
-    searchParams.get("v2") === "1" ? "v2" : "v1"
-  );
-
-  // V1 表单态（原 LoginPage 登录分支原样搬入）
-  const [v1Fields, setV1Fields] = useState({ login: "", password: "" });
-  const [v1Errors, setV1Errors] = useState({});
-  const [v1Alert, setV1Alert] = useState("");
-  const [v1Submitting, setV1Submitting] = useState(false);
 
   // V2 态机：form（表单）→ challenge（MFA 挑战）| blocked（403 全页提示）
   const [v2Stage, setV2Stage] = useState("form");
@@ -75,10 +61,15 @@ export default function LoginPage() {
 
   const { retryAfter, start: startRetryAfter } = useRetryAfter();
 
-  function setV1Field(name, value) {
-    setV1Fields((current) => ({ ...current, [name]: value }));
-    setV1Errors((current) => ({ ...current, [name]: "" }));
-    setV1Alert("");
+  /** from 恢复链（T11 移交 M2）：401 暂存优先，回落 state.from——两条来源
+   *  均过 isSafeInternalPath 白名单（//evil.com 协议相对串拒绝，回落 /）。 */
+  function navigateAfterLogin() {
+    navigate(readLoginFrom() ?? safeStateFrom() ?? "/", { replace: true });
+  }
+
+  function safeStateFrom() {
+    const raw = location.state?.from;
+    return isSafeInternalPath(raw) ? raw : null;
   }
 
   function setV2Field(name, value) {
@@ -90,24 +81,6 @@ export default function LoginPage() {
   function handleOtpChange(next) {
     setOtp(next);
     setV2Alert("");
-  }
-
-  function switchTab(nextTab) {
-    if (nextTab === activeTab) {
-      return;
-    }
-    // 切换不保留另一 Tab 的表单态：两侧瞬时态全部复位（测试钉死）
-    setActiveTab(nextTab);
-    setV1Fields({ login: "", password: "" });
-    setV1Errors({});
-    setV1Alert("");
-    setV2Stage("form");
-    setV2Fields({ email: "", password: "" });
-    setV2Errors({});
-    setV2Alert("");
-    setChallengeId(null);
-    setOtp("");
-    setBlockedMessage("");
   }
 
   /** 「返回重新登录」：仅重置 MFA 挑战态机，保留已输入凭据 */
@@ -127,27 +100,6 @@ export default function LoginPage() {
     setV2Alert("");
     setV2Errors({});
     setV2Fields({ email: "", password: "" });
-  }
-
-  async function handleV1Login(event) {
-    event.preventDefault();
-    const nextErrors = {
-      login: v1Fields.login.trim() ? "" : "请输入用户名或邮箱",
-      password: v1Fields.password ? "" : "请输入密码",
-    };
-    setV1Errors(nextErrors);
-    if (nextErrors.login || nextErrors.password) {
-      return;
-    }
-    setV1Submitting(true);
-    try {
-      await login(v1Fields.login, v1Fields.password);
-      navigate(location.state?.from || "/", { replace: true });
-    } catch (error) {
-      setV1Alert(error.message || "请求失败，请稍后重试");
-    } finally {
-      setV1Submitting(false);
-    }
   }
 
   /**
@@ -198,10 +150,7 @@ export default function LoginPage() {
         setV2Stage("challenge");
         return;
       }
-      // D13/I-4：优先消费 401 暂存 from（v2:session-expired 全页跳转丢 router
-      // state 的恢复通道），回落 state.from，再回落 /；恢复一律 navigate()
-      //（禁 location.assign）
-      navigate(readLoginFrom() ?? location.state?.from ?? "/", { replace: true });
+      navigateAfterLogin();
     } catch (error) {
       applyV2Error(error);
     } finally {
@@ -218,7 +167,7 @@ export default function LoginPage() {
     try {
       await loginV2Mfa(challengeId, otp);
       // MFA 挑战完成路径同享 from 恢复（暂存未被 mfa_required 分支消费）
-      navigate(readLoginFrom() ?? location.state?.from ?? "/", { replace: true });
+      navigateAfterLogin();
     } catch (error) {
       applyV2Error(error);
     } finally {
@@ -247,79 +196,14 @@ export default function LoginPage() {
     );
   }
 
-  const isV1Tab = activeTab === "v1";
-
   return (
     <main className="auth-page">
       <AuthBrandPanel />
 
       <section className="auth-panel">
         <div className="auth-card rise" style={{ "--rise-index": 1 }}>
-          <div className="v2-tabs" data-active={activeTab} role="group" aria-label="登录方式">
-            <span className="v2-tabs-thumb" aria-hidden="true" />
-            <button
-              type="button"
-              className="v2-tab"
-              aria-pressed={isV1Tab}
-              onClick={() => switchTab("v1")}
-            >
-              工作区登录
-            </button>
-            <button
-              type="button"
-              className="v2-tab"
-              aria-pressed={!isV1Tab}
-              onClick={() => switchTab("v2")}
-            >
-              账户登录
-            </button>
-          </div>
-
-          <div
-            className="auth-mode-content"
-            key={isV1Tab ? "v1" : `v2-${v2Stage}`}
-          >
-            {isV1Tab ? (
-              <>
-                <h2 className="auth-card-title">欢迎回来</h2>
-                <p className="auth-card-sub">使用用户名或邮箱登录你的工作台。</p>
-                <form className="auth-form" onSubmit={handleV1Login} noValidate>
-                  <div className="form-alert" role="alert" hidden={!v1Alert}>
-                    {v1Alert}
-                  </div>
-                  <FormField label="用户名或邮箱" error={v1Errors.login}>
-                    <input
-                      className="field-input"
-                      name="login"
-                      autoComplete="username"
-                      placeholder="username 或 name@example.com"
-                      value={v1Fields.login}
-                      onChange={(event) => setV1Field("login", event.target.value)}
-                    />
-                  </FormField>
-                  <FormField label="密码" error={v1Errors.password}>
-                    <input
-                      className="field-input"
-                      name="password"
-                      type="password"
-                      autoComplete="current-password"
-                      placeholder="请输入密码"
-                      value={v1Fields.password}
-                      onChange={(event) => setV1Field("password", event.target.value)}
-                    />
-                  </FormField>
-                  <div className="auth-form-footer">
-                    <button
-                      type="submit"
-                      className="btn btn-primary btn-block"
-                      disabled={v1Submitting}
-                    >
-                      {v1Submitting ? "登录中…" : "登录"}
-                    </button>
-                  </div>
-                </form>
-              </>
-            ) : v2Stage === "challenge" ? (
+          <div className="auth-mode-content" key={`v2-${v2Stage}`}>
+            {v2Stage === "challenge" ? (
               <>
                 <h2 className="auth-card-title">两步验证</h2>
                 <p className="auth-card-sub">输入认证器 App 生成的 6-8 位动态验证码。</p>
@@ -391,8 +275,7 @@ export default function LoginPage() {
                       {v2Submitting ? "登录中…" : "登录"}
                     </button>
                     <RetryHint retryAfter={retryAfter} />
-                    {/* 忘记密码走 V2 重置流（FE-T5）；仅 V2 Tab——V1 工作区账户
-                        为独立双库账户，无重置端点，放 V1 Tab 会误导 */}
+                    {/* 忘记密码走 V2 重置流（FE-T5） */}
                     <p className="auth-switch-hint">
                       <Link className="auth-switch-link" to="/password-reset">
                         忘记密码？

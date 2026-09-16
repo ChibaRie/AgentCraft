@@ -2,15 +2,13 @@ import { act, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuth } from "../auth/AuthContext.jsx";
-import { request } from "../api/client.js";
 import { requestV2 } from "../api/v2/client.js";
-import { V2_DISCOVER, V2_TASKS } from "../api/v2/routes.js";
+import { V2_AUTHORING_SKILLS, V2_DISCOVER, V2_TASKS } from "../api/v2/routes.js";
 import HomePage from "./HomePage.jsx";
 
-// 首页装配冒烟（Phase 8 T11）：双轨任务门控（V1 优先/否则 V2）+ discover 切 V2
-// + V2-only 无全局错误横幅。身份源 mock useAuth；网络入口 request/requestV2 双 mock。
+// 首页装配冒烟（Phase 8 T14 会话归一）：任务/discover/我的 Skill 全数据面走 V2。
+// 身份源 mock useAuth；网络入口 requestV2 单 mock。
 vi.mock("../auth/AuthContext.jsx", () => ({ useAuth: vi.fn() }));
-vi.mock("../api/client.js", () => ({ request: vi.fn() }));
 vi.mock("../api/v2/client.js", async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, requestV2: vi.fn() };
@@ -28,18 +26,6 @@ function renderHome() {
 async function flush() {
   await act(async () => {});
 }
-
-const V1_TASKS = {
-  data: [
-    {
-      id: 1,
-      status: "running",
-      title: "季度数据盘点",
-      expert_name_snapshot: "数据分析师",
-    },
-  ],
-  total: 1,
-};
 
 const V2_TASKS_PAGE = {
   items: [
@@ -87,7 +73,6 @@ function routeV2(tasksPage = V2_TASKS_PAGE, discoverPage = V2_DISCOVER_PAGE) {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  request.mockRejectedValue(new Error("V1 request：本用例未显式编排"));
   requestV2.mockRejectedValue(new Error("requestV2：本用例未显式编排"));
 });
 
@@ -95,10 +80,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("V2-only 用户（简报 Step 2 ①：无错误横幅 + 任务列表渲染）", () => {
-  it("任务列表走 V2_TASKS、discover 走 V2_DISCOVER，零 V1 调用、无 alert 横幅", async () => {
+describe("V2 会话用户（T14 归一：无错误横幅 + 任务列表渲染）", () => {
+  it("任务列表走 V2_TASKS、discover 走 V2_DISCOVER，无 alert 横幅", async () => {
     useAuth.mockReturnValue({
-      user: null,
       v2User: { id: "u-2", email: "v2@example.com", role: "user" },
       isExpert: false,
     });
@@ -106,8 +90,6 @@ describe("V2-only 用户（简报 Step 2 ①：无错误横幅 + 任务列表渲
     renderHome();
     await flush();
 
-    // V1 入口零调用（此前 V2-only 直调 /api/tasks 必 401 → 全局横幅的根源）
-    expect(request).not.toHaveBeenCalled();
     const calledPaths = requestV2.mock.calls.map(([path]) => path);
     expect(calledPaths).toContain(`${V2_TASKS}?page=1&size=3`);
     expect(calledPaths).toContain(`${V2_DISCOVER}/experts?page=1&page_size=6`);
@@ -116,7 +98,6 @@ describe("V2-only 用户（简报 Step 2 ①：无错误横幅 + 任务列表渲
 
   it("V2 任务行渲染：§10.3 expert.name 作主行、provider.display_name 作辅行", async () => {
     useAuth.mockReturnValue({
-      user: null,
       v2User: { id: "u-2", email: "v2@example.com", role: "user" },
       isExpert: false,
     });
@@ -132,24 +113,50 @@ describe("V2-only 用户（简报 Step 2 ①：无错误横幅 + 任务列表渲
   });
 });
 
-describe("V1 会话用户（cutover 前双轨并存：V1 优先）", () => {
-  it("任务列表走 V1 /api/tasks，discover 仍切 V2_DISCOVER", async () => {
+describe("专家用户工作台速览（T14 收敛：我的 Skill 走 V2 作者面）", () => {
+  it("isExpert → V2_AUTHORING_SKILLS 取数渲染 mySkills 计数", async () => {
     useAuth.mockReturnValue({
-      user: { id: 1, username: "alice", email: "a@example.com", role: "user" },
-      v2User: null,
+      v2User: { id: "u-2", email: "v2@example.com", role: "user" },
+      isExpert: true,
+    });
+    requestV2.mockImplementation((path) => {
+      if (path.startsWith(V2_TASKS)) {
+        return Promise.resolve({ status: 200, data: V2_TASKS_PAGE, headers: new Headers() });
+      }
+      if (path.startsWith(V2_DISCOVER)) {
+        return Promise.resolve({ status: 200, data: V2_DISCOVER_PAGE, headers: new Headers() });
+      }
+      if (path.startsWith(V2_AUTHORING_SKILLS)) {
+        return Promise.resolve({
+          status: 200,
+          data: { items: [], total: 4, page: 1, size: 1 },
+          headers: new Headers(),
+        });
+      }
+      return Promise.reject(new Error(`未编排的 requestV2 调用：${path}`));
+    });
+    renderHome();
+    await flush();
+
+    const calledPaths = requestV2.mock.calls.map(([path]) => path);
+    expect(calledPaths).toContain(`${V2_AUTHORING_SKILLS}?page=1&size=1`);
+    expect(screen.getByText("4")).toBeTruthy();
+    // 匿名/非专家不发起作者面取数
+    expect(calledPaths.filter((path) => path.startsWith(V2_AUTHORING_SKILLS))).toHaveLength(1);
+  });
+
+  it("非专家：不发起 V2_AUTHORING_SKILLS 调用，mySkills 保持占位", async () => {
+    useAuth.mockReturnValue({
+      v2User: { id: "u-2", email: "v2@example.com", role: "user" },
       isExpert: false,
     });
-    request.mockResolvedValue(V1_TASKS);
     routeV2();
     renderHome();
     await flush();
 
-    expect(request).toHaveBeenCalledWith("/api/tasks?page=1&size=3");
     const calledPaths = requestV2.mock.calls.map(([path]) => path);
-    expect(calledPaths).toContain(`${V2_DISCOVER}/experts?page=1&page_size=6`);
-    // V1 行形状：title + expert_name_snapshot 直渲染
-    expect(screen.getByText("季度数据盘点")).toBeTruthy();
-    expect(screen.getByText("数据分析师")).toBeTruthy();
+    expect(calledPaths.some((path) => path.startsWith(V2_AUTHORING_SKILLS))).toBe(false);
+    expect(screen.getByText("—")).toBeTruthy();
   });
 });
 

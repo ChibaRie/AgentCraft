@@ -114,7 +114,7 @@ describe("设置流（setup → 复制 → activate）", () => {
 
     expect(requestV2).toHaveBeenCalledTimes(1);
     const [path, options] = requestV2.mock.calls[0];
-    expect(path).toBe("/api/v2/auth/mfa/setup");
+    expect(path).toBe("/api/auth/mfa/setup");
     expect(options.method).toBe("POST");
     expect(options.body).toBeUndefined();
 
@@ -174,7 +174,7 @@ describe("设置流（setup → 复制 → activate）", () => {
     await flush();
 
     expect(requestV2.mock.calls[1]).toEqual([
-      "/api/v2/auth/mfa/activate",
+      "/api/auth/mfa/activate",
       { method: "POST", body: { totp_code: "123456" } },
     ]);
     expect(refreshV2UserMock).toHaveBeenCalledTimes(1);
@@ -250,7 +250,7 @@ describe("停用流（admin 置灰 + 403 兜底）", () => {
     fireEvent.click(screen.getByRole("button", { name: "停用" }));
     await flush();
 
-    expect(requestV2.mock.calls[0]).toEqual(["/api/v2/auth/mfa", { method: "DELETE" }]);
+    expect(requestV2.mock.calls[0]).toEqual(["/api/auth/mfa", { method: "DELETE" }]);
     expect(refreshV2UserMock).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "开始设置" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "停用" })).toBeNull();

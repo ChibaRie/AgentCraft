@@ -11,8 +11,8 @@
  * - backend/main.py：成功信封 {data: ...}，失败信封 {error: {code, message}}，
  *   错误 headers 透传（429 → Retry-After）。
  *
- * 与 V1 client.js 的关系：独立并存，V2 面（/api/v2/**）一律走本模块；
- * V1 面继续走 request()（Bearer token 语义），互不污染。
+ * 与 V1 client.js 的关系：V1 面已随 Phase 8 T14 cutover 物理删除——本模块
+ * 是唯一 API 客户端，全部请求面（/api/**，契约路径）一律走本模块。
  */
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
@@ -30,14 +30,14 @@ export const V2_SESSION_EXPIRED_EVENT = "v2:session-expired";
  * console.warn——服务端将以 400 拒绝，属接线遗漏而非运行时分支。
  */
 export const V2_IDEMPOTENCY_REQUIRED = [
-  /^\/api\/v2\/providers$/,
-  /^\/api\/v2\/providers\/[^/]+$/,
-  /^\/api\/v2\/auth\/sessions\/[^/]+$/,
-  /^\/api\/v2\/auth\/invitations\/accept$/,
-  /^\/api\/v2\/auth\/email-verification\/confirm$/,
-  /^\/api\/v2\/auth\/password-reset\/confirm$/,
-  /^\/api\/v2\/account\/deletion\/request$/,
-  /^\/api\/v2\/account\/deletion\/cancel$/,
+  /^\/api\/providers$/,
+  /^\/api\/providers\/[^/]+$/,
+  /^\/api\/auth\/sessions\/[^/]+$/,
+  /^\/api\/auth\/invitations\/accept$/,
+  /^\/api\/auth\/email-verification\/confirm$/,
+  /^\/api\/auth\/password-reset\/confirm$/,
+  /^\/api\/account\/deletion\/request$/,
+  /^\/api\/account\/deletion\/cancel$/,
   // —— admin 面 13 写端点（Phase 8 T12a；Sup §6 + §10.5，勘察报告 R10）——
   // entitlements POST/DELETE 同路径共用一模式（12 条模式覆盖 13 端点）。
   // 读端点（元数据/内容读、审计查询、产物下载）不入表：warn 仅对写方法生效。
@@ -183,7 +183,7 @@ function finalize(response, payload, { path, silent }) {
 
 /**
  * V2 统一请求。
- * @param {string} path 完整 V2 路径（如 `${V2_PROVIDERS}`，含 /api/v2 前缀）
+ * @param {string} path 完整 V2 路径（如 `${V2_PROVIDERS}`，含 /api 前缀）
  * @param {object} [options]
  * @param {string} [options.method="GET"]
  * @param {object} [options.body] JSON 序列化后发送

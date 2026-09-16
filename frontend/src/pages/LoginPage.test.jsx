@@ -4,18 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuth, V2_LOGIN_FROM_STORAGE_KEY } from "../auth/AuthContext.jsx";
 import LoginPage from "./LoginPage.jsx";
 
-// mock useAuth 出口（login/loginV2/loginV2Mfa 由用例编排，网络在 AuthContext 层
-// T2 已覆盖），但保留模块真实导出（V2_LOGIN_FROM_STORAGE_KEY 常量被本文件消费）
+// mock useAuth 出口（loginV2/loginV2Mfa 由用例编排，网络在 AuthContext 层
+// 已覆盖），但保留模块真实导出（V2_LOGIN_FROM_STORAGE_KEY 常量被本文件消费）
 vi.mock("../auth/AuthContext.jsx", async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, useAuth: vi.fn() };
 });
 
-const loginMock = vi.fn();
 const loginV2Mock = vi.fn();
 const loginV2MfaMock = vi.fn();
 
-const V1_USER = { id: 1, username: "alice", email: "alice@example.com", role: "user" };
 const V2_USER = { id: "u-2", email: "v2@example.com", role: "user", status: "active" };
 
 /** V2ApiError 形状的测试替身（code/status/retryAfter 与 v2/client.js 产出对齐） */
@@ -66,13 +64,10 @@ async function renderAtChallenge() {
 beforeEach(() => {
   vi.resetAllMocks();
   useAuth.mockReturnValue({
-    user: null,
     v2User: null,
-    login: loginMock,
     loginV2: loginV2Mock,
     loginV2Mfa: loginV2MfaMock,
   });
-  loginMock.mockRejectedValue(new Error("login：本用例未显式编排"));
   loginV2Mock.mockRejectedValue(new Error("loginV2：本用例未显式编排"));
   loginV2MfaMock.mockRejectedValue(new Error("loginV2Mfa：本用例未显式编排"));
 });
@@ -83,100 +78,34 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("双 Tab 与默认激活", () => {
-  it("默认 V1 工作区登录：V1 字段在、V2 字段不在、无注册入口（E5）", () => {
+describe("单 Tab 会话归一（T14：双 Tab 拆解）", () => {
+  it("默认即账户登录：V2 字段在、V1 工作区登录入口不存在、无注册入口（E5）", () => {
     renderLogin();
-    expect(screen.getByRole("button", { name: "工作区登录" }).ariaPressed).toBe("true");
-    expect(screen.getByLabelText("用户名或邮箱")).toBeTruthy();
-    expect(screen.queryByLabelText("邮箱")).toBeNull();
+    expect(screen.getByLabelText("邮箱")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "工作区登录" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "账户登录" })).toBeNull();
+    expect(screen.queryByLabelText("用户名或邮箱")).toBeNull();
     expect(screen.queryByRole("button", { name: /注册/ })).toBeNull();
   });
 
-  it("?v2=1 落地默认激活账户登录 Tab（401 事件跳转落点）", () => {
-    renderLogin("/login?v2=1");
-    expect(screen.getByRole("button", { name: "账户登录" }).ariaPressed).toBe("true");
-    expect(screen.getByLabelText("邮箱")).toBeTruthy();
-    expect(screen.queryByLabelText("用户名或邮箱")).toBeNull();
-  });
-
-  it("双 Tab 切换不保留另一 Tab 表单态（简单性裁决，测试钉死）", () => {
-    renderLogin("/login?v2=1");
-    fillV2Form();
-
-    fireEvent.click(screen.getByRole("button", { name: "工作区登录" }));
-    fireEvent.change(screen.getByLabelText("用户名或邮箱"), { target: { value: "alice" } });
-    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "v1-secret" } });
-
-    fireEvent.click(screen.getByRole("button", { name: "账户登录" }));
-    expect(screen.getByLabelText("邮箱").value).toBe("");
-    expect(screen.getByLabelText("密码").value).toBe("");
-
-    fireEvent.click(screen.getByRole("button", { name: "工作区登录" }));
-    expect(screen.getByLabelText("用户名或邮箱").value).toBe("");
-    expect(screen.getByLabelText("密码").value).toBe("");
-  });
-
-  it("忘记密码链接：仅账户登录（V2）Tab 展示，指向 /password-reset（V1 工作区无重置流）", () => {
+  it("忘记密码链接直达 /password-reset（V2 重置流）", () => {
     renderLogin("/login?v2=1");
     const link = screen.getByRole("link", { name: "忘记密码？" });
     expect(link.getAttribute("href")).toBe("/password-reset");
-
-    fireEvent.click(screen.getByRole("button", { name: "工作区登录" }));
-    expect(screen.queryByRole("link", { name: "忘记密码？" })).toBeNull();
-  });
-});
-
-describe("V1 工作区登录（逻辑原样搬入）", () => {
-  it("login() 成功 → navigate(from || /)", async () => {
-    renderLogin({ pathname: "/login", state: { from: "/tasks" } });
-    loginMock.mockResolvedValueOnce({ id: 1 });
-    fireEvent.change(screen.getByLabelText("用户名或邮箱"), { target: { value: "alice" } });
-    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "v1-secret" } });
-    fireEvent.click(screen.getByRole("button", { name: "登录" }));
-    await flush();
-
-    expect(loginMock).toHaveBeenCalledWith("alice", "v1-secret");
-    expect(screen.getByText("任务页落点")).toBeTruthy();
-  });
-
-  it("V1 error.message → 表单内联展示", async () => {
-    renderLogin();
-    loginMock.mockRejectedValueOnce(new Error("用户名或密码不正确"));
-    fireEvent.change(screen.getByLabelText("用户名或邮箱"), { target: { value: "alice" } });
-    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "wrong" } });
-    fireEvent.click(screen.getByRole("button", { name: "登录" }));
-    await flush();
-
-    expect(screen.getByRole("alert").textContent).toBe("用户名或密码不正确");
   });
 });
 
 describe("/login 不设路由守卫（E11）", () => {
-  it("V1 已登录用户访问 /login 不弹回", () => {
+  it("已登录（V2 会话）用户访问 /login 不弹回", () => {
     useAuth.mockReturnValue({
-      user: V1_USER,
-      v2User: null,
-      login: loginMock,
+      v2User: V2_USER,
       loginV2: loginV2Mock,
       loginV2Mfa: loginV2MfaMock,
     });
     const view = renderLogin();
-    expect(screen.getByRole("button", { name: "工作区登录" })).toBeTruthy();
+    expect(screen.getByLabelText("邮箱")).toBeTruthy();
     expect(screen.queryByText("首页落点")).toBeNull();
     view.unmount();
-  });
-
-  it("仅 V2 会话用户访问 /login 同样不弹回（双轨 R1：可补建另一轨会话）", () => {
-    useAuth.mockReturnValue({
-      user: null,
-      v2User: V2_USER,
-      login: loginMock,
-      loginV2: loginV2Mock,
-      loginV2Mfa: loginV2MfaMock,
-    });
-    renderLogin();
-    expect(screen.getByRole("button", { name: "工作区登录" })).toBeTruthy();
-    expect(screen.queryByText("首页落点")).toBeNull();
   });
 });
 
@@ -193,7 +122,6 @@ describe("V2 账户登录 + MFA 挑战态机", () => {
 
   it("挑战验证成功 → navigate(from ?? /)，loginV2Mfa 收到 challengeId+totp", async () => {
     renderLogin({ pathname: "/login", state: { from: "/tasks" } });
-    fireEvent.click(screen.getByRole("button", { name: "账户登录" }));
     loginV2Mock.mockResolvedValueOnce({ mfaRequired: true, challengeId: "chal-9" });
     fillV2Form();
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
@@ -241,7 +169,7 @@ describe("V2 账户登录 + MFA 挑战态机", () => {
     expect(screen.getByLabelText("两步验证码").value).toBe("");
   });
 
-  it("403 ACCOUNT_SUSPENDED → 全页提示态（Tab 与表单消失）", async () => {
+  it("403 ACCOUNT_SUSPENDED → 全页提示态（表单消失）", async () => {
     renderLogin("/login?v2=1");
     loginV2Mock.mockRejectedValueOnce(v2ApiError("ACCOUNT_SUSPENDED", "账户已被停用", 403));
     fillV2Form();
@@ -250,7 +178,6 @@ describe("V2 账户登录 + MFA 挑战态机", () => {
 
     expect(screen.getByText("账户已被停用")).toBeTruthy();
     expect(screen.queryByLabelText("邮箱")).toBeNull();
-    expect(screen.queryByRole("button", { name: "账户登录" })).toBeNull();
   });
 
   it("429 → Retry-After 秒倒计时禁用提交按钮，归零自动解除", async () => {
@@ -279,7 +206,7 @@ describe("V2 账户登录 + MFA 挑战态机", () => {
   });
 });
 
-describe("V2 登录成功恢复 401 暂存 from（T11 ⑥ / D13 / I-4）", () => {
+describe("V2 登录成功恢复 401 暂存 from（T11 ⑥ / D13 / I-4 / T11-M2）", () => {
   it("sessionStorage 有合法 from → V2 登录成功 navigate 回原路径，暂存消费即清除", async () => {
     window.sessionStorage.setItem(V2_LOGIN_FROM_STORAGE_KEY, "/tasks");
     renderLogin("/login?v2=1");
@@ -324,12 +251,22 @@ describe("V2 登录成功恢复 401 暂存 from（T11 ⑥ / D13 / I-4）", () =>
 
   it("无暂存时回落 location.state?.from（RequireAuth 弹回场景不回归）", async () => {
     renderLogin({ pathname: "/login", state: { from: "/tasks" } });
-    fireEvent.click(screen.getByRole("button", { name: "账户登录" }));
     loginV2Mock.mockResolvedValueOnce({ user: V2_USER });
     fillV2Form();
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
     await flush();
 
     expect(screen.getByText("任务页落点")).toBeTruthy();
+  });
+
+  it("state.from 为协议相对串 //evil.com（M2 白名单）→ 拒绝恢复，回落 /", async () => {
+    renderLogin({ pathname: "/login", state: { from: "//evil.com" } });
+    loginV2Mock.mockResolvedValueOnce({ user: V2_USER });
+    fillV2Form();
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    await flush();
+
+    expect(screen.getByText("首页落点")).toBeTruthy();
+    expect(screen.queryByText("任务页落点")).toBeNull();
   });
 });

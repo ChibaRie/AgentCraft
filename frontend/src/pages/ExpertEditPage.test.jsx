@@ -77,7 +77,7 @@ const PUBLISHED_SKILLS = [
   },
 ];
 
-/** GET /api/v2/experts/{id} 详情（author_service.get_entity 出参） */
+/** GET /api/experts/{id} 详情（author_service.get_entity 出参） */
 function detail({ status = "draft", latestStatus = "draft", content = DRAFT_CONTENT } = {}) {
   return {
     expert: {
@@ -172,7 +172,7 @@ describe("expert_author 门（简报⑦）", () => {
 });
 
 describe("新建（POST 全量 content_json）", () => {
-  it("填写表单保存 → POST /api/v2/experts 幂等键 + 全字段 body → 导航至编辑页并提示已创建", async () => {
+  it("填写表单保存 → POST /api/experts 幂等键 + 全字段 body → 导航至编辑页并提示已创建", async () => {
     requestV2.mockResolvedValueOnce(ok([])); // 新建模式同样预取候选 Skill（挂载即发）
     renderAt("/my-experts/new");
     await flush();
@@ -196,7 +196,7 @@ describe("新建（POST 全量 content_json）", () => {
     await flush();
 
     const [path, options] = requestV2.mock.calls[1];
-    expect(path).toBe("/api/v2/experts");
+    expect(path).toBe("/api/experts");
     expect(options.method).toBe("POST");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(options.body).toEqual({
@@ -217,8 +217,8 @@ describe("编辑装载", () => {
   it("并行 GET 详情与已发布 skills，表单回填最新 revision 的 content_json", async () => {
     await renderEditLoaded();
 
-    expect(requestV2.mock.calls[0][0]).toBe(`/api/v2/experts/${EXPERT_ID}`);
-    expect(requestV2.mock.calls[1][0]).toBe("/api/v2/skills?status=published");
+    expect(requestV2.mock.calls[0][0]).toBe(`/api/experts/${EXPERT_ID}`);
+    expect(requestV2.mock.calls[1][0]).toBe("/api/skills?status=published");
     expect(screen.getByLabelText("名称").value).toBe("代码评审专家");
     expect(screen.getByLabelText("方法论").value).toBe("先读结构，再读实现，最后看测试覆盖");
     expect(screen.getByLabelText("任务示例 1").value).toBe("审查这段函数的边界条件");
@@ -239,7 +239,7 @@ describe("保存（PUT 全量替换，简报②④）", () => {
     await flush();
 
     const [path, options] = requestV2.mock.calls[2];
-    expect(path).toBe(`/api/v2/experts/${EXPERT_ID}`);
+    expect(path).toBe(`/api/experts/${EXPERT_ID}`);
     expect(options.method).toBe("PUT");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(options.body).toEqual({
@@ -288,7 +288,7 @@ describe("提交审核（简报③ + harness 排除）", () => {
     await flush();
 
     const [path, options] = requestV2.mock.calls[2];
-    expect(path).toBe(`/api/v2/experts/${EXPERT_ID}/revisions/${REV1_ID}/submit`);
+    expect(path).toBe(`/api/experts/${EXPERT_ID}/revisions/${REV1_ID}/submit`);
     expect(options.method).toBe("POST");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(options.body).toEqual({ tools: [] });

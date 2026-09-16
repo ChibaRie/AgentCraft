@@ -148,7 +148,7 @@ describe("提交成功 → 引导页", () => {
     fireEvent.click(screen.getByRole("button", { name: "重发验证邮件" }));
     await flush();
 
-    expect(requestV2).toHaveBeenCalledWith("/api/v2/auth/email-verification/resend", {
+    expect(requestV2).toHaveBeenCalledWith("/api/auth/email-verification/resend", {
       method: "POST",
     });
     expect(screen.getByRole("button", { name: /重新发送（60s）/ }).disabled).toBe(true);

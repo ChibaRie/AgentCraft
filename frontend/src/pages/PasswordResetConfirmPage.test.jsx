@@ -11,7 +11,7 @@ vi.mock("../api/v2/client.js", async (importOriginal) => {
   return { ...actual, requestV2: vi.fn() };
 });
 
-const CONFIRM_PATH = "/api/v2/auth/password-reset/confirm";
+const CONFIRM_PATH = "/api/auth/password-reset/confirm";
 
 /** 排空微任务队列（fireEvent 后异步 handler 的 setState 全部落定），不依赖假计时器 */
 function flush() {

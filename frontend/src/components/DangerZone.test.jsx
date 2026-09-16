@@ -146,7 +146,7 @@ describe("提交门与请求形状", () => {
 
     expect(requestV2).toHaveBeenCalledTimes(1);
     const [path, options] = requestV2.mock.calls[0];
-    expect(path).toBe("/api/v2/account/deletion/request");
+    expect(path).toBe("/api/account/deletion/request");
     expect(options.method).toBe("POST");
     expect(options.body).toEqual({ password: "pw-123456", totp_code: "123456" });
     expect(typeof options.idempotencyKey).toBe("string");

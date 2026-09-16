@@ -64,7 +64,7 @@ describe("重发验证邮件（60s 前端冷却 + 429 倒计时）", () => {
     await flush();
 
     expect(requestV2).toHaveBeenCalledTimes(1);
-    expect(requestV2).toHaveBeenCalledWith("/api/v2/auth/email-verification/resend", {
+    expect(requestV2).toHaveBeenCalledWith("/api/auth/email-verification/resend", {
       method: "POST",
     });
 

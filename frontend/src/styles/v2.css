@@ -1,37 +1,11 @@
 /* ============================================================
-   V2 认证面增量样式（FE-T3 双 Tab / OTP / 429 提示；FE-T4 pending 横幅 /
-   落地页补充原语）。设计令牌全部沿用 global.css（灰阶/圆角/阴影/运动
-   节奏零新取值）。
+   V2 认证面增量样式（FE-T3 OTP / 429 提示——双 Tab 已随 T14 会话归一
+   拆除；FE-T4 pending 横幅 / 落地页补充原语）。设计令牌全部沿用
+   global.css（灰阶/圆角/阴影/运动节奏零新取值）。
    ============================================================ */
 
-/* ---------- 双 Tab（沿用 .auth-tabs 的滑动墨块语言，键位 v1|v2） ---------- */
-
-.v2-tabs {
-  position: relative;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
-  padding: 3px;
-  margin-bottom: 24px;
-}
-
-.v2-tabs-thumb {
-  position: absolute;
-  top: 3px;
-  bottom: 3px;
-  left: 3px;
-  width: calc(50% - 3px);
-  border-radius: 7px;
-  background: var(--surface);
-  box-shadow: var(--shadow-1);
-  transition: transform var(--duration-normal) var(--ease-out);
-}
-
-.v2-tabs[data-active="v2"] .v2-tabs-thumb {
-  transform: translateX(100%);
-}
+/* ---------- 双 Tab 滑块已随 T14 会话归一拆除（LoginPage 单 Tab）；
+   .v2-tab 保留——admin 子导航（AdminLayout NavLink）复用该按钮语言 ---------- */
 
 .v2-tab {
   position: relative;

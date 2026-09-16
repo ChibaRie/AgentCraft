@@ -12,7 +12,7 @@ vi.mock("../api/v2/client.js", async (importOriginal) => {
   return { ...actual, requestV2: vi.fn(), setCsrfToken: vi.fn() };
 });
 
-const CANCEL_PATH = "/api/v2/account/deletion/cancel";
+const CANCEL_PATH = "/api/account/deletion/cancel";
 
 const refreshV2UserMock = vi.fn();
 

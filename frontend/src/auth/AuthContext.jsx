@@ -1,5 +1,4 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { getToken, request, setToken } from "../api/client.js";
 import {
   V2_SESSION_EXPIRED_EVENT,
   newIdempotencyKey,
@@ -70,59 +69,22 @@ function captureV2LoginSuccess(result, onUser) {
 }
 
 /**
- * 双轨认证上下文（E1/E12）：
- * - V1 轨：Bearer token（localStorage）+ /api/users/me 启动恢复，逻辑原样保留；
- * - V2 轨：cookie 会话 + 启动 silent 探测 /api/v2/users/me（401=未登录，
- *   其它失败 catch-all 降级未登录），loginV2/loginV2Mfa/logoutV2 与
- *   v2:session-expired 事件订阅。
- * `isReady` 保留 V1 语义（V1 任务域页面继续消费）；路由守卫改消费
- * `authReady = v1Ready && v2Ready`（双探测落定）。
+ * 认证上下文（Phase 8 T14 会话归一）：V1 轨已随 cutover 删除（D2），唯一
+ * 会话域 = V2 cookie 会话——启动 silent 探测 /api/users/me（401=未登录，
+ * 其它失败 catch-all 降级未登录），loginV2/loginV2Mfa/logoutV2 与
+ * v2:session-expired 事件订阅；`authReady` 即 V2 探测落定位。
  */
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-  const [v1Ready, setV1Ready] = useState(false);
   const [v2User, setV2User] = useState(null);
   const [v2Ready, setV2Ready] = useState(false);
 
-  const clearSession = useCallback(() => {
-    setToken(null);
-    setUser(null);
+  // 挂载时一次性清理 V1 遗留 token（安全审查 I-5：cutover 后 v1Token 残留
+  // 清零——V1 面（api/client.js）已删，无人再读该键；顺手清掉历史脏值）
+  useEffect(() => {
+    localStorage.removeItem("agentcraft_token");
   }, []);
 
-  // V1 轨恢复（原逻辑不动）：仅当 localStorage 有 token 才探测 /api/users/me
-  useEffect(() => {
-    let cancelled = false;
-    async function restoreSession() {
-      const tokenAtStart = getToken();
-      if (!tokenAtStart) {
-        setV1Ready(true);
-        return;
-      }
-      try {
-        const payload = await request("/api/users/me");
-        if (!cancelled) {
-          // 恢复期间若发生了 login/register/logout（token 已变化），丢弃过期结果
-          if (getToken() === tokenAtStart) {
-            setUser(payload.data);
-          }
-          setV1Ready(true);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          if (error.status === 401 && getToken() === tokenAtStart) {
-            clearSession();
-          }
-          setV1Ready(true);
-        }
-      }
-    }
-    restoreSession();
-    return () => {
-      cancelled = true;
-    };
-  }, [clearSession]);
-
-  // V2 轨探测：silent 401 = 未登录（不派发事件）；500/网络错误 catch-all
+  // V2 启动探测：silent 401 = 未登录（不派发事件）；500/网络错误 catch-all
   // 同样置 ready（降级未登录 + 控制台告警），保证 authReady 落定、不白屏
   useEffect(() => {
     let cancelled = false;
@@ -172,61 +134,56 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  const login = useCallback(
-    async (loginValue, password) => {
-      const payload = await request("/api/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ login: loginValue, password }),
-      });
-      setToken(payload.data.token);
-      setUser(payload.data);
-      return payload.data;
-    },
-    []
-  );
-
-  const register = useCallback(async (username, email, password) => {
-    const payload = await request("/api/auth/register", {
-      method: "POST",
-      body: JSON.stringify({ username, email, password }),
-    });
-    setToken(payload.data.token);
-    setUser(payload.data);
-    return payload.data;
+  /**
+   * 登录成功后的静默 users/me 刷新（T11 移交 M1，T14 必办）：登录信封
+   * （_login_body）不含 entitlements，专家面点亮依赖刷新补全。探测失败
+   * （401/网络）静默收敛——保持登录信封用户，不清会话（与 refreshV2User
+   * 的「失败即登出」语义区分）。
+   */
+  const refreshAfterLogin = useCallback(async () => {
+    try {
+      const probe = await requestV2(`${V2_USERS}/me`, { silent: true });
+      const refreshed = mapV2User(probe.data);
+      if (refreshed) {
+        setV2User(refreshed);
+      }
+    } catch {
+      // 静默：信封用户已置位，entitlements 由下次启动探测/refreshV2User 补全
+    }
   }, []);
-
-  const applyExpert = useCallback(async () => {
-    const payload = await request("/api/users/me/expert", { method: "POST" });
-    // 接口按规格只返回 {id,username,email,role}；合并保留 created_at 等本地已有字段
-    setUser((current) => ({ ...current, ...payload.data }));
-    return payload.data;
-  }, []);
-
-  const logout = useCallback(() => {
-    clearSession();
-  }, [clearSession]);
 
   /** V2 登录：成功返回 {user}（snake→camel）；TOTP 用户返回 {mfaRequired, challengeId} */
-  const loginV2 = useCallback(async (email, password) => {
-    const result = await requestV2(`${V2_AUTH}/login`, {
-      method: "POST",
-      body: { email, password },
-    });
-    if (result.data?.mfa_required) {
-      // 调用方不见 mfa_required / mfa_challenge_id 原始键
-      return { mfaRequired: true, challengeId: result.data.mfa_challenge_id };
-    }
-    return captureV2LoginSuccess(result, setV2User);
-  }, []);
+  const loginV2 = useCallback(
+    async (email, password) => {
+      const result = await requestV2(`${V2_AUTH}/login`, {
+        method: "POST",
+        body: { email, password },
+      });
+      if (result.data?.mfa_required) {
+        // 调用方不见 mfa_required / mfa_challenge_id 原始键
+        return { mfaRequired: true, challengeId: result.data.mfa_challenge_id };
+      }
+      const outcome = captureV2LoginSuccess(result, setV2User);
+      // M1：登录信封无 entitlements——静默刷新补全专家判据
+      await refreshAfterLogin();
+      return outcome;
+    },
+    [refreshAfterLogin]
+  );
 
   /** V2 MFA 挑战验证：成功建会话，返回 {user}（snake→camel + csrf 捕获） */
-  const loginV2Mfa = useCallback(async (challengeId, totpCode) => {
-    const result = await requestV2(`${V2_AUTH}/login/mfa`, {
-      method: "POST",
-      body: { mfa_challenge_id: challengeId, totp_code: totpCode },
-    });
-    return captureV2LoginSuccess(result, setV2User);
-  }, []);
+  const loginV2Mfa = useCallback(
+    async (challengeId, totpCode) => {
+      const result = await requestV2(`${V2_AUTH}/login/mfa`, {
+        method: "POST",
+        body: { mfa_challenge_id: challengeId, totp_code: totpCode },
+      });
+      const outcome = captureV2LoginSuccess(result, setV2User);
+      await refreshAfterLogin();
+      return outcome;
+    },
+    [refreshAfterLogin]
+  );
 
   /**
    * V2 登出：200 与 401 SESSION_EXPIRED 均等价收敛为本地登出——401 时 requestV2
@@ -275,7 +232,7 @@ export function AuthProvider({ children }) {
    * V2 本地会话态清理（FE-T7）：清内存 csrf + 置空 v2User。
    * 零网络请求、零事件派发——注销受理（DangerZone）与撤销本机会话
    * （SessionsCard）后的静默收尾：不显式清会让陈旧 csrf/死 cookie 在后续
-   * 请求触发 401 事件，打断「注销中」/登录跳转。V1 会话（token/user）不动。
+   * 请求触发 401 事件，打断「注销中」/登录跳转。
    */
   const clearV2Session = useCallback(() => {
     setCsrfToken(null);
@@ -301,26 +258,13 @@ export function AuthProvider({ children }) {
 
   const value = useMemo(
     () => ({
-      user,
-      v1Ready,
-      isReady: v1Ready, // V1 语义保留：MyExperts/SkillManage 等任务域页面继续消费
       v2User,
       v2Ready,
-      authReady: v1Ready && v2Ready,
-      isAuthenticated: Boolean(user),
-      // isExpert 双判据（T11 汇流，cutover 前并存）：V2 entitlement（expert_author，
-      // users/me 载荷）**或** V1 user.role === "expert"。**T14 收敛为 V2
-      // entitlement 单判据**（届时删除 V1 role 分支与各页双轨探测）。已知限制：
-      // 登录信封的 user 不含 entitlements（login_service._login_body 仅
-      // id/email/role/status），刚登录的 V2 专家要等启动探测/refreshV2User
-      // 刷新后专家面才点亮。
-      isExpert:
-        Boolean(v2User?.entitlements?.includes("expert_author")) ||
-        user?.role === "expert",
-      login,
-      register,
-      applyExpert,
-      logout,
+      authReady: v2Ready, // T14 会话归一：唯一会话域，探测落定即可渲染守卫路由
+      // isExpert 单判据（T11 注释钉兑现）：V2 entitlements 含 expert_author。
+      // 登录信封无 entitlements——loginV2/loginV2Mfa 成功路径已静默 users/me
+      // 刷新补全（refreshAfterLogin），刚登录的 V2 专家立即点亮专家面。
+      isExpert: Boolean(v2User?.entitlements?.includes("expert_author")),
       loginV2,
       loginV2Mfa,
       logoutV2,
@@ -329,14 +273,8 @@ export function AuthProvider({ children }) {
       refreshV2User,
     }),
     [
-      user,
-      v1Ready,
       v2User,
       v2Ready,
-      login,
-      register,
-      applyExpert,
-      logout,
       loginV2,
       loginV2Mfa,
       logoutV2,

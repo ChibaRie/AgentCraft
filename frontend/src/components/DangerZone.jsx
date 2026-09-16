@@ -13,7 +13,7 @@ const FALLBACK_MESSAGE = "操作失败，请稍后重试";
 /**
  * 注销账户危险区（FE-T7，契约 = F2 §2.2）。
  *
- * 后端契约（只读参考）：POST /api/v2/account/deletion/request（认证端点，
+ * 后端契约（只读参考）：POST /api/account/deletion/request（认证端点，
  * 幂等义务端点 A5）：再认证（密码必验 + TOTP 叠加）→ 14 天宽限期；200
  * {status:"deleting", days_remaining} + 双 cookie 已清 + 全会话失效；409
  * ACCOUNT_PENDING/ACCOUNT_DELETING → 后端文案内联；401 INVALID_CREDENTIALS
@@ -25,7 +25,8 @@ const FALLBACK_MESSAGE = "操作失败，请稍后重试";
  * 会让陈旧态在后续请求触发 401 事件打断「注销中」页）→ navigate 独立路由
  * /account/deleting 渲染全页冻结展示态（终审修复：冻结页不挂 RequireAuth——
  * V2-only 用户清会话后匿名，挂守卫会被同批弹回 /login；days_remaining 经
- * location.state 传入）。v1Token 不动（V1 账户是独立域）。
+ * location.state 传入）。V1 遗留 token 已由 AuthProvider 挂载时一次性清理
+ * （T14 会话归一，安全审查 I-5）。
  *
  * 幂等键：useRef 初始化器（StrictMode 双渲染仅首把键保留，T5
  * DeletionCancelPage 同源裁决）+ in-flight 提交闸门；失败重试复用同一把键。

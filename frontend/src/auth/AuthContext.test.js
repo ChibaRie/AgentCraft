@@ -1,30 +1,15 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getToken, request, setToken } from "../api/client.js";
 import { V2_SESSION_EXPIRED_EVENT, V2ApiError, requestV2, setCsrfToken } from "../api/v2/client.js";
 import { V2_AUTH, V2_USERS } from "../api/v2/routes.js";
 import { AuthProvider, useAuth, V2_LOGIN_FROM_STORAGE_KEY } from "./AuthContext.jsx";
 import { displayName } from "./displayName.js";
-
-vi.mock("../api/client.js", () => ({
-  getToken: vi.fn(),
-  setToken: vi.fn(),
-  request: vi.fn(),
-}));
 
 // 只 mock 网络入口 requestV2 与 csrf 写口；V2ApiError / V2_SESSION_EXPIRED_EVENT 用真实导出
 vi.mock("../api/v2/client.js", async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, requestV2: vi.fn(), setCsrfToken: vi.fn() };
 });
-
-const V1_USER = {
-  id: 1,
-  username: "alice",
-  email: "alice@example.com",
-  role: "user",
-  created_at: "2026-01-01T00:00:00Z",
-};
 
 // users/me / login 信封内的 V2 user 原始形状（snake_case；display_name 为映射观察点）
 const V2_USER_RAW = {
@@ -48,6 +33,10 @@ const SESSION_EXPIRED_401 = () =>
 
 /** login / login/mfa 成功信封形态（backend/v2/login_service.py _login_body） */
 function loginOk(data = { user: V2_USER_RAW, csrf_token: "csrf-tok" }) {
+  return { status: 200, data, headers: new Headers() };
+}
+
+function meOk(data) {
   return { status: 200, data, headers: new Headers() };
 }
 
@@ -81,54 +70,39 @@ function fireSessionExpired() {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  getToken.mockReturnValue(null);
-  request.mockRejectedValue(new Error("V1 request：本用例未显式编排"));
   requestV2.mockRejectedValue(new Error("requestV2：本用例未显式编排"));
   stubLocation("/");
 });
 
 afterEach(() => {
   window.sessionStorage.clear();
+  localStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-describe("启动探测双轨", () => {
+describe("启动探测与会话归一", () => {
   // 用例 ①
-  it("V1 token 探测 200 + V2 探测 401 silent → v1User 在、v2User=null、双 ready、无跳转", async () => {
-    const location = stubLocation("/");
-    getToken.mockReturnValue("v1-token");
-    request.mockResolvedValueOnce({ data: V1_USER });
-    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
+  it("挂载即清理 V1 遗留 token（安全审查 I-5：agentcraft_token 残留清零）", async () => {
+    localStorage.setItem("agentcraft_token", "stale-v1-token");
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 启动探测：匿名
 
-    const { result } = renderUseAuth();
-    await waitFor(() => {
-      expect(result.current.v1Ready).toBe(true);
-      expect(result.current.v2Ready).toBe(true);
-    });
+    renderUseAuth();
+    await waitFor(() => expect(vi.mocked(requestV2).mock.calls.length).toBeGreaterThan(0));
 
-    expect(result.current.user).toEqual(V1_USER);
-    expect(result.current.v2User).toBeNull();
-    expect(result.current.authReady).toBe(true);
-    expect(requestV2).toHaveBeenCalledTimes(1);
-    expect(requestV2).toHaveBeenCalledWith(`${V2_USERS}/me`, { silent: true });
-    expect(location.assign).not.toHaveBeenCalled();
+    expect(localStorage.getItem("agentcraft_token")).toBeNull();
   });
 
   // 用例 ②
-  it("匿名启动：V2 探测 401 silent → assign 零调用、v2User=null、v2Ready 落定", async () => {
+  it("匿名启动：V2 探测 401 silent → assign 零调用、v2User=null、authReady 落定", async () => {
     const location = stubLocation("/");
     requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
 
     expect(result.current.v2User).toBeNull();
-    expect(result.current.v1Ready).toBe(true);
     expect(result.current.authReady).toBe(true);
-    // V1 探测仅当 localStorage 有 token 才发请求
-    expect(getToken).toHaveBeenCalled();
-    expect(request).not.toHaveBeenCalled();
     expect(location.assign).not.toHaveBeenCalled();
   });
 
@@ -141,44 +115,79 @@ describe("启动探测双轨", () => {
     requestV2.mockRejectedValueOnce(makeError());
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
 
     expect(result.current.v2User).toBeNull();
     expect(result.current.authReady).toBe(true);
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("V1 轨出口已随 cutover 删除：上下文不再暴露 user/isReady/login/register/applyExpert", async () => {
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.authReady).toBe(true));
+
+    expect(result.current.user).toBeUndefined();
+    expect(result.current.isReady).toBeUndefined();
+    expect(result.current.login).toBeUndefined();
+    expect(result.current.register).toBeUndefined();
+    expect(result.current.applyExpert).toBeUndefined();
+    expect(result.current.logout).toBeUndefined();
+  });
 });
 
 describe("loginV2 / loginV2Mfa 封装契约", () => {
-  it("loginV2 成功：snake→camel 映射 + 捕获 csrf_token + 置 v2User", async () => {
-    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
-    requestV2.mockResolvedValueOnce(loginOk());
+  it("loginV2 成功：snake→camel 映射 + 捕获 csrf_token + 登录后静默 users/me 刷新（T11-M1）", async () => {
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 启动探测：匿名
+    requestV2.mockResolvedValueOnce(loginOk()); // 登录
+    requestV2.mockResolvedValueOnce(
+      meOk({ ...V2_USER_RAW, entitlements: ["expert_author"] }) // 登录后刷新
+    );
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
 
     let outcome;
     await act(async () => {
       outcome = await result.current.loginV2("v2@example.com", "secret");
     });
 
-    expect(requestV2).toHaveBeenLastCalledWith(`${V2_AUTH}/login`, {
+    expect(requestV2).toHaveBeenNthCalledWith(2, `${V2_AUTH}/login`, {
       method: "POST",
       body: { email: "v2@example.com", password: "secret" },
     });
+    // M1：登录信封无 entitlements → 静默 users/me 刷新补全
+    expect(requestV2).toHaveBeenLastCalledWith(`${V2_USERS}/me`, { silent: true });
     expect(setCsrfToken).toHaveBeenCalledWith("csrf-tok");
     expect(outcome).toEqual({ user: V2_USER_MAPPED });
-    expect(result.current.v2User).toEqual(V2_USER_MAPPED);
+    // 刷新载荷（含 entitlements）置位 → 刚登录的专家立即点亮
+    expect(result.current.v2User.entitlements).toEqual(["expert_author"]);
+    expect(result.current.isExpert).toBe(true);
   });
 
-  it("loginV2 对 mfa_required：返回 {mfaRequired, challengeId}，调用方不见原始键、不置 v2User", async () => {
-    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
-    requestV2.mockResolvedValueOnce(
-      loginOk({ mfa_required: true, mfa_challenge_id: "chal-1" })
-    );
+  it("loginV2 刷新失败（401/网络）→ 静默收敛，保持登录信封用户（不清会话）", async () => {
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 启动探测：匿名
+    requestV2.mockResolvedValueOnce(loginOk()); // 登录
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 刷新失败
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
+
+    await act(async () => {
+      await result.current.loginV2("v2@example.com", "secret");
+    });
+
+    expect(result.current.v2User).toEqual(V2_USER_MAPPED);
+    expect(result.current.isExpert).toBe(false);
+  });
+
+  it("loginV2 对 mfa_required：返回 {mfaRequired, challengeId}，不置 v2User、无刷新（会话未建立）", async () => {
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 启动探测：匿名
+    requestV2.mockResolvedValueOnce(loginOk({ mfa_required: true, mfa_challenge_id: "chal-1" }));
+
+    const { result } = renderUseAuth();
+    await waitFor(() => expect(result.current.authReady).toBe(true));
 
     let outcome;
     await act(async () => {
@@ -189,27 +198,32 @@ describe("loginV2 / loginV2Mfa 封装契约", () => {
     expect(outcome).not.toHaveProperty("mfa_required");
     expect(setCsrfToken).not.toHaveBeenCalled();
     expect(result.current.v2User).toBeNull();
+    // 仅启动探测 + login 两次调用，无第三个 users/me 刷新
+    expect(requestV2).toHaveBeenCalledTimes(2);
   });
 
-  it("loginV2Mfa：以 mfa_challenge_id/totp_code 提交，成功映射 user + 捕获 csrf", async () => {
-    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
-    requestV2.mockResolvedValueOnce(loginOk());
+  it("loginV2Mfa：以 mfa_challenge_id/totp_code 提交，成功映射 user + csrf + 刷新补全", async () => {
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 启动探测：匿名
+    requestV2.mockResolvedValueOnce(loginOk()); // MFA 挑战成功建会话
+    requestV2.mockResolvedValueOnce(
+      meOk({ ...V2_USER_RAW, entitlements: ["expert_author"] }) // 登录后刷新
+    );
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
 
     let outcome;
     await act(async () => {
       outcome = await result.current.loginV2Mfa("chal-1", "123456");
     });
 
-    expect(requestV2).toHaveBeenLastCalledWith(`${V2_AUTH}/login/mfa`, {
+    expect(requestV2).toHaveBeenNthCalledWith(2, `${V2_AUTH}/login/mfa`, {
       method: "POST",
       body: { mfa_challenge_id: "chal-1", totp_code: "123456" },
     });
     expect(setCsrfToken).toHaveBeenCalledWith("csrf-tok");
     expect(outcome).toEqual({ user: V2_USER_MAPPED });
-    expect(result.current.v2User).toEqual(V2_USER_MAPPED);
+    expect(result.current.isExpert).toBe(true);
   });
 });
 
@@ -217,11 +231,12 @@ describe("V2 会话过期事件订阅", () => {
   // 用例 ④
   it("401 事件：清 v2User 并 assign /login?v2=1", async () => {
     const location = stubLocation("/");
-    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
-    requestV2.mockResolvedValueOnce(loginOk());
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 启动探测：匿名
+    requestV2.mockResolvedValueOnce(loginOk()); // 登录
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 登录后刷新失败（静默）
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
     await act(async () => {
       await result.current.loginV2("v2@example.com", "secret");
     });
@@ -234,35 +249,16 @@ describe("V2 会话过期事件订阅", () => {
     expect(location.assign).toHaveBeenCalledWith("/login?v2=1");
   });
 
-  // 用例 ⑤
-  it("双会话用户 V2 过期 → assign /login?v2=1；落地 /login 后事件重放不再弹回（pathname 守卫）", async () => {
-    let location = stubLocation("/");
-    getToken.mockReturnValue("v1-token");
-    request.mockResolvedValueOnce({ data: V1_USER });
-    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 启动探测：V2 未登录
+  it("已在 /login：事件重放不再弹回（pathname 守卫）", async () => {
+    stubLocation("/login");
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
 
     const { result } = renderUseAuth();
     await waitFor(() => expect(result.current.authReady).toBe(true));
-    expect(result.current.user).toEqual(V1_USER);
-
-    // 补建 V2 会话 → 双会话用户
-    requestV2.mockResolvedValueOnce(loginOk());
-    await act(async () => {
-      await result.current.loginV2("v2@example.com", "secret");
-    });
-    expect(result.current.v2User).toEqual(V2_USER_MAPPED);
 
     fireSessionExpired();
+
     expect(result.current.v2User).toBeNull();
-    expect(location.assign).toHaveBeenCalledTimes(1);
-    expect(location.assign).toHaveBeenCalledWith("/login?v2=1");
-
-    // 模拟已落地 /login：401 事件重放不触发二次跳转（防同页重载循环）
-    location = stubLocation("/login");
-    fireSessionExpired();
-    expect(location.assign).not.toHaveBeenCalled();
-    // V1 会话不受 V2 过期影响
-    expect(result.current.user).toEqual(V1_USER);
   });
 });
 
@@ -270,11 +266,12 @@ describe("logoutV2 收敛", () => {
   // 用例 ⑥
   it("对 401：Promise resolve 不 reject、无错误上抛、本地 v2User 清空、自身不跳转", async () => {
     const location = stubLocation("/");
-    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
-    requestV2.mockResolvedValueOnce(loginOk());
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 启动探测：匿名
+    requestV2.mockResolvedValueOnce(loginOk()); // 登录
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 登录后刷新失败（静默）
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
     await act(async () => {
       await result.current.loginV2("v2@example.com", "secret");
     });
@@ -297,11 +294,12 @@ describe("logoutV2 收敛", () => {
   });
 
   it("对 200：本地登出 + 清内存 csrf", async () => {
-    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
-    requestV2.mockResolvedValueOnce(loginOk());
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 启动探测：匿名
+    requestV2.mockResolvedValueOnce(loginOk()); // 登录
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 登录后刷新失败（静默）
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
     await act(async () => {
       await result.current.loginV2("v2@example.com", "secret");
     });
@@ -318,13 +316,14 @@ describe("logoutV2 收敛", () => {
 });
 
 describe("clearV2Session 本地清理（FE-T7）", () => {
-  it("零网络请求、零事件派发：清内存 csrf + 置空 v2User，V1 会话不动", async () => {
+  it("零网络请求、零事件派发：清内存 csrf + 置空 v2User", async () => {
     const location = stubLocation("/");
-    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
-    requestV2.mockResolvedValueOnce(loginOk());
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 启动探测：匿名
+    requestV2.mockResolvedValueOnce(loginOk()); // 登录
+    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 登录后刷新失败（静默）
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
     await act(async () => {
       await result.current.loginV2("v2@example.com", "secret");
     });
@@ -338,8 +337,8 @@ describe("clearV2Session 本地清理（FE-T7）", () => {
     expect(result.current.v2User).toBeNull();
     expect(setCsrfToken).toHaveBeenCalledTimes(1);
     expect(setCsrfToken).toHaveBeenCalledWith(null);
-    // 清理本身零请求（探测 + 登录共 2 次）；注销受理后的冻结页不被 401 事件打断
-    expect(requestV2).toHaveBeenCalledTimes(2);
+    // 清理本身零请求（探测 + 登录 + 刷新共 3 次）；注销受理后的冻结页不被 401 事件打断
+    expect(requestV2).toHaveBeenCalledTimes(3);
     expect(location.assign).not.toHaveBeenCalled();
   });
 });
@@ -358,7 +357,7 @@ describe("acceptInvitation / refreshV2User（FE-T4）", () => {
     requestV2.mockResolvedValueOnce({ status: 200, data: PENDING_RAW, headers: new Headers() });
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
 
     let outcome;
     await act(async () => {
@@ -387,7 +386,7 @@ describe("acceptInvitation / refreshV2User（FE-T4）", () => {
     requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
 
     let outcome;
     await act(async () => {
@@ -406,7 +405,7 @@ describe("acceptInvitation / refreshV2User（FE-T4）", () => {
     );
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
 
     let caught;
     await act(async () => {
@@ -429,7 +428,7 @@ describe("acceptInvitation / refreshV2User（FE-T4）", () => {
     requestV2.mockResolvedValueOnce({ status: 200, data: PENDING_RAW, headers: new Headers() }); // 启动探测：pending 会话
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
     expect(result.current.v2User.status).toBe("pending");
 
     requestV2.mockResolvedValueOnce({
@@ -474,40 +473,11 @@ describe("displayName", () => {
   });
 });
 
-describe("isExpert 双判据汇流（T11 ④；T14 收敛为 V2 entitlement 单判据）", () => {
-  /** V2 users/me 信封 user 形状（entitlements 仅 users/me 载荷携带） */
-  const V2_USER_RAW = { id: "u-2", email: "v2@example.com", role: "user", status: "active" };
-
-  it("V2-only + entitlements 含 expert_author → isExpert true", async () => {
-    requestV2.mockResolvedValueOnce({
-      status: 200,
-      data: { ...V2_USER_RAW, entitlements: ["expert_author"] },
-      headers: new Headers(),
-    });
-
-    const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
-
-    expect(result.current.isExpert).toBe(true);
-  });
-
-  it("V2-only + entitlements 空 + V1 无会话 → isExpert false", async () => {
-    requestV2.mockResolvedValueOnce({
-      status: 200,
-      data: { ...V2_USER_RAW, entitlements: [] },
-      headers: new Headers(),
-    });
-
-    const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
-
-    expect(result.current.isExpert).toBe(false);
-  });
-
-  it("V1 role=expert（V2 未登录）→ isExpert true（双判据 V1 分支回归）", async () => {
-    getToken.mockReturnValue("v1-token");
-    request.mockResolvedValueOnce({ data: { ...V1_USER, role: "expert" } });
-    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
+describe("isExpert 单判据（T14 收敛：V2 entitlements 含 expert_author）", () => {
+  it("启动探测 entitlements 含 expert_author → isExpert true", async () => {
+    requestV2.mockResolvedValueOnce(
+      meOk({ ...V2_USER_RAW, entitlements: ["expert_author"] })
+    );
 
     const { result } = renderUseAuth();
     await waitFor(() => expect(result.current.authReady).toBe(true));
@@ -515,14 +485,8 @@ describe("isExpert 双判据汇流（T11 ④；T14 收敛为 V2 entitlement 单�
     expect(result.current.isExpert).toBe(true);
   });
 
-  it("双会话：V2 entitlements 空 + V1 role=user → isExpert false", async () => {
-    getToken.mockReturnValue("v1-token");
-    request.mockResolvedValueOnce({ data: V1_USER });
-    requestV2.mockResolvedValueOnce({
-      status: 200,
-      data: { ...V2_USER_RAW, entitlements: [] },
-      headers: new Headers(),
-    });
+  it("entitlements 空 → isExpert false", async () => {
+    requestV2.mockResolvedValueOnce(meOk({ ...V2_USER_RAW, entitlements: [] }));
 
     const { result } = renderUseAuth();
     await waitFor(() => expect(result.current.authReady).toBe(true));
@@ -530,17 +494,12 @@ describe("isExpert 双判据汇流（T11 ④；T14 收敛为 V2 entitlement 单�
     expect(result.current.isExpert).toBe(false);
   });
 
-  it("登录信封 user 无 entitlements（_login_body 形状）→ V2 分支不误判", async () => {
-    requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401()); // 启动探测：匿名
-    requestV2.mockResolvedValueOnce(loginOk({ user: V2_USER_RAW, csrf_token: "t" }));
+  it("users/me 载荷无 entitlements 键（登录信封形态）→ isExpert false 不误判", async () => {
+    requestV2.mockResolvedValueOnce(meOk(V2_USER_RAW));
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
-    await act(async () => {
-      await result.current.loginV2("v2@example.com", "secret");
-    });
+    await waitFor(() => expect(result.current.authReady).toBe(true));
 
-    // 刚登录的 v2User 无 entitlements 键 → V2 分支不点亮（已知限制，见实现注释）
     expect(result.current.isExpert).toBe(false);
   });
 });
@@ -551,7 +510,7 @@ describe("401 会话过期 from 暂存（T11 ⑥ / D13 / 安全审查 I-4）", (
     requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
 
     fireSessionExpired();
 
@@ -564,7 +523,7 @@ describe("401 会话过期 from 暂存（T11 ⑥ / D13 / 安全审查 I-4）", (
     requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
 
     fireSessionExpired();
 
@@ -577,7 +536,7 @@ describe("401 会话过期 from 暂存（T11 ⑥ / D13 / 安全审查 I-4）", (
     requestV2.mockRejectedValueOnce(SESSION_EXPIRED_401());
 
     const { result } = renderUseAuth();
-    await waitFor(() => expect(result.current.v2Ready).toBe(true));
+    await waitFor(() => expect(result.current.authReady).toBe(true));
 
     fireSessionExpired();
 

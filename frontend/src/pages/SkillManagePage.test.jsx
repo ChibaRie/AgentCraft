@@ -27,7 +27,7 @@ function flush() {
 const SKILL_ID = "dddddddd-1111-4222-8333-444444444444";
 const REV_ID = "eeeeeeee-1111-4222-8333-444444444444";
 
-/** 后端 GET /api/v2/skills 行形状（author_service.list_entities 出参） */
+/** 后端 GET /api/skills 行形状（author_service.list_entities 出参） */
 function row(overrides = {}) {
   return {
     id: SKILL_ID,
@@ -89,7 +89,7 @@ describe("expert_author 门（简报⑦）", () => {
 });
 
 describe("列表装载与 V2 范式钉死", () => {
-  it("挂载 GET /api/v2/skills，行渲染 + 徽标（草稿/已发布）", async () => {
+  it("挂载 GET /api/skills，行渲染 + 徽标（草稿/已发布）", async () => {
     await renderWithList([
       row(),
       row({
@@ -107,7 +107,7 @@ describe("列表装载与 V2 范式钉死", () => {
       }),
     ]);
 
-    expect(requestV2.mock.calls[0][0]).toBe("/api/v2/skills");
+    expect(requestV2.mock.calls[0][0]).toBe("/api/skills");
     expect(requestV2.mock.calls[0][1]?.method).toBeUndefined();
     expect(screen.getByText("周报整理")).toBeTruthy();
     expect(screen.getByText("会议纪要")).toBeTruthy();
@@ -146,7 +146,7 @@ describe("提交审核（draft latest）", () => {
     await flush();
 
     const [path, options] = requestV2.mock.calls[1];
-    expect(path).toBe(`/api/v2/skills/${SKILL_ID}/revisions/${REV_ID}/submit`);
+    expect(path).toBe(`/api/skills/${SKILL_ID}/revisions/${REV_ID}/submit`);
     expect(options.method).toBe("POST");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(options.body).toEqual({ tools: [] });
@@ -179,7 +179,7 @@ describe("下架（T6 offline）", () => {
     await flush();
 
     const [path, options] = requestV2.mock.calls[1];
-    expect(path).toBe(`/api/v2/skills/${SKILL_ID}/offline`);
+    expect(path).toBe(`/api/skills/${SKILL_ID}/offline`);
     expect(options.method).toBe("POST");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(screen.getByText("草稿")).toBeTruthy();
@@ -204,7 +204,7 @@ describe("删除（T6 DELETE，简报⑥）", () => {
     await flush();
 
     const [path, options] = requestV2.mock.calls[1];
-    expect(path).toBe(`/api/v2/skills/${SKILL_ID}`);
+    expect(path).toBe(`/api/skills/${SKILL_ID}`);
     expect(options.method).toBe("DELETE");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(screen.queryByText("周报整理")).toBeNull();
@@ -235,7 +235,7 @@ describe("编辑器入口", () => {
     await flush();
     expect(screen.queryByRole("dialog")).toBeNull();
 
-    // 编辑模式：弹窗自取详情（GET /api/v2/skills/{id}）后以最新 revision 回填
+    // 编辑模式：弹窗自取详情（GET /api/skills/{id}）后以最新 revision 回填
     requestV2.mockResolvedValueOnce(
       ok({
         skill: { id: SKILL_ID, status: "draft", published_revision_id: null },

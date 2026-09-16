@@ -1,19 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { request } from "./api/client.js";
 import { requestV2 } from "./api/v2/client.js";
 import { AuthProvider } from "./auth/AuthContext.jsx";
 import AppRoutes from "./router.jsx";
 
 // 路由接线测试：真实 AuthProvider + 真实 AppRoutes，网络入口整体打桩。
-// V1 request 供 HomePage 等壳内页面挂载加载（空列表即可）；V2 requestV2 编排探测流。
-vi.mock("./api/client.js", () => ({
-  getToken: vi.fn(() => null),
-  setToken: vi.fn(),
-  request: vi.fn(),
-}));
-
+// V2 requestV2 编排探测流（T14 会话归一：唯一网络入口）。
 vi.mock("./api/v2/client.js", async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, requestV2: vi.fn(), setCsrfToken: vi.fn() };
@@ -48,9 +41,8 @@ function LocationProbe() {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  // 默认匿名（V2 启动探测 401 silent）+ V1 壳内加载空列表
+  // 默认匿名（V2 启动探测 401 silent）
   requestV2.mockRejectedValue(V2_SESSION_EXPIRED());
-  request.mockResolvedValue({ data: [], total: 0 });
 });
 
 afterEach(() => {

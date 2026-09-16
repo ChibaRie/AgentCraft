@@ -5,7 +5,11 @@ import RequireAdmin from "./components/RequireAdmin.jsx";
 import RequireAuth from "./components/RequireAuth.jsx";
 import AccountDeletingPage from "./pages/AccountDeletingPage.jsx";
 import AdminLayout from "./pages/admin/AdminLayout.jsx";
+import AuditPage from "./pages/admin/AuditPage.jsx";
+import CatalogPage from "./pages/admin/CatalogPage.jsx";
 import InvitationsPage from "./pages/admin/InvitationsPage.jsx";
+import ReportsPage from "./pages/admin/ReportsPage.jsx";
+import ReviewsPage from "./pages/admin/ReviewsPage.jsx";
 import UsersPage from "./pages/admin/UsersPage.jsx";
 import DeletionCancelPage from "./pages/DeletionCancelPage.jsx";
 import EmailVerificationPage from "./pages/EmailVerificationPage.jsx";
@@ -156,7 +160,7 @@ export default function AppRoutes() {
         />
         {/* admin 控制台（Phase 8 T12a）：软门 RequireAdmin（v2User.role==='admin'，
             MFA 不预检——403 数据面由 gate.reportAdminError 分流）+ 子导航壳；
-            治理四页（reviews/reports/catalog/audit，T12b）落位后在此追加子路由。 */}
+            治理四页子路由（T12b 移交接线，T14 落位）。 */}
         <Route
           path="/admin"
           element={
@@ -168,6 +172,10 @@ export default function AppRoutes() {
           <Route index element={<Navigate to="/admin/invitations" replace />} />
           <Route path="invitations" element={<InvitationsPage />} />
           <Route path="users" element={<UsersPage />} />
+          <Route path="reviews" element={<ReviewsPage />} />
+          <Route path="reports" element={<ReportsPage />} />
+          <Route path="catalog" element={<CatalogPage />} />
+          <Route path="audit" element={<AuditPage />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

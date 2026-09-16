@@ -5,7 +5,8 @@ import { useAuth } from "../auth/AuthContext.jsx";
 import { V2_SESSION_EXPIRED_EVENT } from "../api/v2/client.js";
 import NavBar from "./NavBar.jsx";
 
-// NavBar 装配测试：mock useAuth 与 useNavigate（导航观察点）；Link/NavLink 用真实实现
+// NavBar 装配测试（T14 会话归一：唯一会话域 V2）：mock useAuth 与 useNavigate
+// （导航观察点）；Link/NavLink 用真实实现。
 vi.mock("../auth/AuthContext.jsx", () => ({ useAuth: vi.fn() }));
 vi.mock("react-router-dom", async (importOriginal) => {
   const actual = await importOriginal();
@@ -19,8 +20,7 @@ function flush() {
   return act(async () => {});
 }
 
-const V1_USER = { id: 1, username: "alice", email: "a@example.com", role: "user" };
-// email 前缀同为 alice——UserMenu 触发器可按名统一查找（V2 无 username 时取前缀）
+// email 前缀为 alice——UserMenu 触发器可按名统一查找（V2 无 username 时取前缀）
 const V2_USER = { id: "u-2", email: "alice@v2.example.com", role: "user", status: "active" };
 
 /** 渲染 + 打开右上角 UserMenu 面板 */
@@ -34,14 +34,10 @@ async function openMenu() {
   await flush();
 }
 
-function mockSession({ user, v2User, logoutV2, isExpert }) {
+function mockSession({ v2User, logoutV2, isExpert }) {
   useAuth.mockReturnValue({
-    user,
     v2User,
-    isAuthenticated: Boolean(user),
-    // 上下文汇流值可显式注入（T11 ④：V2 entitlement 分支）；缺省按 V1 role 推导
-    isExpert: isExpert ?? user?.role === "expert",
-    logout: vi.fn(),
+    isExpert: isExpert ?? false,
     logoutV2,
   });
 }
@@ -56,49 +52,38 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("「退出账户会话」入口 gating", () => {
-  it("仅 V1 会话：不渲染该入口（V2 登出仅对 V2 会话有意义），V1「登出」保持", async () => {
-    mockSession({ user: V1_USER, v2User: null, logoutV2: vi.fn() });
-    await openMenu();
-
-    // UserMenu 面板内条目均带显式 role="menuitem"
-    expect(screen.queryByRole("menuitem", { name: "退出账户会话" })).toBeNull();
-    expect(screen.getByRole("menuitem", { name: "登出" })).toBeTruthy();
-  });
-
-  it("V2 会话（含双轨）：入口出现在「登出」旁", async () => {
-    mockSession({ user: V1_USER, v2User: V2_USER, logoutV2: vi.fn() });
-    await openMenu();
-
-    expect(screen.getByRole("menuitem", { name: "退出账户会话" })).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: "登出" })).toBeTruthy();
-  });
-});
-
-describe("任务域入口不再置灰（T11 ⑤：任务面即将全 V2）", () => {
-  it("无任何会话：三个任务域链接照常渲染，无 aria-disabled / 提示 / 拦截", () => {
-    mockSession({ user: null, v2User: null, logoutV2: vi.fn() });
+describe("会话引导（T14 归一：唯一会话域）", () => {
+  it("匿名：渲染「登录」引导链接，无 UserMenu", () => {
+    mockSession({ v2User: null, logoutV2: vi.fn() });
     render(
       <MemoryRouter>
         <NavBar />
       </MemoryRouter>
     );
 
+    expect(screen.getByRole("link", { name: "登录" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /alice/ })).toBeNull();
+    // 三个任务域链接照常渲染，无置灰降级（T11 ⑤）
     for (const label of ["专家中心", "任务", "技能管理"]) {
       const link = screen.getByRole("link", { name: label });
       expect(link.getAttribute("aria-disabled")).toBeNull();
       expect(link.getAttribute("title")).toBeNull();
       expect(link.style.pointerEvents).toBe("");
     }
-    // 无会话仍保留普通登录引导
-    expect(screen.getByRole("link", { name: "登录" })).toBeTruthy();
+  });
+
+  it("V2 会话：「退出账户会话」为唯一登出入口，V1「登出」条目已随轨删除", async () => {
+    mockSession({ v2User: V2_USER, logoutV2: vi.fn() });
+    await openMenu();
+
+    expect(screen.getByRole("menuitem", { name: "退出账户会话" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "登出" })).toBeNull();
   });
 });
 
-describe("isExpert 汇流：徽标与菜单统一（T11 ④）", () => {
-  it("V2-only expert_author（entitlement 分支）：菜单含我的专家，徽标显示专家", async () => {
+describe("isExpert 单判据：徽标与菜单统一（T14 收敛）", () => {
+  it("V2 expert_author（entitlement）：菜单含我的专家，徽标显示专家", async () => {
     mockSession({
-      user: null,
       v2User: { ...V2_USER, entitlements: ["expert_author"] },
       logoutV2: vi.fn(),
       isExpert: true,
@@ -109,8 +94,8 @@ describe("isExpert 汇流：徽标与菜单统一（T11 ④）", () => {
     expect(screen.getByText("专家")).toBeTruthy();
   });
 
-  it("V2-only 非 expert：菜单无我的专家、无专家徽标", async () => {
-    mockSession({ user: null, v2User: V2_USER, logoutV2: vi.fn() });
+  it("V2 非 expert：菜单无我的专家、无专家徽标", async () => {
+    mockSession({ v2User: V2_USER, logoutV2: vi.fn() });
     await openMenu();
 
     expect(screen.queryByRole("menuitem", { name: "我的专家" })).toBeNull();
@@ -121,7 +106,7 @@ describe("isExpert 汇流：徽标与菜单统一（T11 ④）", () => {
 describe("退出账户会话流（logout 导航收敛规则）", () => {
   it("200 路径：logoutV2 调用一次 → 调用方 navigate /login", async () => {
     const logoutV2 = vi.fn().mockResolvedValue(undefined);
-    mockSession({ user: null, v2User: V2_USER, logoutV2 });
+    mockSession({ v2User: V2_USER, logoutV2 });
     await openMenu();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "退出账户会话" }));
@@ -135,10 +120,10 @@ describe("退出账户会话流（logout 导航收敛规则）", () => {
     // 复现生产链路：requestV2 401 派发事件 → AuthProvider 订阅跳转；logoutV2 收敛 resolve
     const logoutV2 = vi.fn(async () => {
       window.dispatchEvent(
-        new CustomEvent(V2_SESSION_EXPIRED_EVENT, { detail: { path: "/api/v2/auth/logout" } })
+        new CustomEvent(V2_SESSION_EXPIRED_EVENT, { detail: { path: "/api/auth/logout" } })
       );
     });
-    mockSession({ user: null, v2User: V2_USER, logoutV2 });
+    mockSession({ v2User: V2_USER, logoutV2 });
     await openMenu();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "退出账户会话" }));
@@ -150,7 +135,7 @@ describe("退出账户会话流（logout 导航收敛规则）", () => {
 
   it("登出窗口之外的事件不干扰判断（监听随 await 窗口装卸）", async () => {
     const logoutV2 = vi.fn().mockResolvedValue(undefined);
-    mockSession({ user: null, v2User: V2_USER, logoutV2 });
+    mockSession({ v2User: V2_USER, logoutV2 });
     await openMenu();
 
     // 点击前到达的无关 401 事件（其他请求失效）不命中登出监听

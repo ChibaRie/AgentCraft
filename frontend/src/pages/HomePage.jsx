@@ -3,9 +3,8 @@ import { Link } from "react-router-dom";
 import { ArrowRight, ChatCenteredDots, Plus, Wrench } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { displayName } from "../auth/displayName.js";
-import { request } from "../api/client.js";
 import { requestV2 } from "../api/v2/client.js";
-import { V2_DISCOVER, V2_TASKS } from "../api/v2/routes.js";
+import { V2_AUTHORING_SKILLS, V2_DISCOVER, V2_TASKS } from "../api/v2/routes.js";
 import { CATEGORY_LABELS, CATEGORY_OPTIONS } from "../lib/categories.js";
 import { TASK_STATUS_LABELS, toDisplayTask } from "../lib/taskDisplay.js";
 
@@ -96,16 +95,10 @@ function ExpertCard({ expert, index }) {
 }
 
 /** P02 首页（仿智能体中心的信息架构）：问候 + 工作台速览 + 最近任务 +
- *  精选专家（分类筛选）。精选/discover 走 V2（匿名可达）；最近任务按双轨
- *  会话门控（cutover 前并存，T14 收敛）。 */
+ *  精选专家（分类筛选）。全部数据面走 V2（T14 会话归一：唯一会话域）。 */
 export default function HomePage() {
-  const { user, v2User, isExpert } = useAuth();
-  // 身份源统一（终审修复）：V2 权威会话优先（NavBar 同向），V1-only 用户回退
-  const displayUser = v2User ?? user;
-  // 双轨任务列表门控（T11 ②）：V1 会话在 → V1 优先；否则 V2 会话 → V2_TASKS。
-  // V2-only 用户此前直调 V1 /api/tasks 必 401——全局错误横幅与「最近的任务」
-  // 永停加载态的根源。
-  const hasV1Session = Boolean(user);
+  const { v2User, isExpert } = useAuth();
+  const displayUser = v2User;
   const [recentTasks, setRecentTasks] = useState(null);
   const [stats, setStats] = useState({ runningTasks: "—", publishedExperts: "—", mySkills: "—" });
   const [experts, setExperts] = useState([]);
@@ -117,10 +110,6 @@ export default function HomePage() {
   useEffect(() => {
     let cancelled = false;
     async function loadRecentTasks() {
-      if (hasV1Session) {
-        const payload = await request("/api/tasks?page=1&size=3");
-        return payload.data.map(toDisplayTask);
-      }
       if (v2User) {
         const result = await requestV2(`${V2_TASKS}?page=1&size=3`);
         return (result.data?.items ?? []).map(toDisplayTask);
@@ -129,9 +118,10 @@ export default function HomePage() {
     }
     async function load() {
       try {
-        const skillReq =
-          hasV1Session && isExpert ? request("/api/skills?page=1&size=1") : null;
-        const [tasks, featured, skillPayload] = await Promise.all([
+        const skillReq = isExpert
+          ? requestV2(`${V2_AUTHORING_SKILLS}?page=1&size=1`)
+          : null;
+        const [tasks, featured, skillResult] = await Promise.all([
           loadRecentTasks(),
           fetchFeaturedExperts(""),
           skillReq?.catch(() => null) ?? Promise.resolve(null),
@@ -145,7 +135,7 @@ export default function HomePage() {
         setStats({
           runningTasks: tasks.filter((task) => task.status === "running").length,
           publishedExperts: featured.total,
-          mySkills: hasV1Session && isExpert && skillPayload ? skillPayload.total : "—",
+          mySkills: isExpert && skillResult ? (skillResult.data?.total ?? 0) : "—",
         });
       } catch (error) {
         if (!cancelled) {
@@ -161,7 +151,7 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [hasV1Session, v2User, isExpert]);
+  }, [v2User, isExpert]);
 
   // 分类筛选切换：重新拉取精选（首页每类只展示前 6 个）
   useEffect(() => {

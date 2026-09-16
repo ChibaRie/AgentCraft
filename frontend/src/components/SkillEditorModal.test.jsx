@@ -34,7 +34,7 @@ const CONTENT = {
   constraints: "只基于群内消息整理，不得虚构任何未提及的进展或风险",
 };
 
-/** GET /api/v2/skills/{id} 详情（author_service.get_entity 出参） */
+/** GET /api/skills/{id} 详情（author_service.get_entity 出参） */
 function detail() {
   return {
     skill: { id: SKILL_ID, status: "draft", published_revision_id: null },
@@ -113,7 +113,7 @@ describe("字段边界（§9.8.2）", () => {
 });
 
 describe("创建（POST 全量 content_json）", () => {
-  it("POST /api/v2/skills 幂等键 + 九字段 body（input_requirements 空→null，无 hash 字段）→ onSaved", async () => {
+  it("POST /api/skills 幂等键 + 九字段 body（input_requirements 空→null，无 hash 字段）→ onSaved", async () => {
     renderModal();
     await flush();
 
@@ -144,7 +144,7 @@ describe("创建（POST 全量 content_json）", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await flush();
 
-    const [path, options] = requestV2.mock.calls[0];    expect(path).toBe("/api/v2/skills");
+    const [path, options] = requestV2.mock.calls[0];    expect(path).toBe("/api/skills");
     expect(options.method).toBe("POST");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(options.body).toEqual({ ...CONTENT });
@@ -195,7 +195,7 @@ describe("编辑（PUT 全量替换）", () => {
   it("自取 detail 回填最新 revision content_json；PUT 九字段 body + 幂等键", async () => {
     await renderEditLoaded();
 
-    expect(requestV2.mock.calls[0][0]).toBe(`/api/v2/skills/${SKILL_ID}`);
+    expect(requestV2.mock.calls[0][0]).toBe(`/api/skills/${SKILL_ID}`);
     expect(screen.getByLabelText("名称").value).toBe("周报整理");
     expect(screen.getByLabelText("约束").value).toBe(
       "只基于群内消息整理，不得虚构任何未提及的进展或风险"
@@ -211,7 +211,7 @@ describe("编辑（PUT 全量替换）", () => {
     await flush();
 
     const [path, options] = requestV2.mock.calls[1];
-    expect(path).toBe(`/api/v2/skills/${SKILL_ID}`);
+    expect(path).toBe(`/api/skills/${SKILL_ID}`);
     expect(options.method).toBe("PUT");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(options.body).toEqual({

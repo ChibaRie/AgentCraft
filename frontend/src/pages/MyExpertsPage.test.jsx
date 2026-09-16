@@ -29,7 +29,7 @@ function flush() {
 const EXPERT_ID = "aaaaaaaa-1111-4222-8333-444444444444";
 const REV_ID = "bbbbbbbb-1111-4222-8333-444444444444";
 
-/** 后端 GET /api/v2/experts 行形状（author_service.list_entities 出参） */
+/** 后端 GET /api/experts 行形状（author_service.list_entities 出参） */
 function row(overrides = {}) {
   return {
     id: EXPERT_ID,
@@ -92,7 +92,7 @@ describe("expert_author 门（简报⑦）", () => {
 });
 
 describe("列表装载与状态徽标（简报①）", () => {
-  it("挂载 GET /api/v2/experts，四态徽标渲染：草稿/已发布/审核中/已驳回", async () => {
+  it("挂载 GET /api/experts，四态徽标渲染：草稿/已发布/审核中/已驳回", async () => {
     await renderWithList([
       row({ id: "aaaaaaaa-0000-4222-8333-444444444441", name: "甲", status: "draft" }),
       row({
@@ -134,7 +134,7 @@ describe("列表装载与状态徽标（简报①）", () => {
       }),
     ]);
 
-    expect(requestV2.mock.calls[0][0]).toBe("/api/v2/experts");
+    expect(requestV2.mock.calls[0][0]).toBe("/api/experts");
     expect(requestV2.mock.calls[0][1]?.method).toBeUndefined();
     expect(screen.getByText("甲")).toBeTruthy();
     expect(screen.getByText("乙")).toBeTruthy();
@@ -188,7 +188,7 @@ describe("下架（T6 offline，简报⑤）", () => {
     await flush();
 
     const [path, options] = requestV2.mock.calls[1];
-    expect(path).toBe(`/api/v2/experts/${EXPERT_ID}/offline`);
+    expect(path).toBe(`/api/experts/${EXPERT_ID}/offline`);
     expect(options.method).toBe("POST");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(options.body).toBeUndefined();
@@ -217,7 +217,7 @@ describe("删除（T6 DELETE，简报⑥）", () => {
     await flush();
 
     const [path, options] = requestV2.mock.calls[1];
-    expect(path).toBe(`/api/v2/experts/${EXPERT_ID}`);
+    expect(path).toBe(`/api/experts/${EXPERT_ID}`);
     expect(options.method).toBe("DELETE");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(screen.queryByText("代码评审专家")).toBeNull();

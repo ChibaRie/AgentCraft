@@ -1,18 +1,19 @@
 /**
- * V2 API 路由前缀常量（FE-T1 产出，T2-T9 消费）。
- * 与 backend/api/v2 各 router 的挂载点一一对应（backend/main.py: /api/v2 前缀）。
- * 注意：V2_USERS 当前尚无后端 router（T5+ 落地），常量先行钉死契约。
+ * V2 API 契约路径常量（FE-T1 产出，T2-T9 消费）。
+ * Phase 8 T14 cutover：全部值按 Sup §10.1 路径切换总表自实现期 /api/v2 暂挂
+ * 前缀切至契约路径（backend/main.py: v2_api_router 挂载于 /api）；
+ * 此后前端一律经本单点消费，不再出现 /api/v2 字面路径。
  */
-export const V2_AUTH = "/api/v2/auth";
-export const V2_ACCOUNT = "/api/v2/account";
-export const V2_USERS = "/api/v2/users";
-export const V2_PROVIDERS = "/api/v2/providers";
+export const V2_AUTH = "/api/auth";
+export const V2_ACCOUNT = "/api/account";
+export const V2_USERS = "/api/users";
+export const V2_PROVIDERS = "/api/providers";
 
-// —— Phase 8 T0 一次性预扩全（T8-T12b 只导入，不修改本文件）：值即当前挂载；Phase 8 T14 cutover 仅改值。
-export const V2_TASKS = "/api/v2/tasks";
-export const V2_QUOTA = "/api/v2/quota";
-export const V2_DISCOVER = "/api/v2/discover";
-export const V2_AUTHORING_EXPERTS = "/api/v2/experts";
-export const V2_AUTHORING_SKILLS = "/api/v2/skills";
-export const V2_REPORTS = "/api/v2/reports";
+// —— Phase 8 T0 一次性预扩全（T8-T12b 只导入，不修改本文件）：T14 cutover 已切契约路径。
+export const V2_TASKS = "/api/tasks";
+export const V2_QUOTA = "/api/quota";
+export const V2_DISCOVER = "/api/discover";
+export const V2_AUTHORING_EXPERTS = "/api/experts";
+export const V2_AUTHORING_SKILLS = "/api/skills";
+export const V2_REPORTS = "/api/reports";
 export const V2_ADMIN = "/api/admin";

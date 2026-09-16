@@ -13,8 +13,8 @@ vi.mock("../api/v2/client.js", async (importOriginal) => {
   return { ...actual, requestV2: vi.fn(), setCsrfToken: vi.fn() };
 });
 
-const CONFIRM_PATH = "/api/v2/auth/email-verification/confirm";
-const ME_PATH = "/api/v2/users/me";
+const CONFIRM_PATH = "/api/auth/email-verification/confirm";
+const ME_PATH = "/api/users/me";
 
 const PENDING_RAW = { id: "u-9", email: "pending@example.com", role: "user", status: "pending" };
 

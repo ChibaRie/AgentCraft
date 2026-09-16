@@ -74,7 +74,7 @@ describe("TOTP 条件显示（mfa_enabled 判据 = users/me / v2User）", () => 
     await flush();
 
     const [path, options] = requestV2.mock.calls[0];
-    expect(path).toBe("/api/v2/auth/password-change");
+    expect(path).toBe("/api/auth/password-change");
     expect(options.method).toBe("POST");
     expect(options.body).toEqual({
       current_password: "old-secret",

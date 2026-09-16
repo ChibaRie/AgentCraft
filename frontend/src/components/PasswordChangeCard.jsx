@@ -12,7 +12,7 @@ const FALLBACK_MESSAGE = "修改失败，请稍后重试";
 /**
  * 密码修改卡片（FE-T6，契约 = F2 §1.8）。
  *
- * 后端契约（只读参考）：POST /api/v2/auth/password-change（认证端点；A7 未列
+ * 后端契约（只读参考）：POST /api/auth/password-change（认证端点；A7 未列
  * 幂等义务——无幂等键）body {current_password, new_password, totp_code?}；
  * 200 {ok:true}（其余会话被撤销，当前会话保留）→ 提示 + refreshV2User；
  * 400 MFA_INVALID「验证码无效」/ 401 INVALID_CREDENTIALS「当前密码不正确」→

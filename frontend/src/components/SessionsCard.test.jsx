@@ -72,11 +72,11 @@ afterEach(() => {
 });
 
 describe("设备列表渲染", () => {
-  it("挂载 GET /api/v2/auth/sessions，按 data 数组渲染行", async () => {
+  it("挂载 GET /api/auth/sessions，按 data 数组渲染行", async () => {
     await renderWithSessions([ROW_CURRENT, ROW_OTHER]);
 
     expect(requestV2).toHaveBeenCalledTimes(1);
-    expect(requestV2.mock.calls[0][0]).toBe("/api/v2/auth/sessions");
+    expect(requestV2.mock.calls[0][0]).toBe("/api/auth/sessions");
     expect(screen.getByText("Chrome / Windows")).toBeTruthy();
     expect(screen.getByText("Safari / macOS")).toBeTruthy();
   });
@@ -112,7 +112,7 @@ describe("退出会话流", () => {
 
     expect(requestV2).toHaveBeenCalledTimes(3);
     const [path, options] = requestV2.mock.calls[1];
-    expect(path).toBe("/api/v2/auth/sessions/s-2");
+    expect(path).toBe("/api/auth/sessions/s-2");
     expect(options.method).toBe("DELETE");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(options.idempotencyKey.length).toBeGreaterThan(0);
@@ -130,7 +130,7 @@ describe("退出会话流", () => {
     fireEvent.click(screen.getByRole("button", { name: "仅退出本机" }));
     await flush();
 
-    expect(requestV2.mock.calls[1][0]).toBe("/api/v2/auth/sessions/s-1");
+    expect(requestV2.mock.calls[1][0]).toBe("/api/auth/sessions/s-1");
     expect(useAuth().clearV2Session).toHaveBeenCalledTimes(1);
     expect(screen.getByText("登录页标记")).toBeTruthy();
   });

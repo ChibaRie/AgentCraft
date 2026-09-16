@@ -1,20 +1,14 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { request } from "./api/client.js";
 import { requestV2 } from "./api/v2/client.js";
 import { AuthProvider } from "./auth/AuthContext.jsx";
 import AppRoutes from "./router.jsx";
 
-// /admin 路由树接线测试（Phase 8 T12a）：真实 AuthProvider + 真实 AppRoutes、
-// 网络入口整体打桩——/admin 索引重定向到 /admin/invitations；admin 会话可达
-// 邀请页并触发列表装载；非 admin/匿名经 RequireAdmin 弹回首页。
-vi.mock("./api/client.js", () => ({
-  getToken: vi.fn(() => null),
-  setToken: vi.fn(),
-  request: vi.fn(),
-}));
-
+// /admin 路由树接线测试（Phase 8 T12a/T12b）：真实 AuthProvider + 真实 AppRoutes、
+// 网络入口整体打桩（T14 会话归一：唯一网络入口 requestV2）——/admin 索引重定向到
+// /admin/invitations；admin 会话可达邀请页并触发列表装载；非 admin/匿名经
+// RequireAdmin 弹回首页。
 vi.mock("./api/v2/client.js", async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, requestV2: vi.fn(), setCsrfToken: vi.fn() };
@@ -51,7 +45,6 @@ const EMPTY_INVITATIONS = { items: [], total: 0, page: 1, size: 20 };
 
 beforeEach(() => {
   vi.resetAllMocks();
-  request.mockResolvedValue({ data: [], total: 0 });
 });
 
 afterEach(() => {
@@ -61,7 +54,7 @@ afterEach(() => {
 describe("/admin 路由树（T12a）", () => {
   it("admin 会话：/admin 索引重定向 /admin/invitations 并装载邀请列表", async () => {
     requestV2.mockImplementation((path) => {
-      if (path === "/api/v2/users/me") {
+      if (path === "/api/users/me") {
         return Promise.resolve(ok(ADMIN_RAW));
       }
       if (path === "/api/admin/invitations") {
@@ -82,7 +75,7 @@ describe("/admin 路由树（T12a）", () => {
 
   it("V2 普通用户访问 /admin → RequireAdmin 弹回首页", async () => {
     requestV2.mockImplementation((path) => {
-      if (path === "/api/v2/users/me") {
+      if (path === "/api/users/me") {
         return Promise.resolve(ok({ ...ADMIN_RAW, role: "user" }));
       }
       return Promise.reject(new Error(`未编排的请求：${path}`));

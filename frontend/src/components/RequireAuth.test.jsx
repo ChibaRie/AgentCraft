@@ -4,17 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuth } from "../auth/AuthContext.jsx";
 import RequireAuth from "./RequireAuth.jsx";
 
-// 路由守卫（Phase 8 T11 ④）：requireExpert 消费上下文汇流值 isExpert——
-// V2-only expert_author（entitlements 含 expert_author）可入专家页；匿名弹 /login。
+// 路由守卫（Phase 8 T11 ④/T14 收敛）：requireExpert 消费上下文单判据 isExpert——
+// V2 expert_author（entitlements 含 expert_author）可入专家页；无 V2 会话弹 /login。
 vi.mock("../auth/AuthContext.jsx", () => ({ useAuth: vi.fn() }));
 
 const V2_USER = { id: "u-2", email: "v2@example.com", role: "user", status: "active" };
-const V1_USER = { id: 1, username: "alice", email: "a@example.com", role: "expert" };
 
 function renderGuard(authOverrides = {}) {
   useAuth.mockReturnValue({
     authReady: true,
-    user: null,
     v2User: null,
     isExpert: false,
     ...authOverrides,
@@ -45,8 +43,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("requireExpert 判据 = V2 entitlements 含 expert_author（T11 ④）", () => {
-  it("V2-only expert_author：放行专家页", () => {
+describe("requireExpert 判据 = V2 entitlements 含 expert_author（T11 ④/T14 单判据）", () => {
+  it("V2 expert_author：放行专家页", () => {
     renderGuard({
       v2User: { ...V2_USER, entitlements: ["expert_author"] },
       isExpert: true,
@@ -55,24 +53,19 @@ describe("requireExpert 判据 = V2 entitlements 含 expert_author（T11 ④）"
     expect(screen.queryByText("首页落点")).toBeNull();
   });
 
-  it("V2-only 无 entitlement：弹回首页（专家页不可入）", () => {
+  it("V2 无 entitlement：弹回首页（专家页不可入）", () => {
     renderGuard({ v2User: V2_USER, isExpert: false });
     expect(screen.queryByText("专家页落点")).toBeNull();
     expect(screen.getByText("首页落点")).toBeTruthy();
   });
 
-  it("V1 role=expert（汇流值另一分支）：放行专家页（回归钉死）", () => {
-    renderGuard({ user: V1_USER, isExpert: true });
-    expect(screen.getByText("专家页落点")).toBeTruthy();
-  });
-
-  it("匿名（双轨皆无）：弹回 /login", () => {
+  it("无 V2 会话（匿名）：弹回 /login（V1 会话域已随 cutover 删除）", () => {
     renderGuard();
     expect(screen.queryByText("专家页落点")).toBeNull();
     expect(screen.getByText("登录页落点")).toBeTruthy();
   });
 
-  it("authReady 未落定：渲染 null（双轨探测窗口不闪烁）", () => {
+  it("authReady 未落定：渲染 null（探测窗口不闪烁）", () => {
     renderGuard({ authReady: false });
     expect(screen.queryByText("专家页落点")).toBeNull();
     expect(screen.queryByText("登录页落点")).toBeNull();
