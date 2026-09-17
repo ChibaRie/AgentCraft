@@ -98,8 +98,9 @@ async def test_get_task_view_expert_and_provider_display_fields(pg, app_engine, 
     async with owner_tx(app_engine, uid) as db:
         view = await get_task_view(db, owner_id=uid, task_id=tid)
     assert view["expert"] == {"name": "唤起专家", "avatar_url": "https://cdn.example.com/a.png"}
-    # 0002 种子目录行：api.openai.com → display_name 'OpenAI'；快照 model 直取
-    assert view["provider"] == {"display_name": "OpenAI", "model": "m"}
+    # 2026-09-17 去目录化：display_name = base_url 上游 host（不再经目录 join）；
+    # seed_provider 缺省 base https://api.openai.com/v1 → 'api.openai.com'；快照 model 直取
+    assert view["provider"] == {"display_name": "api.openai.com", "model": "m"}
     assert "skills" not in view
 
 

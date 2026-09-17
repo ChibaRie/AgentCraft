@@ -395,7 +395,9 @@ async def test_admin_task_snapshot_owner_shape_with_expert_provider(pg, admin_en
         assert data["initial_round"] is None
         assert data["counts"] == {"inputs": 0, "outputs": 0}
         assert data["expert"] == {"name": "网格专家", "avatar_url": "https://cdn.example/a.png"}
-        assert data["provider"] == {"display_name": "OpenAI", "model": "m"}
+        # 2026-09-17 去目录化：display_name = base_url 上游 host（seed 缺省
+        # https://api.openai.com/v1），不再经目录 join 取 'OpenAI'
+        assert data["provider"] == {"display_name": "api.openai.com", "model": "m"}
         assert await _audit_count(pg) == 0
     finally:
         await client.aclose()

@@ -47,20 +47,12 @@ async def app_engine(role_engine):
 
 @pytest.fixture
 async def domain(pg):
-    """种子 user + BYOK provider + published revision；返回 (uid, pid, rid, cid)。"""
+    """种子 user + BYOK provider + published revision；返回 (uid, pid, rid, cid)
+    ——2026-09-17 去目录化后 catalog_id 为 None（provider 行不再挂目录）。"""
     uid = await seed_task_user(pg, "t4-user@x.test")
     pid = await seed_provider(pg, uid)
     rid = await seed_published_revision(pg, uid)
-    async with pg.engine.connect() as conn:
-        cid = str(
-            (
-                await conn.execute(
-                    text("SELECT catalog_id FROM user_providers WHERE id = :p"),
-                    {"p": str(pid)},
-                )
-            ).scalar_one()
-        )
-    return uid, pid, rid, cid
+    return uid, pid, rid, None
 
 
 @pytest.fixture
@@ -78,13 +70,16 @@ def delete_root(tmp_path, monkeypatch) -> Path:
 
 
 def _snapshot(pid, cid) -> dict:
-    """D14 快照键（与 ResolvedProvider 一一对应）。"""
-    return {
+    """D14 快照键（与 ResolvedProvider 一一对应）；provider_catalog_id 仅在真有
+    目录行时进快照（2026-09-17 去目录化——服务端该键可缺席）。"""
+    snapshot = {
         "provider_id": str(pid),
-        "provider_catalog_id": str(cid),
         "provider_model_id": "gpt-4o-mini",
         "provider_key_version": 1,
     }
+    if cid:
+        snapshot["provider_catalog_id"] = str(cid)
+    return snapshot
 
 
 async def _uploading_task(pg, domain) -> tuple[str, str]:

@@ -24,6 +24,7 @@ from backend.config import Settings, get_settings
 from backend.models.task import Task
 from backend.provider_proxy import app, get_proxy_session
 from backend.utils.crypto import encrypt_text, provider_key_aad
+from backend.utils.net_guard import assert_public_https as _real_assert_public_https
 
 pytestmark = pytest.mark.usefixtures("client")
 
@@ -43,9 +44,17 @@ def make_settings(**overrides):
 
 
 @pytest.fixture()
-def proxy_env(test_db):
-    """代理应用 + 测试设置 + 假上游收集器。"""
+def proxy_env(test_db, monkeypatch):
+    """代理应用 + 测试设置 + 假上游收集器。
+
+    去目录化 SSRF 面（2026-09-17）：转发前 assert_public_https 出网护栏在本文件
+    统一打桩（provider_proxy 顶层 import 绑定，须桩模块属性）——路由/透传正例
+    全程零真实网络（test_v2_provider_test_endpoint 同款纪律）；护栏真件拒绝行为
+    由 test_egress_blocked_ssrf_502 以字面内网 IP 还原断言。"""
     settings = make_settings(PROXY_GRANT_SECRET=V2_GRANT_SECRET)
+    monkeypatch.setattr(
+        "backend.provider_proxy.assert_public_https", lambda url: None, raising=True
+    )
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_proxy_session] = lambda: test_db.session_factory()
     captured = {}
@@ -219,8 +228,10 @@ async def test_keyless_provider_sends_no_auth(proxy_env, test_db):
     settings, captured = proxy_env
     from backend.services.task_token import create_task_token
 
+    # 免钥语义与地址形态正交（guard 已在 proxy_env 打桩，零真实网络）——原内网
+    # 形态地址改为公网形态，免钥断言不变：上游收不到 Authorization 头。
     task_id = await seed_task(
-        test_db, 1, make_snapshot("user", "http://host.docker.internal:11434/v1", key=None)
+        test_db, 1, make_snapshot("user", "https://api.deepseek.com/v1", key=None)
     )
     token = create_task_token(task_id, "inst-1", "deepseek-chat")
     response = await call_proxy(token)
@@ -262,6 +273,26 @@ async def test_upstream_unreachable_502(proxy_env, test_db):
     token = create_task_token(task_id, "inst-1", "deepseek-chat")
     response = await call_proxy(token)
     assert response.status_code == 502
+
+
+async def test_egress_blocked_ssrf_502(proxy_env, test_db, monkeypatch):
+    """SSRF 硬约束（2026-09-17 用户自带 base_url 裁决伴随面）：转发前
+    assert_public_https 拒内网目标 → 502 统一错误面（不泄细节、上游零触达）。
+    proxy_env 已桩 guard——此处还原真件，用字面内网 IP（零 DNS 零网络）。"""
+    monkeypatch.setattr(
+        "backend.provider_proxy.assert_public_https", _real_assert_public_https, raising=True
+    )
+    settings, captured = proxy_env
+    from backend.services.task_token import create_task_token
+
+    task_id = await seed_task(
+        test_db, 1, make_snapshot("user", "https://10.0.0.5:9/v1", key="sk-x")
+    )
+    token = create_task_token(task_id, "inst-1", "deepseek-chat")
+    response = await call_proxy(token)
+    assert response.status_code == 502
+    assert response.json()["error"]["message"] == "upstream connection failed"
+    assert "url" not in captured and "auth" not in captured  # 上游零触达
 
 
 async def test_models_endpoint_returns_snapshot_model(proxy_env, test_db):
@@ -339,7 +370,9 @@ def v2_proxy_env(proxy_env):
                 "model": "deepseek-chat",
                 "provider": {
                     "api_key": _V2_API_KEY,
-                    "base_target": "https://api.deepseek.test/v1",
+                    # grant 下发 base_target 直连（guard 已在 proxy_env 打桩，
+                    # 零真实网络——本断言只钉路由与真 Key 转发）
+                    "base_target": "https://api.deepseek.com/v1",
                 },
             },
             headers={"content-type": "application/json"},
@@ -357,7 +390,7 @@ async def test_v2_token_grants_and_forwards_real_key(v2_proxy_env):
     captured, _calls = v2_proxy_env
     response = await call_proxy(make_v2_token())
     assert response.status_code == 200, response.text
-    assert captured["url"] == "https://api.deepseek.test/v1/chat/completions"
+    assert captured["url"] == "https://api.deepseek.com/v1/chat/completions"
     assert captured["auth"] == f"Bearer {_V2_API_KEY}"
     assert "sk-v2-real" not in response.text
 

@@ -104,17 +104,9 @@ async def _seed_running_with_inputs(pg, storage, email: str, uploads) -> tuple[s
     uid = str(await seed_task_user(pg, email))
     pid = await seed_provider(pg, uid)
     rid = await seed_published_revision(pg, uid)
-    async with pg.engine.connect() as conn:
-        cid = str(
-            (
-                await conn.execute(
-                    text("SELECT catalog_id FROM user_providers WHERE id = :p"), {"p": str(pid)}
-                )
-            ).scalar_one()
-        )
+    # 2026-09-17 去目录化：快照无 provider_catalog_id（可缺席，seed_provider 恒 NULL）
     snapshot = {
         "provider_id": str(pid),
-        "provider_catalog_id": cid,
         "provider_model_id": "gpt-4o-mini",
         "provider_key_version": 1,
     }
@@ -242,9 +234,12 @@ async def test_list_task_files_success(client, tools_env, pg):
     resp = _post(client, "list-task-files", tid, token)
     assert resp.status_code == 200, resp.text
     files = resp.json()["data"]["files"]
-    assert [f["file_name"] for f in files] == ["m1.txt", "m2.txt"]
+    # 同批上传行 created_at 同事务同值，uuid7 同毫秒 rand 位随机 → 行序不稳定
+    # （order_by created_at,id 的并列无稳定序），按名对齐断言——序本身非契约面
+    by_name = {f["file_name"]: f for f in files}
+    assert sorted(by_name) == ["m1.txt", "m2.txt"]
     assert set(files[0]) == {"id", "file_name", "sha256", "size_bytes"}
-    assert files[1]["size_bytes"] == 3
+    assert by_name["m2.txt"]["size_bytes"] == 3
 
 
 async def test_query_task_state_success_and_key_set(client, tools_env, pg):

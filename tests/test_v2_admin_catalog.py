@@ -13,6 +13,7 @@
 """
 
 import asyncio
+import base64
 import threading
 import uuid as _uuid
 
@@ -41,6 +42,9 @@ from tests.v2_task_helpers import seed_running_task, seed_task_user
 # 触发 ruff F811——以赋值别名引入（T1 钉死形态，见 test_v2_admin_invitations.py:34）。
 admin_env = _vah.admin_env
 
+# Provider KEK 材料（对齐 v2_provider_helpers._PROVIDER_KEK_MATERIAL；与 admin_env
+# 注入的 RATE_LIMIT/MFA 材料互异——D9「多把密钥互不相同」纪律）。
+_PROVIDER_KEK = base64.urlsafe_b64encode(bytes(range(32, 64))).decode()
 _UA = "AgentCraft-AdminCatalogTest/1.0"
 _CATALOG = "/api/admin/catalog"
 _KILL = "/api/admin/tools/check_code_style/kill-switch"
@@ -356,32 +360,59 @@ async def test_put_provider_whitelist_shrink_no_retroaction(pg, admin_env):
     await client.aclose()
 
 
-async def test_put_provider_disabled_blocks_create_and_test(pg, admin_env):
-    """CATALOG_ITEM_DISABLED 联动：停用后 owner 面 create/test 一律拒绝。"""
+async def test_put_provider_disabled_no_longer_gates_owner_create_and_test(
+    pg, admin_env, monkeypatch
+):
+    """去目录化翻转（2026-09-17 裁决）：目录 enabled 门退役——停用条目不再阻断
+    owner 面 create/test（原 CATALOG_ITEM_DISABLED 联动删除，错误码仅供历史幂等
+    重放；provider_catalog 表保留但用户流程不消费）。create 以 base_url 直填载荷
+    成功出 ProviderOut 新形态（无 catalog 字段）；connectivity 无目录门，mock 上游
+    200 即 ok。"""
+    monkeypatch.setenv("PROVIDER_KEY_ENCRYPTION_KEY", _PROVIDER_KEK)  # admin_env 未注入 KEK
+    # 出网护栏打桩（provider_service 函数内 import，桩 net_guard 模块属性即生效）
+    # ——connectivity 正例零真实网络（test_v2_provider_test_endpoint 同款纪律）
+    monkeypatch.setattr(
+        "backend.utils.net_guard.assert_public_https", lambda url: None, raising=True
+    )
     client, _csrf, _admin_id = await admin_client(pg, admin_env, email="prov-gate@x.test")
     uid = await seed_task_user(pg, "gate-owner@x.test")
-    pid = str(await seed_provider(pg, uid))
     cid = await catalog_id_by_host(pg, "api.openai.com")
     resp = await _put_provider(client, cid, enabled=False, key="k-prov-gate")
     assert resp.status_code == 200
-    with pytest.raises(AgentCraftError) as create_exc:
-        updates = {
-            "catalog_id": cid,
-            "model_id": "gpt-4o-mini",
-            "api_key": "sk-test-1234",
-            "is_default": False,
-        }
-        await provider_service.create_provider(
-            admin_env,
-            user_id=uid,
-            updates=updates,
-            idem_key="k-create-blocked",
-            idem_hash=idempotency.request_hash(updates),
-        )
-    assert create_exc.value.code == ErrorCode.CATALOG_ITEM_DISABLED
-    with pytest.raises(AgentCraftError) as test_exc:
-        await provider_service.test_provider_connectivity(admin_env, user_id=uid, provider_id=pid)
-    assert test_exc.value.code == ErrorCode.CATALOG_ITEM_DISABLED
+    updates = {
+        "base_url": "https://api.openai.com/v1",
+        "model_id": "gpt-4o-mini",
+        "api_key": "sk-test-1234",
+        "is_default": False,
+    }
+    detail = await provider_service.create_provider(
+        admin_env,
+        user_id=uid,
+        updates=updates,
+        idem_key="k-create-gate-off",
+        idem_hash=idempotency.request_hash(updates),
+    )
+    assert detail["base_url"] == "https://api.openai.com/v1"
+    assert detail["model_id"] == "gpt-4o-mini" and detail["key_last4"] == "1234"
+    assert detail["status"] == "active" and detail["is_default"] is False
+    assert set(detail) == {
+        "id",
+        "base_url",
+        "model_id",
+        "key_last4",
+        "key_version",
+        "status",
+        "is_default",
+        "created_at",
+    }
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"data": [{"id": "m1"}]})
+    )
+    out = await provider_service.test_provider_connectivity(
+        admin_env, user_id=uid, provider_id=detail["id"], transport=transport
+    )
+    assert out["ok"] is True and out["models_visible"] == 1
+    assert set(out) == {"ok", "latency_ms", "models_visible"}
     await client.aclose()
 
 

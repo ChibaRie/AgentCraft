@@ -146,11 +146,12 @@ class ProviderCatalogItem(V2BaseModel):
 
 
 class ProviderOut(V2BaseModel):
-    """GET/POST/PUT /providers 的 Provider 行视图（裁决 D13：无任何 Key 材料）。"""
+    """GET/POST/PUT /providers 的 Provider 行视图（裁决 D13：无任何 Key 材料；
+    2026-09-17 去目录化：base_url 直出，无 catalog 字段——与 provider_service._out
+    一一对应）。"""
 
     id: str
-    catalog_id: str
-    catalog_display_name: str
+    base_url: str
     model_id: str
     key_last4: str
     key_version: int
