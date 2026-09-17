@@ -101,7 +101,7 @@ class Task(TimestampMixin, Base):
         ForeignKey("user_providers.id", ondelete="RESTRICT"), nullable=False
     )
     # 快照列：裸 Uuid，无 FK（目录可能被清理，任务保留当时的目录指针）
-    provider_catalog_id: Mapped[_uuid.UUID] = mapped_column(Uuid, nullable=False)
+    provider_catalog_id: Mapped[_uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     provider_model_id: Mapped[str] = mapped_column(String(200), nullable=False)
     provider_key_version: Mapped[int] = mapped_column(Integer, nullable=False)
     # 循环 FK：建表经 use_alter 以 ALTER TABLE 补齐；消息删除时指针置空

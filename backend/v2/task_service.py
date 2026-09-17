@@ -205,16 +205,19 @@ def _validate_initial_message(initial_message: str) -> None:
         raise _validation_error(f"initial_message 超出提示词预算（{limit} 字节）")
 
 
-def _require_provider_snapshot(snapshot: dict) -> tuple[_uuid.UUID, str, int]:
+def _require_provider_snapshot(snapshot: dict) -> tuple[_uuid.UUID | None, str, int]:
     """D14 快照键 {provider_id, provider_catalog_id, provider_model_id,
-    provider_key_version}（与 ResolvedProvider 一一对应）；缺漏/非法 → 400。"""
+    provider_key_version}（与 ResolvedProvider 一一对应）；2026-09-17 去目录化：
+    provider_catalog_id 可缺席（None，历史目录行仍有值）；缺漏/非法 → 400。"""
     try:
-        catalog_id = _uuid.UUID(str(snapshot["provider_catalog_id"]))
+        raw_catalog = snapshot.get("provider_catalog_id")
+        catalog_id = _uuid.UUID(str(raw_catalog)) if raw_catalog else None
         model_id = str(snapshot["provider_model_id"])
         key_version = int(snapshot["provider_key_version"])
     except (KeyError, TypeError, ValueError) as exc:
         raise _validation_error(
-            "provider_snapshot 必须含 provider_catalog_id/provider_model_id/provider_key_version"
+            "provider_snapshot 必须含 provider_model_id/provider_key_version"
+            "（provider_catalog_id 可缺席）"
         ) from exc
     return catalog_id, model_id, key_version
 

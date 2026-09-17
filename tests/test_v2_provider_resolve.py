@@ -32,7 +32,7 @@ async def test_explicit_provider_resolves(pg):
         assert isinstance(out, ResolvedProvider)
         assert out.provider_id == str(pid) and out.model_id == "gpt-4o-mini"
         assert out.key_version == 1
-        assert out.catalog_id == str(await catalog_id_by_host(pg, "api.openai.com"))
+        assert out.catalog_id is None  # 去目录化：种子行 catalog_id 恒 NULL
     finally:
         rt.close()
 
@@ -75,16 +75,16 @@ async def test_explicit_bad_uuid_400(pg):
         rt.close()
 
 
-async def test_explicit_catalog_disabled_400(pg):
+async def test_catalog_disabled_does_not_block_resolve(pg):
+    """去目录化（2026-09-17 用户裁决）：resolve 不再复验目录可用性——目录停用
+    不影响已建 Provider 行的解析（base_url 自带语义）。"""
     rt = make_v2_runtime(pg)
     try:
         uid = await seed_active_user(pg, "r5@x.test")
         pid = await seed_provider(pg, uid, catalog_host="faux.invalid", model_id="faux-echo")
         async with owner_session(rt, str(uid)) as db:
-            with pytest.raises(AgentCraftError) as exc_info:
-                await resolve_task_provider(db, user_id=str(uid), provider_id=str(pid))
-        assert exc_info.value.code == ErrorCode.CATALOG_ITEM_DISABLED
-        assert exc_info.value.http_status == 400
+            out = await resolve_task_provider(db, user_id=str(uid), provider_id=str(pid))
+        assert out.model_id == "faux-echo"
     finally:
         rt.close()
 

@@ -38,7 +38,7 @@ from backend.errors import AgentCraftError, ErrorCode
 from backend.models.task import Task
 from backend.services import harness_service
 from backend.services.task_token import TaskTokenInvalid, decode_task_token
-from backend.v2.models import AuditLog, ProviderCatalog, TaskRound, UserProvider
+from backend.v2.models import AuditLog, TaskRound, UserProvider
 from backend.v2.models import Task as V2Task  # V2 任务行（owner_id 语义；V1 Task 属 sqlite 面）
 from backend.v2.provider_crypto import key_sealer
 from backend.v2.runtime import V2Runtime, get_optional_v2_runtime, get_v2_runtime, owner_session
@@ -409,12 +409,7 @@ async def provider_grant(
         provider = (
             await db.execute(select(UserProvider).where(UserProvider.id == task.provider_id))
         ).scalar_one_or_none()
-        catalog = (
-            await db.execute(
-                select(ProviderCatalog).where(ProviderCatalog.id == task.provider_catalog_id)
-            )
-        ).scalar_one_or_none()
-        if provider is None or provider.status != "active" or catalog is None:
+        if provider is None or provider.status != "active":
             logger.warning(
                 "provider-grant 校验失败 layer=provider-unusable task_id=%s", claims["task_id"]
             )
@@ -424,7 +419,7 @@ async def provider_grant(
         provider_id = str(provider.id)
         key_ciphertext = provider.key_ciphertext
         dek_wrapped = provider.dek_wrapped
-        base_target = f"https://{catalog.allowed_host}{catalog.path_prefix}"
+        base_target = provider.base_url
 
     # 钉六：发 Key 先审计（admin 会话独立事务——audit_logs 无 RLS 且 app role
     # 零授权）；审计失败异常向上 → 500，Key 不出控制面（fail-closed）

@@ -76,25 +76,30 @@ async def seed_provider(
     user_id: str,
     *,
     catalog_host: str = "api.openai.com",
+    base_url: str | None = None,
     model_id: str = "gpt-4o-mini",
     is_default: bool = False,
     status: str = "active",
     key_version: int = 1,
 ) -> str:
-    """superuser 播种 user_providers 行（占位密文——CRUD 测试不解密），返回 id。"""
-    cid = await catalog_id_by_host(pg, catalog_host)
+    """superuser 播种 user_providers 行（占位密文——CRUD 测试不解密），返回 id。
+
+    2026-09-17 去目录化：base_url 直填（缺省由 catalog_host 推导 https 地址），
+    catalog_id 恒 NULL（目录退役为推荐位）。
+    """
+    base = base_url or f"https://{catalog_host}/v1"
     async with pg.engine.begin() as conn:
         return (
             await conn.execute(
                 text(
-                    "INSERT INTO user_providers (id, user_id, catalog_id, model_id, "
+                    "INSERT INTO user_providers (id, user_id, catalog_id, base_url, model_id, "
                     "key_ciphertext, dek_wrapped, key_last4, key_version, status, is_default) "
-                    "VALUES (gen_random_uuid(), :u, :c, :m, 'ct', 'dw', 'ST4K', :v, :s, :d) "
+                    "VALUES (gen_random_uuid(), :u, NULL, :b, :m, 'ct', 'dw', 'ST4K', :v, :s, :d) "
                     "RETURNING id"
                 ),
                 {
                     "u": user_id,
-                    "c": cid,
+                    "b": base,
                     "m": model_id,
                     "v": key_version,
                     "s": status,
@@ -145,23 +150,15 @@ async def seed_task_for_provider(
             text("UPDATE experts SET published_revision_id = :r WHERE id = :x"),
             {"r": revision_id, "x": expert_id},
         )
-        catalog_id = (
-            await conn.execute(
-                text(
-                    "SELECT catalog_id FROM user_providers WHERE id = :p"
-                ),  # 列名是 catalog_id（非 provider_catalog_id）
-                {"p": provider_id},
-            )
-        ).scalar_one()
         task_id = (
             await conn.execute(
                 text(
                     "INSERT INTO tasks (id, owner_id, expert_revision_id, provider_id, "
                     "provider_catalog_id, provider_model_id, provider_key_version, "
-                    "event_sequence, status) VALUES (gen_random_uuid(), :u, :r, :p, :c, "
+                    "event_sequence, status) VALUES (gen_random_uuid(), :u, :r, :p, NULL, "
                     "'m', 1, 0, :s) RETURNING id"
                 ),
-                {"u": user_id, "r": revision_id, "p": provider_id, "c": catalog_id, "s": status},
+                {"u": user_id, "r": revision_id, "p": provider_id, "s": status},
             )
         ).scalar_one()
         uid = user_id if isinstance(user_id, _uuid.UUID) else _uuid.UUID(user_id)

@@ -7,7 +7,6 @@ from sqlalchemy import text
 
 from tests.v2_provider_helpers import (
     auth_client,
-    catalog_id_by_host,
     login,
     seed_active_user,
     seed_provider,
@@ -20,7 +19,7 @@ _OPENAI_CID = None  # 每用例内经 catalog_id_by_host 取
 
 async def _create(
     client,
-    catalog_id: str,
+    base_url: str = "https://api.openai.com/v1",
     *,
     model_id="gpt-4o-mini",
     api_key="sk-test-abcdef123456",
@@ -30,7 +29,7 @@ async def _create(
     return await client.post(
         _CREATE,
         json={
-            "catalog_id": catalog_id,
+            "base_url": base_url,
             "model_id": model_id,
             "api_key": api_key,
             "is_default": is_default,
@@ -41,16 +40,14 @@ async def _create(
 
 async def test_create_provider_seals_and_persists(provider_env, pg):
     await seed_active_user(pg, "create@example.com")
-    cid = await catalog_id_by_host(pg, "api.openai.com")
     async with auth_client() as client:
         await login(client, "create@example.com", "User-Passw0rd!")
-        resp = await _create(client, cid)
+        resp = await _create(client)
     assert resp.status_code == 200, resp.text
     row = resp.json()["data"]
     assert set(row.keys()) == {
         "id",
-        "catalog_id",
-        "catalog_display_name",
+        "base_url",
         "model_id",
         "key_last4",
         "key_version",
@@ -58,6 +55,7 @@ async def test_create_provider_seals_and_persists(provider_env, pg):
         "is_default",
         "created_at",
     }
+    assert row["base_url"] == "https://api.openai.com/v1"
     assert row["key_last4"] == "3456" and row["key_version"] == 1 and row["status"] == "active"
     async with pg.engine.connect() as conn:
         db_row = (
@@ -74,19 +72,17 @@ async def test_create_provider_seals_and_persists(provider_env, pg):
     assert _json.loads(db_row["dek_wrapped"])["alg"] == "A256GCM"
 
 
-async def test_create_rejects_base_url_extra_field(provider_env, pg):
-    """禁 base_url：extra=forbid → 400（契约测试，裁决 D14）；零 DB 副作用。"""
+async def test_create_rejects_catalog_id_extra_field(provider_env, pg):
+    """去目录化（2026-09-17）：catalog_id 变 extra 字段 → 400（extra=forbid）；零 DB 副作用。"""
     await seed_active_user(pg, "extra@example.com")
-    cid = await catalog_id_by_host(pg, "api.openai.com")
     async with auth_client() as client:
         await login(client, "extra@example.com", "User-Passw0rd!")
         resp = await client.post(
             _CREATE,
             json={
-                "catalog_id": cid,
+                "catalog_id": "0197aaaa-7aaa-7aaa-7aaa-aaaaaaaaaaaa",
                 "model_id": "gpt-4o-mini",
                 "api_key": "sk-test-abcdef123456",
-                "base_url": "https://evil.example",
             },
             headers={"Idempotency-Key": "idem-extra-1"},
         )
@@ -96,31 +92,35 @@ async def test_create_rejects_base_url_extra_field(provider_env, pg):
     assert n == 0
 
 
-async def test_create_rejects_disabled_catalog_and_accepts_custom_model(provider_env, pg):
-    """目录 enabled 门恒在；model_id 白名单退役（2026-09-17 用户裁决）——跨目录
-    自定义模型名放行，仅受 1..128 非空白校验约束。"""
+async def test_create_base_url_semantics(provider_env, pg):
+    """base_url 形态裁决（2026-09-17）：跨目录模型名放行（白名单退役为推荐清单）；
+    非 https / 空白 model_id → 400 VALIDATION_ERROR。"""
     uid = await seed_active_user(pg, "dis@example.com")
-    faux = await catalog_id_by_host(pg, "faux.invalid")  # D16：种子恒 enabled=false
-    deepseek = await catalog_id_by_host(pg, "api.deepseek.com")
     async with auth_client() as client:
         await login(client, "dis@example.com", "User-Passw0rd!")
-        resp = await _create(client, faux, model_id="faux-echo", idem="idem-dis-1")
-        assert resp.status_code == 400 and resp.json()["error"]["code"] == "CATALOG_ITEM_DISABLED"
-        resp = await _create(client, deepseek, model_id="gpt-4o", idem="idem-dis-2")
+        resp = await _create(
+            client, "https://api.deepseek.com/v1", model_id="gpt-4o", idem="idem-dis-2"
+        )
         assert resp.status_code == 200 and resp.json()["data"]["model_id"] == "gpt-4o"
-        bad = await _create(client, deepseek, model_id="   ", idem="idem-dis-3")
+        bad_scheme = await _create(
+            client, "http://api.openai.com/v1", model_id="gpt-4o", idem="idem-dis-3"
+        )
+        assert (
+            bad_scheme.status_code == 400
+            and bad_scheme.json()["error"]["code"] == "VALIDATION_ERROR"
+        )
+        bad = await _create(client, model_id="   ", idem="idem-dis-4")
         assert bad.status_code == 400 and bad.json()["error"]["code"] == "VALIDATION_ERROR"
     del uid
 
 
 async def test_create_duplicate_active_409(provider_env, pg):
     uid = await seed_active_user(pg, "dup@example.com")
-    cid = await catalog_id_by_host(pg, "api.openai.com")
     async with auth_client() as client:
         await login(client, "dup@example.com", "User-Passw0rd!")
-        first = await _create(client, cid, idem="idem-dup-1")
+        first = await _create(client, idem="idem-dup-1")
         assert first.status_code == 200
-        second = await _create(client, cid, idem="idem-dup-2")
+        second = await _create(client, idem="idem-dup-2")
     assert second.status_code == 409
     assert second.json()["error"]["code"] == "PROVIDER_DUPLICATE"
     del uid
@@ -129,16 +129,15 @@ async def test_create_duplicate_active_409(provider_env, pg):
 async def test_create_revoked_then_readd_succeeds(provider_env, pg):
     """D4：软撤行不参与唯一索引——同条目重添加可行（新行 key_version=1）。"""
     uid = await seed_active_user(pg, "readd@example.com")
-    cid = await catalog_id_by_host(pg, "api.openai.com")
     async with auth_client() as client:
         await login(client, "readd@example.com", "User-Passw0rd!")
-        await _create(client, cid, idem="idem-re-1")
+        await _create(client, idem="idem-re-1")
         # T9 前用 superuser 直接置 revoked 模拟软撤
         async with pg.engine.begin() as conn:
             await conn.execute(
                 text("UPDATE user_providers SET status='revoked' WHERE user_id=:u"), {"u": uid}
             )
-        second = await _create(client, cid, idem="idem-re-2")
+        second = await _create(client, idem="idem-re-2")
     assert second.status_code == 200
     assert second.json()["data"]["key_version"] == 1
 
@@ -146,13 +145,12 @@ async def test_create_revoked_then_readd_succeeds(provider_env, pg):
 async def test_create_default_switches_default(provider_env, pg):
     """D5：置默认先清旧默认；全用户唯一默认成立。"""
     uid = await seed_active_user(pg, "def@example.com")
-    cid = await catalog_id_by_host(pg, "api.openai.com")
     # 旧默认须为异条目（不同 model_id）：D4 重复门先于默认互斥——同 (catalog, model)
     # 的旧默认会命中 409 而非走默认切换路径。
     old = await seed_provider(pg, uid, is_default=True, model_id="gpt-4o")
     async with auth_client() as client:
         await login(client, "def@example.com", "User-Passw0rd!")
-        resp = await _create(client, cid, is_default=True, idem="idem-def-1")
+        resp = await _create(client, is_default=True, idem="idem-def-1")
     assert resp.status_code == 200
     async with pg.engine.connect() as conn:
         defaults = (
@@ -171,11 +169,10 @@ async def test_create_default_switches_default(provider_env, pg):
 async def test_create_replay_returns_original(provider_env, pg):
     """幂等命中 → 原响应重放；不改状态。"""
     await seed_active_user(pg, "replay@example.com")
-    cid = await catalog_id_by_host(pg, "api.openai.com")
     async with auth_client() as client:
         await login(client, "replay@example.com", "User-Passw0rd!")
-        first = await _create(client, cid, idem="idem-rp-1")
-        replay = await _create(client, cid, idem="idem-rp-1")
+        first = await _create(client, idem="idem-rp-1")
+        replay = await _create(client, idem="idem-rp-1")
     assert replay.status_code == first.status_code
     assert replay.json() == first.json()
     async with pg.engine.connect() as conn:
@@ -185,12 +182,15 @@ async def test_create_replay_returns_original(provider_env, pg):
 
 async def test_create_requires_idempotency_key(provider_env, pg):
     await seed_active_user(pg, "nokey@example.com")
-    cid = await catalog_id_by_host(pg, "api.openai.com")
     async with auth_client() as client:
         await login(client, "nokey@example.com", "User-Passw0rd!")
         resp = await client.post(
             _CREATE,
-            json={"catalog_id": cid, "model_id": "gpt-4o-mini", "api_key": "sk-test-abcdef123456"},
+            json={
+                "base_url": "https://api.openai.com/v1",
+                "model_id": "gpt-4o-mini",
+                "api_key": "sk-test-abcdef123456",
+            },
         )
     assert resp.status_code == 400  # require_key_header
 
@@ -377,14 +377,14 @@ async def test_put_model_id_custom_allowed_and_blank_rejected(provider_env, pg):
 
 
 async def test_put_extra_forbid(provider_env, pg):
-    """PUT 也禁 base_url（D14）。"""
+    """去目录化（2026-09-17）：PUT 的 catalog_id 变 extra 字段 → 400。"""
     uid = await seed_active_user(pg, "putx@example.com")
     pid = await seed_provider(pg, uid)
     async with auth_client() as client:
         await login(client, "putx@example.com", "User-Passw0rd!")
         resp = await client.put(
             f"/api/providers/{pid}",
-            json={"base_url": "https://evil.example"},
+            json={"catalog_id": "0197aaaa-7aaa-7aaa-7aaa-aaaaaaaaaaaa"},
             headers={"Idempotency-Key": "idem-px-1"},
         )
     assert resp.status_code == 400

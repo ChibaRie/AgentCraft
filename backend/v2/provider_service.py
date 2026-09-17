@@ -12,6 +12,7 @@ import json
 import time
 import uuid as _uuid
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
@@ -36,17 +37,6 @@ def _provider_not_found() -> HTTPException:
     return HTTPException(status_code=404, detail=_NOT_FOUND_DETAIL)
 
 
-def _assert_catalog_usable(catalog: ProviderCatalog) -> None:
-    """目录可用门（create/test/resolve 共用）：enabled 门恒查。
-
-    model_id 白名单门于 2026-09-17 用户裁决退役——目录 models 字段转为
-    「推荐清单」（前端下拉建议项），用户可自定义任意合法模型名（见
-    _validate_model_id）；host/FQDN 安全面（SSRF 硬约束）不变。"""
-
-    if not catalog.enabled:
-        raise AgentCraftError(ErrorCode.CATALOG_ITEM_DISABLED, "目录条目已停用", http_status=400)
-
-
 def _validate_model_id(model_id: str) -> None:
     """model_id 自由化校验（2026-09-17 用户裁决）：非空白首尾字符串，1..128 字符。
 
@@ -65,12 +55,36 @@ def _validate_model_id(model_id: str) -> None:
         )
 
 
-def _out(row: UserProvider, catalog_display_name: str) -> dict:
-    """ORM 行 → ProviderOut 形态 dict（裁决 D13 字段清单；key_last4 裸 4 字符）。"""
+_NULL_BASE_URL_MESSAGE = "base_url 不支持置空（缺席=不变，字符串=替换）"
+
+
+def _validate_base_url(base_url: str) -> None:
+    """base_url 形态校验（2026-09-17 去目录化裁决）：https、有 host、无 userinfo。
+
+    仅形态校验；公网可达性（DNS 解析拒内网）在真正出网的两端执行——控制面
+    连通性测试与 provider-proxy 转发前（backend/utils/net_guard，双进程共享）。
+    """
+    parsed = urlparse(base_url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or "@" in (parsed.netloc or "")
+        or len(base_url) > 512
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "VALIDATION_ERROR",
+                "message": "base_url 须为 https 上游地址（如 https://api.openai.com/v1），不含凭据",
+            },
+        )
+
+
+def _out(row: UserProvider) -> dict:
+    """ORM 行 → ProviderOut 形态 dict（2026-09-17 去目录化：base_url 替代目录字段）。"""
     return {
         "id": str(row.id),
-        "catalog_id": str(row.catalog_id),
-        "catalog_display_name": catalog_display_name,
+        "base_url": row.base_url,
         "model_id": row.model_id,
         "key_last4": row.key_last4,
         "key_version": row.key_version,
@@ -107,14 +121,17 @@ async def list_catalog(db: AsyncSession) -> list[dict]:
 async def list_user_providers(db: AsyncSession) -> list[dict]:
     """owner 事务内列当前用户 active Provider（RLS 限定；revoked 不可见，D13）。"""
     rows = (
-        await db.execute(
-            select(UserProvider, ProviderCatalog.display_name)
-            .join(ProviderCatalog, UserProvider.catalog_id == ProviderCatalog.id)
-            .where(UserProvider.status == "active")
-            .order_by(UserProvider.created_at.asc())
+        (
+            await db.execute(
+                select(UserProvider)
+                .where(UserProvider.status == "active")
+                .order_by(UserProvider.created_at.asc())
+            )
         )
-    ).all()
-    return [_out(row, display_name) for row, display_name in rows]
+        .scalars()
+        .all()
+    )
+    return [_out(row) for row in rows]
 
 
 async def get_provider_row(db: AsyncSession, provider_id: str) -> UserProvider:
@@ -143,18 +160,16 @@ async def get_provider_row(db: AsyncSession, provider_id: str) -> UserProvider:
 async def get_provider_detail(db: AsyncSession, provider_id: str) -> dict:
     """owner 事务内单行视图（T7/T9 响应复用）。"""
     row = await get_provider_row(db, provider_id)
-    catalog = (
-        await db.execute(select(ProviderCatalog).where(ProviderCatalog.id == row.catalog_id))
-    ).scalar_one()
-    return _out(row, catalog.display_name)
+    return _out(row)
 
 
 @dataclass(frozen=True)
 class ResolvedProvider:
-    """任务创建的 Provider 解析产物（裁决 D17；Phase 6 复用接口冻结）。"""
+    """任务创建的 Provider 解析产物（裁决 D17；2026-09-17 去目录化：catalog_id
+    可为 None——历史目录行仍有值）。"""
 
     provider_id: str
-    catalog_id: str
+    catalog_id: str | None
     model_id: str
     key_version: int
 
@@ -185,20 +200,17 @@ async def resolve_task_provider(
 
     判定链：provider_id 给定 → UUID/active 行门（get_provider_row：非法 400 /
     缺失、revoked 404）；None → 默认位 active 行（无 → PROVIDER_NOT_CONFIGURED
-    400）。两路同链复验目录可用性（enabled → 白名单）。调用方传入的 db 必须已
-    设 GUC（owner_session / Phase 6 创建事务）；本函数不 commit。
+    400）。2026-09-17 去目录化：不再复验目录可用性——provider 行自带 base_url。
+    调用方传入的 db 必须已设 GUC（owner_session / Phase 6 创建事务）；本函数不
+    commit。
     """
     if provider_id is not None:
         row = await get_provider_row(db, provider_id)
     else:
         row = await _resolve_default_row(db, user_id)
-    catalog = (
-        await db.execute(select(ProviderCatalog).where(ProviderCatalog.id == row.catalog_id))
-    ).scalar_one()
-    _assert_catalog_usable(catalog)
     return ResolvedProvider(
         provider_id=str(row.id),
-        catalog_id=str(row.catalog_id),
+        catalog_id=str(row.catalog_id) if row.catalog_id is not None else None,
         model_id=row.model_id,
         key_version=row.key_version,
     )
@@ -206,10 +218,10 @@ async def resolve_task_provider(
 
 ROUTE_CREATE = "/api/providers"
 
-_ACTIVE_ENTRY_UQ = "uq_user_providers_active_entry"
+_ACTIVE_ENTRY_UQ = "uq_user_providers_active_entry_v2"
 _ONE_DEFAULT_UQ = "uq_user_providers_one_default"
 
-_DUPLICATE_MESSAGE = "已存在相同目录与模型的 Provider"
+_DUPLICATE_MESSAGE = "已存在相同上游地址与模型的 Provider"
 _DEFAULT_CONFLICT_MESSAGE = "默认 Provider 设置冲突，请重试"
 
 
@@ -240,11 +252,12 @@ async def create_provider(
     idem_key: str,
     idem_hash: str,
 ) -> "dict | Replay":
-    """创建 BYOK Provider（裁决 D4/D5/D7/D11）。
+    """创建 BYOK Provider（裁决 D4/D5/D7/D11；2026-09-17 去目录化：用户自带
+    OpenAI 兼容 base_url + Key + 自定义模型名）。
 
     门序：幂等 begin（app 裸会话，route=ROUTE_CREATE）→ owner_session 单事务
-    （UUID/目录边界 → enabled 门 → 白名单门 → 重复检查 → 默认互斥 → seal 落库
-    → store）。updates 为 ProviderCreateRequest.model_dump(exclude_unset=True)。
+    （base_url/model_id 形态校验 → 重复检查 → 默认互斥 → seal 落库 → store）。
+    updates 为 ProviderCreateRequest.model_dump(exclude_unset=True)。
     """
     async with runtime.app_factory() as db:
         replay = await begin(
@@ -257,30 +270,15 @@ async def create_provider(
     if replay is not None:
         return Replay(replay["status_code"], replay["response_json"])
 
-    try:
-        cid = _uuid.UUID(updates["catalog_id"])
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "VALIDATION_ERROR", "message": "catalog_id 不是合法 UUID"},
-        ) from exc
+    _validate_base_url(updates["base_url"])
 
     async with owner_session(runtime, user_id) as db:
-        catalog = (
-            await db.execute(select(ProviderCatalog).where(ProviderCatalog.id == cid))
-        ).scalar_one_or_none()
-        if catalog is None:
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "VALIDATION_ERROR", "message": "目录条目不存在"},
-            )
         _validate_model_id(updates["model_id"])
-        _assert_catalog_usable(catalog)
         dup = (
             await db.execute(
                 select(UserProvider.id).where(
                     UserProvider.user_id == _uuid.UUID(user_id),
-                    UserProvider.catalog_id == cid,
+                    UserProvider.base_url == updates["base_url"],
                     UserProvider.model_id == updates["model_id"],
                     UserProvider.status == "active",
                 )
@@ -302,7 +300,8 @@ async def create_provider(
             UserProvider(
                 id=new_id,
                 user_id=_uuid.UUID(user_id),
-                catalog_id=cid,
+                catalog_id=None,
+                base_url=updates["base_url"],
                 model_id=updates["model_id"],
                 key_ciphertext=key_ciphertext,
                 dek_wrapped=dek_wrapped,
@@ -443,6 +442,7 @@ def _reject_explicit_nulls(updates: dict) -> None:
     for field, message in (
         ("api_key", _NULL_API_KEY_MESSAGE),
         ("model_id", _NULL_MODEL_ID_MESSAGE),
+        ("base_url", _NULL_BASE_URL_MESSAGE),
         ("is_default", _NULL_IS_DEFAULT_MESSAGE),
     ):
         if field in updates and updates[field] is None:
@@ -483,6 +483,9 @@ async def update_provider(
         if "model_id" in updates and updates["model_id"] != row.model_id:
             _validate_model_id(updates["model_id"])
             row.model_id = updates["model_id"]
+        if "base_url" in updates and updates["base_url"] != row.base_url:
+            _validate_base_url(updates["base_url"])
+            row.base_url = updates["base_url"]
         if "api_key" in updates and isinstance(updates["api_key"], str):
             key_ciphertext, dek_wrapped = key_sealer().seal(
                 updates["api_key"], provider_id=str(row.id)
@@ -507,12 +510,7 @@ async def update_provider(
             await db.flush()
         except IntegrityError as exc:
             raise _map_integrity_conflict(exc) from exc
-        catalog_name = (
-            await db.execute(
-                select(ProviderCatalog.display_name).where(ProviderCatalog.id == row.catalog_id)
-            )
-        ).scalar_one()
-        detail = _out(row, catalog_name)
+        detail = _out(row)
         await store(
             db,
             subject_hash=subject_user(user_id),
@@ -567,7 +565,6 @@ async def revoke_provider(
 
 _TEST_TIMEOUT = httpx.Timeout(90.0, connect=5.0)  # D10：连接 5s / 总 90s
 _MAX_TEST_RESPONSE_BYTES = 2 * 1024 * 1024  # D10：2MB 流式硬上限
-_TEST_URL_TEMPLATE = "https://{host}{path}"  # D10：不叠 path_prefix
 
 
 def _count_models(body: bytes) -> int:
@@ -593,33 +590,37 @@ async def test_provider_connectivity(
     provider_id: str,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict:
-    """连通性测试（Sup §3；裁决 D10/D11）。
+    """连通性测试（Sup §3；裁决 D10/D11；2026-09-17 去目录化）。
 
-    open() 是 Phase 3 内明文 Key 的唯一解密消费点（control grant 属 Phase 6）：
-    明文仅存活于本协程内存，禁缓存/禁日志/禁入错误消息。URL 仅由 catalog 行拼装；
-    httpx follow_redirects=False + trust_env=False；流式 2MB 上限；响应恰
+    open() 是明文 Key 的唯一解密消费点（control grant 属 Phase 6/T5b）：
+    明文仅存活于本协程内存，禁缓存/禁日志/禁入错误消息。URL = 用户自带
+    base_url + `/models`（OpenAI 兼容清单端点）；httpx follow_redirects=False +
+    trust_env=False；流式 2MB 上限；请求前 SSRF 公网校验（net_guard）；响应恰
     {ok, latency_ms, models_visible}，不回传上游任何内容（Eng §6 红线）。
     """
+    from backend.utils.net_guard import EgressBlockedError, assert_public_https
+
     async with owner_session(runtime, user_id) as db:
         row = await get_provider_row(db, provider_id)  # 缺失/revoked → 404
-        catalog = (
-            await db.execute(select(ProviderCatalog).where(ProviderCatalog.id == row.catalog_id))
-        ).scalar_one()
-        _assert_catalog_usable(catalog)  # D10：仅 enabled 门，不做白名单复验
         key_ciphertext, dek_wrapped, aad_pid = row.key_ciphertext, row.dek_wrapped, str(row.id)
-        method = catalog.healthcheck_method
-        url = _TEST_URL_TEMPLATE.format(host=catalog.allowed_host, path=catalog.healthcheck_path)
+        base_url = row.base_url
+
+    try:
+        assert_public_https(base_url)
+    except EgressBlockedError:
+        return {"ok": False, "latency_ms": 0, "models_visible": 0}
 
     plaintext_key = key_sealer().open(key_ciphertext, dek_wrapped, provider_id=aad_pid)
     started = time.perf_counter()
     ok = False
     models_visible = 0
+    url = base_url.rstrip("/") + "/models"
     try:
         async with httpx.AsyncClient(
             transport=transport, follow_redirects=False, trust_env=False, timeout=_TEST_TIMEOUT
         ) as client:
             async with client.stream(
-                method,
+                "GET",
                 url,
                 headers={"authorization": f"Bearer {plaintext_key}", "accept": "application/json"},
             ) as resp:

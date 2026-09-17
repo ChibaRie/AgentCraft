@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuth } from "../auth/AuthContext.jsx";
@@ -26,27 +26,10 @@ function flush() {
   return act(async () => {});
 }
 
-// 后端 GET /providers/catalog 行形状（snake 原样；仅 enabled）
-const CATALOG = [
-  {
-    id: "c".repeat(32),
-    display_name: "DeepSeek",
-    allowed_host: "api.deepseek.com",
-    models: ["deepseek-chat", "deepseek-reasoner"],
-  },
-  {
-    id: "d".repeat(32),
-    display_name: "Moonshot",
-    allowed_host: "api.moonshot.cn",
-    models: ["kimi-k2"],
-  },
-];
-
-// 后端 GET /providers 行形状（ProviderOut，D13 字段清单；仅 active、created_at asc）
+// 后端 GET /providers 行形状（ProviderOut，D13 字段清单 2026-09-17 去目录化版；仅 active、created_at asc）
 const PROVIDER_A = {
   id: "aaaaaaaa-1111-1111-1111-111111111111",
-  catalog_id: CATALOG[0].id,
-  catalog_display_name: "DeepSeek",
+  base_url: "https://api.deepseek.com/v1",
   model_id: "deepseek-chat",
   key_last4: "ab12",
   key_version: 1,
@@ -56,8 +39,7 @@ const PROVIDER_A = {
 };
 const PROVIDER_B = {
   id: "bbbbbbbb-2222-2222-2222-222222222222",
-  catalog_id: CATALOG[1].id,
-  catalog_display_name: "Moonshot",
+  base_url: "https://api.moonshot.cn/v1",
   model_id: "kimi-k2",
   key_last4: "cd34",
   key_version: 2,
@@ -68,8 +50,7 @@ const PROVIDER_B = {
 /** POST 200 后 refetch 回来的新行（嵌入列表断言刷新真的发生） */
 const NEW_ROW = {
   id: "cccccccc-3333-3333-3333-333333333333",
-  catalog_id: CATALOG[0].id,
-  catalog_display_name: "DeepSeek",
+  base_url: "https://api.deepseek.com/v1",
   model_id: "deepseek-reasoner",
   key_last4: "ff88",
   key_version: 1,
@@ -89,9 +70,8 @@ function renderPage() {
   );
 }
 
-/** 编排挂载（catalog + providers 两个 GET）并等待加载落定 */
+/** 编排挂载（providers 单 GET）并等待加载落定 */
 async function renderWithProviders(rows = [PROVIDER_A, PROVIDER_B]) {
-  requestV2.mockResolvedValueOnce(ok(CATALOG));
   requestV2.mockResolvedValueOnce(ok(rows));
   renderPage();
   await flush();
@@ -101,6 +81,19 @@ async function renderWithProviders(rows = [PROVIDER_A, PROVIDER_B]) {
 async function openAddForm() {
   fireEvent.click(screen.getByRole("button", { name: "添加 Provider" }));
   await flush();
+}
+
+/** 填写添加表单三输入 */
+function fillAddForm({ baseUrl, modelId, apiKey }) {
+  fireEvent.change(screen.getByLabelText("订阅地址（OpenAI 兼容）"), {
+    target: { value: baseUrl },
+  });
+  fireEvent.change(screen.getByLabelText("模型（可自定义）"), {
+    target: { value: modelId },
+  });
+  fireEvent.change(screen.getByLabelText("API Key"), {
+    target: { value: apiKey },
+  });
 }
 
 beforeEach(() => {
@@ -124,15 +117,14 @@ describe("v2User gating 与数据装载", () => {
     expect(screen.queryByRole("button", { name: "添加 Provider" })).toBeNull();
   });
 
-  it("挂载并行 GET catalog + providers，卡片渲染字段钉死", async () => {
+  it("挂载 GET providers，卡片渲染字段钉死（base_url host 为标题）", async () => {
     await renderWithProviders();
 
-    expect(requestV2).toHaveBeenCalledTimes(2);
-    expect(requestV2.mock.calls[0][0]).toBe("/api/providers/catalog");
-    expect(requestV2.mock.calls[1][0]).toBe("/api/providers");
+    expect(requestV2).toHaveBeenCalledTimes(1);
+    expect(requestV2.mock.calls[0][0]).toBe("/api/providers");
 
-    expect(screen.getByText("DeepSeek")).toBeTruthy();
-    expect(screen.getByText("Moonshot")).toBeTruthy();
+    expect(screen.getByText("api.deepseek.com")).toBeTruthy();
+    expect(screen.getByText("api.moonshot.cn")).toBeTruthy();
     expect(screen.getByText("deepseek-chat")).toBeTruthy();
     expect(screen.getByText("••••ab12")).toBeTruthy();
     expect(screen.getByText("v1")).toBeTruthy();
@@ -146,7 +138,6 @@ describe("v2User gating 与数据装载", () => {
   });
 
   it("GET 失败 → 内联错误文案，不渲染行", async () => {
-    requestV2.mockResolvedValueOnce(ok(CATALOG));
     requestV2.mockRejectedValueOnce(v2Error("INTERNAL", "服务暂不可用", 500));
     renderPage();
     await flush();
@@ -157,12 +148,14 @@ describe("v2User gating 与数据装载", () => {
 });
 
 describe("添加 Provider", () => {
-  it("表单无 base_url/protocol 字段；api_key 为 password 型且可切换显示", async () => {
+  it("表单含订阅地址/模型/Key 三输入；api_key 为 password 型且可切换显示", async () => {
     await renderWithProviders();
     await openAddForm();
 
+    expect(screen.getByLabelText("订阅地址（OpenAI 兼容）")).toBeTruthy();
+    expect(screen.getByLabelText("模型（可自定义）")).toBeTruthy();
+    expect(screen.queryByLabelText("目录条目")).toBeNull();
     expect(screen.queryByLabelText("Base URL")).toBeNull();
-    expect(screen.queryByLabelText("协议")).toBeNull();
 
     const keyInput = screen.getByLabelText("API Key");
     expect(keyInput.type).toBe("password");
@@ -170,40 +163,13 @@ describe("添加 Provider", () => {
     expect(screen.getByLabelText("API Key").type).toBe("text");
   });
 
-  it("目录→模型联动：目录推荐项进 datalist，未选目录时模型输入禁用（白名单退役为建议项）", async () => {
-    await renderWithProviders();
-    await openAddForm();
-
-    const catalogSelect = screen.getByLabelText("目录条目");
-    const modelInput = screen.getByLabelText("模型（可自定义）");
-    expect(modelInput.disabled).toBe(true);
-
-    fireEvent.change(catalogSelect, { target: { value: CATALOG[0].id } });
-    expect(modelInput.disabled).toBe(false);
-    const datalist = document.getElementById("provider-model-options");
-    expect(
-      Array.from(datalist.querySelectorAll("option")).map((option) => option.value)
-    ).toEqual(["deepseek-chat", "deepseek-reasoner"]);
-
-    fireEvent.change(catalogSelect, { target: { value: CATALOG[1].id } });
-    expect(
-      Array.from(document.getElementById("provider-model-options").querySelectorAll("option")).map(
-        (option) => option.value
-      )
-    ).toEqual(["kimi-k2"]);
-  });
-
   it("提交幂等键 → 200 后整体 refetch（列表顺序来源单一），表单关闭", async () => {
     await renderWithProviders();
     await openAddForm();
-    fireEvent.change(screen.getByLabelText("目录条目"), {
-      target: { value: CATALOG[0].id },
-    });
-    fireEvent.change(screen.getByLabelText("模型（可自定义）"), {
-      target: { value: "deepseek-chat" },
-    });
-    fireEvent.change(screen.getByLabelText("API Key"), {
-      target: { value: "sk-test-1234" },
+    fillAddForm({
+      baseUrl: "https://api.deepseek.com/v1",
+      modelId: "deepseek-chat",
+      apiKey: "sk-test-1234",
     });
     fireEvent.click(screen.getByLabelText("设为我的默认（建任务时默认选中）"));
 
@@ -212,110 +178,82 @@ describe("添加 Provider", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await flush();
 
-    expect(requestV2).toHaveBeenCalledTimes(4);
-    const [path, options] = requestV2.mock.calls[2];
+    expect(requestV2).toHaveBeenCalledTimes(3);
+    const [path, options] = requestV2.mock.calls[1];
     expect(path).toBe("/api/providers");
     expect(options.method).toBe("POST");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(options.body).toEqual({
-      catalog_id: CATALOG[0].id,
+      base_url: "https://api.deepseek.com/v1",
       model_id: "deepseek-chat",
       api_key: "sk-test-1234",
       is_default: true,
     });
-    // 整体 refetch：第 4 次调用是 GET providers（refreshProviders 单参调用，无 method 选项）
-    expect(requestV2.mock.calls[3][0]).toBe("/api/providers");
-    expect(requestV2.mock.calls[3][1]?.method).toBeUndefined();
-    expect(screen.getByText("••••ff88")).toBeTruthy();
+    expect(screen.getByText("deepseek-reasoner")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "保存" })).toBeNull();
   });
 
   it("默认开关未勾选 → POST body 无 is_default 键（缺席语义）", async () => {
     await renderWithProviders();
     await openAddForm();
-    fireEvent.change(screen.getByLabelText("目录条目"), {
-      target: { value: CATALOG[1].id },
-    });
-    fireEvent.change(screen.getByLabelText("模型（可自定义）"), {
-      target: { value: "kimi-k2" },
-    });
-    fireEvent.change(screen.getByLabelText("API Key"), {
-      target: { value: "sk-test-5678" },
+    fillAddForm({
+      baseUrl: "https://api.moonshot.cn/v1",
+      modelId: "kimi-k2",
+      apiKey: "sk-test-5678",
     });
 
     requestV2.mockResolvedValueOnce(ok(NEW_ROW));
-    requestV2.mockResolvedValueOnce(ok([PROVIDER_A, PROVIDER_B, NEW_ROW]));
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await flush();
 
-    const [, options] = requestV2.mock.calls[2];
-    expect(options.body).toEqual({
-      catalog_id: CATALOG[1].id,
-      model_id: "kimi-k2",
-      api_key: "sk-test-5678",
-    });
+    const [, options] = requestV2.mock.calls[1];
     expect("is_default" in options.body).toBe(false);
   });
 
   it("409 PROVIDER_DUPLICATE → 内联后端文案；失败后重试生成新幂等键", async () => {
     await renderWithProviders();
     await openAddForm();
-    fireEvent.change(screen.getByLabelText("目录条目"), {
-      target: { value: CATALOG[0].id },
-    });
-    fireEvent.change(screen.getByLabelText("模型（可自定义）"), {
-      target: { value: "deepseek-chat" },
-    });
-    fireEvent.change(screen.getByLabelText("API Key"), {
-      target: { value: "sk-test-1234" },
+    fillAddForm({
+      baseUrl: "https://api.deepseek.com/v1",
+      modelId: "deepseek-chat",
+      apiKey: "sk-test-1234",
     });
 
     requestV2.mockRejectedValueOnce(
-      v2Error("PROVIDER_DUPLICATE", "已存在相同目录与模型的 Provider", 409)
+      v2Error("PROVIDER_DUPLICATE", "已存在相同上游地址与模型的 Provider", 409)
     );
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await flush();
 
-    expect(screen.getByRole("alert").textContent).toBe(
-      "已存在相同目录与模型的 Provider"
-    );
-    expect(screen.getByRole("button", { name: "保存" })).toBeTruthy();
-    const firstKey = requestV2.mock.calls[2][1].idempotencyKey;
-
-    // 失败后再次提交：新幂等键 + 200 成功收口
+    expect(screen.getByRole("alert").textContent).toBe("已存在相同上游地址与模型的 Provider");
     requestV2.mockResolvedValueOnce(ok(NEW_ROW));
-    requestV2.mockResolvedValueOnce(ok([PROVIDER_A, NEW_ROW]));
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await flush();
 
-    const secondKey = requestV2.mock.calls[3][1].idempotencyKey;
-    expect(secondKey).toBeTruthy();
-    expect(secondKey).not.toBe(firstKey);
-    expect(screen.queryByRole("button", { name: "保存" })).toBeNull();
+    const first = requestV2.mock.calls[1][1].idempotencyKey;
+    const second = requestV2.mock.calls[2][1].idempotencyKey;
+    expect(first).not.toBe(second);
   });
 
-  it("400 目录类错误（CATALOG_ITEM_DISABLED）→ 内联后端文案 + 提示刷新目录", async () => {
+  it("400 VALIDATION_ERROR → 内联后端文案 + 形态提示", async () => {
     await renderWithProviders();
     await openAddForm();
-    fireEvent.change(screen.getByLabelText("目录条目"), {
-      target: { value: CATALOG[0].id },
-    });
-    fireEvent.change(screen.getByLabelText("模型（可自定义）"), {
-      target: { value: "deepseek-chat" },
-    });
-    fireEvent.change(screen.getByLabelText("API Key"), {
-      target: { value: "sk-test-1234" },
+    fillAddForm({
+      baseUrl: "https://api.deepseek.com/v1",
+      modelId: "deepseek-chat",
+      apiKey: "sk-test-1234",
     });
 
     requestV2.mockRejectedValueOnce(
-      v2Error("CATALOG_ITEM_DISABLED", "目录条目已停用", 400)
+      v2Error("VALIDATION_ERROR", "base_url 须为 https 上游地址", 400)
     );
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await flush();
 
-    const alert = screen.getByRole("alert");
-    expect(alert.textContent).toContain("目录条目已停用");
-    expect(alert.textContent).toContain("刷新");
+    expect(screen.getByRole("alert").textContent).toContain("base_url 须为 https 上游地址");
+    expect(screen.getByRole("alert").textContent).toContain(
+      "请检查订阅地址与模型名"
+    );
   });
 });
 
@@ -327,7 +265,7 @@ describe("测试连通性", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "测试连通性" })[0]);
     await flush();
 
-    const [path, options] = requestV2.mock.calls[2];
+    const [path, options] = requestV2.mock.calls[1];
     expect(path).toBe(`/api/providers/${PROVIDER_A.id}/test`);
     expect(options.method).toBe("POST");
     expect(options.idempotencyKey).toBeUndefined();
@@ -418,19 +356,19 @@ describe("轮换（更换 Key）", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
     await flush();
 
-    const [path, options] = requestV2.mock.calls[2];
+    const [path, options] = requestV2.mock.calls[1];
     expect(path).toBe(`/api/providers/${PROVIDER_B.id}`);
     expect(options.method).toBe("PUT");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(options.body).toEqual({ api_key: "sk-rotated-9999", is_default: true });
     // 就地更新，无额外 GET
-    expect(requestV2).toHaveBeenCalledTimes(3);
+    expect(requestV2).toHaveBeenCalledTimes(2);
     expect(screen.getByText("••••zz99")).toBeTruthy();
     expect(screen.getByText("v3")).toBeTruthy();
     // 默认徽标移到 B 卡（本地互斥镜像），A 卡原徽标消失
     const badge = screen.getByText("默认");
-    expect(badge.closest("li").textContent).toContain("Moonshot");
-    expect(badge.closest("li").textContent).not.toContain("DeepSeek");
+    expect(badge.closest("li").textContent).toContain("api.moonshot.cn");
+    expect(badge.closest("li").textContent).not.toContain("api.deepseek.com");
   });
 
   it("api_key 留空且默认开关未勾选 → body 两键整体缺席（缺席=不变）", async () => {
@@ -442,7 +380,7 @@ describe("轮换（更换 Key）", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
     await flush();
 
-    const [, options] = requestV2.mock.calls[2];
+    const [, options] = requestV2.mock.calls[1];
     expect(options.method).toBe("PUT");
     // 契约钉死：两键均缺席（显式 false 会静默清默认位；null 会 400）
     expect("api_key" in options.body).toBe(false);
@@ -477,15 +415,15 @@ describe("设为默认", () => {
     fireEvent.click(screen.getByRole("button", { name: "设为默认" }));
     await flush();
 
-    const [path, options] = requestV2.mock.calls[2];
+    const [path, options] = requestV2.mock.calls[1];
     expect(path).toBe(`/api/providers/${PROVIDER_B.id}`);
     expect(options.method).toBe("PUT");
     expect(typeof options.idempotencyKey).toBe("string");
     expect(options.body).toEqual({ is_default: true });
-    expect(requestV2).toHaveBeenCalledTimes(3);
+    expect(requestV2).toHaveBeenCalledTimes(2);
 
     const badge = screen.getByText("默认");
-    expect(badge.closest("li").textContent).toContain("Moonshot");
+    expect(badge.closest("li").textContent).toContain("api.moonshot.cn");
     expect(screen.getAllByRole("button", { name: "设为默认" }).length).toBe(1);
   });
 });
@@ -505,7 +443,7 @@ describe("删除（软撤）", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认撤销" }));
     await flush();
 
-    const [path, options] = requestV2.mock.calls[2];
+    const [path, options] = requestV2.mock.calls[1];
     expect(path).toBe(`/api/providers/${PROVIDER_B.id}`);
     expect(options.method).toBe("DELETE");
     expect(typeof options.idempotencyKey).toBe("string");
@@ -525,7 +463,7 @@ describe("删除（软撤）", () => {
     await flush();
 
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(requestV2.mock.calls[3][0]).toBe("/api/providers");
+    expect(requestV2.mock.calls[2][0]).toBe("/api/providers");
     expect(screen.queryByText("••••cd34")).toBeNull();
   });
 
@@ -551,6 +489,6 @@ describe("删除（软撤）", () => {
     await flush();
 
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(requestV2).toHaveBeenCalledTimes(2);
+    expect(requestV2).toHaveBeenCalledTimes(1);
   });
 });

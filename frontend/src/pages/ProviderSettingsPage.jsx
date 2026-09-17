@@ -9,7 +9,7 @@ import { useRetryAfter } from "../hooks/useRetryAfter.js";
 const FALLBACK_MESSAGE = "操作失败，请稍后重试";
 const REVOKED_MESSAGE = "Provider Key 不可用或已失效，请轮换 Key";
 const TEST_RATE_LIMIT_TEMPLATE = "测试次数已达上限（每小时 10 次），{n}s 后可重试";
-const CATALOG_HINT = "。目录可能已更新，请刷新页面后重试";
+const VALIDATION_HINT = "。请检查订阅地址与模型名（https 地址、1-128 字符模型名）后重试";
 
 // 400 目录类错误族（契约 F2 §3 #4）：内联后端文案 + 提示刷新目录
 const CATALOG_GATE_CODES = new Set(["VALIDATION_ERROR", "CATALOG_ITEM_DISABLED", "MODEL_NOT_ALLOWED"]);
@@ -44,53 +44,37 @@ function TestResultLine({ testState }) {
 }
 
 /**
- * 添加表单（目录化）：目录下拉 → 模型下拉（唯一数据源 = 所选目录白名单，
- * 原生 select 禁手输）→ api_key（password + 显示切换）→ 设为默认开关。
- * 契约：无 base_url/protocol 字段（出现即 400，前端根本不渲染）。
+ * 添加表单（2026-09-17 去目录化）：用户自带 OpenAI 兼容 base_url + 自定义模型名
+ * （模型名可自定义）→ api_key（password + 显示切换）→ 设为默认开关。
  */
-function AddProviderForm({ catalog, isSubmitting, error, onSubmit, onCancel }) {
-  const [catalogId, setCatalogId] = useState("");
+function AddProviderForm({ isSubmitting, error, onSubmit, onCancel }) {
+  const [baseUrl, setBaseUrl] = useState("");
   const [modelId, setModelId] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [isDefault, setIsDefault] = useState(false);
   const [showKey, setShowKey] = useState(false);
 
-  const selectedCatalog = catalog.find((item) => item.id === catalogId) ?? null;
-  const models = selectedCatalog?.models ?? [];
-
-  function handleCatalogChange(event) {
-    setCatalogId(event.target.value);
-    setModelId(""); // 目录切换重置模型选择（旧白名单对新目录无意义）
-  }
-
   function handleSubmit(event) {
     event.preventDefault();
-    onSubmit({ catalogId, modelId, apiKey, isDefault });
+    onSubmit({ baseUrl, modelId, apiKey, isDefault });
   }
 
   return (
     <form className="provider-form" onSubmit={handleSubmit}>
       <h2 className="provider-form-title">添加 Provider</h2>
       <div className="field">
-        <label className="field-label" htmlFor="provider-catalog">
-          目录条目
+        <label className="field-label" htmlFor="provider-base-url">
+          订阅地址（OpenAI 兼容）
         </label>
-        <select
-          id="provider-catalog"
+        <input
+          id="provider-base-url"
           className="field-input"
-          value={catalogId}
+          type="url"
+          value={baseUrl}
           required
-          onChange={handleCatalogChange}
-        >
-          <option value="" disabled>
-            请选择目录条目
-          </option>
-          {catalog.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.display_name}
-            </option>
-          ))}
-        </select>
+          placeholder="https://api.openai.com/v1"
+          onChange={(event) => setBaseUrl(event.target.value)}
+        />
       </div>
       <div className="field">
         <label className="field-label" htmlFor="provider-model">
@@ -99,20 +83,13 @@ function AddProviderForm({ catalog, isSubmitting, error, onSubmit, onCancel }) {
         <input
           id="provider-model"
           className="field-input"
-          list="provider-model-options"
           value={modelId}
           required
-          disabled={!selectedCatalog}
           maxLength={128}
-          placeholder="输入模型名，或从目录推荐项中选择"
+          placeholder="例如 gpt-4o、deepseek-chat"
           onChange={(event) => setModelId(event.target.value)}
         />
-        <datalist id="provider-model-options">
-          {models.map((model) => (
-            <option key={model} value={model} />
-          ))}
-        </datalist>
-        <p className="field-note">支持任意自定义模型名（1-128 字符）；下拉建议项来自平台目录。</p>
+        <p className="field-note">支持任意自定义模型名（1-128 字符）。</p>
       </div>
       <div className="field">
         <label className="field-label" htmlFor="provider-api-key">
@@ -146,7 +123,7 @@ function AddProviderForm({ catalog, isSubmitting, error, onSubmit, onCancel }) {
       {error && (
         <div className="form-alert" role="alert">
           {error.message}
-          {error.showCatalogHint ? CATALOG_HINT : null}
+          {error.showValidationHint ? VALIDATION_HINT : null}
         </div>
       )}
       <div className="task-create-actions">
@@ -253,7 +230,7 @@ function ProviderCard({
       <div className="provider-card-row">
         <div className="provider-card-main">
           <div className="provider-card-title">
-            <strong>{provider.catalog_display_name}</strong>
+            <strong>{new URL(provider.base_url).host}</strong>
             <span className="provider-model-badge">{provider.model_id}</span>
             {provider.is_default && <span className="badge-default">默认</span>}
           </div>
@@ -327,13 +304,13 @@ function ProviderCard({
 }
 
 /**
- * Provider 设置页（BYOK 目录化，契约 = F2 §3；FE-T8 整体重写 V1 面）。
+ * Provider 设置页（BYOK；2026-09-17 去目录化——用户自带 base_url + Key + 模型名）。
  *
  * 后端契约（只读参考，backend/api/v2/providers.py）：
- * - GET /catalog → {data:[{id,display_name,allowed_host,models}]}（仅 enabled）；
  * - GET /providers → {data:[ProviderOut]}（仅 active，created_at asc，无 total 信封）；
- * - POST（幂等键；400 CATALOG_ITEM_DISABLED/MODEL_NOT_ALLOWED、409 PROVIDER_DUPLICATE）；
- * - PUT /{id}（幂等键；api_key/is_default 缺席=不变——显式 null 400、布尔=覆盖）；
+ * - POST（幂等键；400 VALIDATION_ERROR、409 PROVIDER_DUPLICATE）；
+ * - PUT /{id}（幂等键；api_key/is_default/base_url 缺席=不变——显式 null 400、
+ *   标量=覆盖）；
  * - DELETE /{id}（幂等键，软撤；列表只回 active 行）；POST /{id}/test（无幂等键
  *   ——D10 → {ok, latency_ms, models_visible}；400 KEY_VERSION_REVOKED；429 10/h）。
  *
@@ -344,13 +321,12 @@ function ProviderCard({
  */
 export default function ProviderSettingsPage() {
   const { v2User } = useAuth();
-  const [catalog, setCatalog] = useState([]);
   const [providers, setProviders] = useState(null); // null = 装载中
   const [loadError, setLoadError] = useState(null);
 
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const [addError, setAddError] = useState(null); // {message, showCatalogHint}
+  const [addError, setAddError] = useState(null); // {message, showValidationHint}
 
   const [testStates, setTestStates] = useState({}); // id -> {kind, latencyMs?, modelsVisible?, message?}
   const [rateLimitedTestId, setRateLimitedTestId] = useState(null);
@@ -367,14 +343,10 @@ export default function ProviderSettingsPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState(null);
 
-  // 数据装载：catalog + providers 并行（Promise.all，规格 #1）
+  // 数据装载：providers 单 GET（2026-09-17 去目录化）
   const load = useCallback(async () => {
     try {
-      const [catalogResult, providersResult] = await Promise.all([
-        requestV2(`${V2_PROVIDERS}/catalog`),
-        requestV2(V2_PROVIDERS),
-      ]);
-      setCatalog(catalogResult.data ?? []);
+      const providersResult = await requestV2(V2_PROVIDERS);
       setProviders(providersResult.data ?? []);
       setLoadError(null);
     } catch (cause) {
@@ -420,7 +392,7 @@ export default function ProviderSettingsPage() {
     setAddError(null);
     try {
       const body = {
-        catalog_id: payload.catalogId,
+        base_url: payload.baseUrl,
         model_id: payload.modelId,
         api_key: payload.apiKey,
       };
@@ -437,10 +409,10 @@ export default function ProviderSettingsPage() {
     } catch (cause) {
       setAddError({
         message: describeError(cause),
-        showCatalogHint:
+        showValidationHint:
           cause instanceof V2ApiError &&
           cause.status === 400 &&
-          CATALOG_GATE_CODES.has(cause.code),
+          cause instanceof V2ApiError && cause.status === 400,
       });
     } finally {
       setIsCreating(false);
@@ -617,7 +589,6 @@ export default function ProviderSettingsPage() {
 
         {isAddOpen && (
           <AddProviderForm
-            catalog={catalog}
             isSubmitting={isCreating}
             error={addError}
             onSubmit={handleCreate}
@@ -687,7 +658,7 @@ export default function ProviderSettingsPage() {
               <p className="v2-danger-dialog-sub">
                 即将撤销{" "}
                 <strong>
-                  {deleteTarget.catalog_display_name} · {deleteTarget.model_id}
+                  {new URL(deleteTarget.base_url).host} · {deleteTarget.model_id}
                 </strong>
                 。
               </p>

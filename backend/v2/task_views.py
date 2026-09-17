@@ -23,6 +23,7 @@ get_task_view/list_tasks/get_quota_view 经 ``task_service`` 再导出（冻结�
 """
 
 import uuid as _uuid
+from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, select, text
@@ -33,12 +34,12 @@ from backend.v2.author_service import _reject_invalid_uuid as _parse_uuid
 from backend.v2.models import (
     Expert,
     ExpertRevision,
-    ProviderCatalog,
     Task,
     TaskEvent,
     TaskFile,
     TaskMessage,
     TaskRound,
+    UserProvider,
     UserQuota,
     UserQuotaUsage,
 )
@@ -139,17 +140,25 @@ async def _load_task_views(db: AsyncSession, task_ids: list[_uuid.UUID]) -> list
         rounds_by_task.setdefault(r.task_id, []).append(r)
 
     experts_by_rev = await _expert_brief_by_revision(db, [t.expert_revision_id for t in tasks])
-    catalog_ids = {t.provider_catalog_id for t in tasks}
-    display_by_catalog: dict[_uuid.UUID, str] = {}
-    if catalog_ids:
-        catalog_rows = (
+    provider_ids = {t.provider_id for t in tasks}
+    base_by_provider: dict[_uuid.UUID, str] = {}
+    if provider_ids:
+        provider_rows = (
             await db.execute(
-                select(ProviderCatalog.id, ProviderCatalog.display_name).where(
-                    ProviderCatalog.id.in_(catalog_ids)
+                select(UserProvider.id, UserProvider.base_url).where(
+                    UserProvider.id.in_(provider_ids)
                 )
             )
         ).all()
-        display_by_catalog = {row.id: row.display_name for row in catalog_rows}
+        base_by_provider = {row.id: row.base_url for row in provider_rows}
+
+    def _host_of(url: str | None) -> str | None:
+        if not url:
+            return None
+        try:
+            return urlparse(url).hostname
+        except ValueError:
+            return None
 
     views_by_id: dict[_uuid.UUID, dict] = {}
     for t in tasks:
@@ -163,7 +172,7 @@ async def _load_task_views(db: AsyncSession, task_ids: list[_uuid.UUID]) -> list
             if t.initial_message_id is not None
             else None
         )
-        display_name = display_by_catalog.get(t.provider_catalog_id)
+        host = _host_of(base_by_provider.get(t.provider_id))
         views_by_id[t.id] = {
             "id": str(t.id),
             "status": t.status,
@@ -178,13 +187,13 @@ async def _load_task_views(db: AsyncSession, task_ids: list[_uuid.UUID]) -> list
                 "inputs": counts.get(t.id, {}).get("input", 0),
                 "outputs": counts.get(t.id, {}).get("output", 0),
             },
-            # Sup §10.3 展示字段（Phase 8 T2）：expert 为 published_read 可见时
-            # 的 {name, avatar_url}，不可见（takedown/指针前移）为 null；
-            # provider.catalog 行缺失 → 整 provider=null（model 直取快照）。
+            # Sup §10.3 展示字段（Phase 8 T2；2026-09-17 去目录化）：expert 为
+            # published_read 可见时的 {name, avatar_url}；provider.display_name =
+            # 上游 host（base_url 解析），行缺失/解析失败 → 整 provider=null。
             "expert": experts_by_rev.get(t.expert_revision_id),
             "provider": (
-                {"display_name": display_name, "model": t.provider_model_id}
-                if display_name is not None
+                {"display_name": host, "model": t.provider_model_id}
+                if host is not None
                 else None
             ),
         }

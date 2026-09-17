@@ -418,7 +418,8 @@ async def _ensure_demo_provider(session, *, owner_id: _uuid.UUID, catalog: dict)
         UserProvider(
             id=provider_id,
             user_id=owner_id,
-            catalog_id=_uuid.UUID(str(catalog["catalog_id"])),
+            catalog_id=None,
+            base_url="https://faux.invalid/v1",
             model_id=catalog["model_id"],
             key_ciphertext=key_ciphertext,
             dek_wrapped=dek_wrapped,
@@ -470,7 +471,6 @@ async def _ensure_demo_task(engine, *, owner_id: _uuid.UUID, catalog: dict, cont
                 provider_id=provider_id,
                 initial_message=_INITIAL_MESSAGE,
                 provider_snapshot={
-                    "provider_catalog_id": str(catalog["catalog_id"]),
                     "provider_model_id": catalog["model_id"],
                     "provider_key_version": 1,
                 },

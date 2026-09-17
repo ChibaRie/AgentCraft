@@ -97,9 +97,10 @@ class UserProvider(TimestampMixin, Base):
     user_id: Mapped[_uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    catalog_id: Mapped[_uuid.UUID] = mapped_column(
-        ForeignKey("provider_catalog.id", ondelete="RESTRICT"), nullable=False
+    catalog_id: Mapped[_uuid.UUID | None] = mapped_column(
+        ForeignKey("provider_catalog.id", ondelete="RESTRICT"), nullable=True
     )
+    base_url: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     model_id: Mapped[str] = mapped_column(String(200), nullable=False)
     key_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
     dek_wrapped: Mapped[str] = mapped_column(Text, nullable=False)

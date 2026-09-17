@@ -158,24 +158,27 @@ class ProviderOut(V2BaseModel):
 
 
 class ProviderCreateRequest(V2BaseModel):
-    """POST /providers 请求体（Sup §3）。裁决 D14：extra=forbid——base_url/endpoint
-    出现即 400（目录化安全边界：用户不可注入端点）。裁决 D7：api_key 8..4096
-    （末 4 位入 key_last4，CHECK length=4 的下限保护）。"""
+    """POST /providers 请求体（Sup §3；2026-09-17 用户裁决：去目录化——用户自带
+    OpenAI 兼容 base_url + Key + 自定义模型名；api_key 8..4096，末 4 位入
+    key_last4，CHECK length=4 的下限保护）。base_url 仅 https 且无 userinfo；
+    SSRF 公网校验在服务层+代理转发前双重执行。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    catalog_id: str = Field(min_length=32, max_length=64)
+    base_url: str = Field(min_length=12, max_length=512)
     model_id: str = Field(min_length=1, max_length=200)
     api_key: str = Field(min_length=8, max_length=4096)
     is_default: bool = False
 
 
 class ProviderUpdateRequest(V2BaseModel):
-    """PUT /providers/{id} 请求体。裁决 D2/D14：api_key 两态（缺席=不变、字符串=替换、
-    显式 null 服务层 400）；extra=forbid。三态区分依赖端点 model_dump(exclude_unset=True)。"""
+    """PUT /providers/{id} 请求体。api_key 三态（缺席=不变、字符串=替换、显式 null
+    服务层 400）；base_url 同三态；extra=forbid。三态区分依赖端点
+    model_dump(exclude_unset=True)。"""
 
     model_config = ConfigDict(extra="forbid")
 
     api_key: str | None = Field(default=None, min_length=8, max_length=4096)
     is_default: bool | None = None
     model_id: str | None = Field(default=None, min_length=1, max_length=200)
+    base_url: str | None = Field(default=None, min_length=12, max_length=512)

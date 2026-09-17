@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import Settings, get_settings
 from backend.services.task_token import TaskTokenInvalid, decode_task_token
 from backend.utils.crypto import EncryptionError, decrypt_text, make_keyring, provider_key_aad
+from backend.utils.net_guard import EgressBlockedError, assert_public_https
 from backend.v2.task_token import TaskTokenInvalid as V2TaskTokenInvalid
 from backend.v2.task_token import decode_v2_task_token
 
@@ -131,9 +132,17 @@ async def _forward_upstream(
     upstream_base: str, api_key: str | None, body: dict, label: str
 ) -> tuple[httpx.Response | None, Response | None]:
     """按既定路由转发 /chat/completions；返回 (upstream_response, None) 或
-    (None, error_response)。V1 快照路由与 V2 grant 路由共用的转发机构。"""
+    (None, error_response)。V1 快照路由与 V2 grant 路由共用的转发机构。
+    转发前 SSRF 公网校验（2026-09-17 用户自带 base_url 裁决的伴随面）：
+    https + DNS 逐 IP 拒内网/元数据——被拒一律 502，不泄细节。"""
     if not upstream_base:
         return None, _error(502, "provider base_url missing")
+
+    try:
+        assert_public_https(upstream_base)
+    except EgressBlockedError as exc:
+        logger.warning("Task %s egress blocked: %s", label, exc)
+        return None, _error(502, "upstream connection failed")
 
     headers = {"content-type": "application/json"}
     if api_key:
@@ -255,7 +264,8 @@ async def _chat_completions_v2(
     token: str, claims: dict, body: dict, settings: Settings
 ) -> Response:
     """V2 分支（Sup §10.10）：grant 兑换（进程内存缓存 per round_id）→
-    model scope 依 grant 下发强制（钉四）→ base_target 直连上游。"""
+    model scope 依 grant 下发强制（钉四）→ base_target 直连上游，转发前 SSRF
+    公网校验（net_guard：https + DNS 逐 IP 拒内网/元数据；fail → 502 不泄细节）。"""
     cache = _grant_cache()
     grant = cache.get(claims["round_id"])
     if grant is None:
