@@ -131,7 +131,7 @@ function renderAt(path) {
 /** 编辑模式挂载（并行 GET 详情 + 已发布 skills）并等待落定 */
 async function renderEditLoaded(options = {}) {
   requestV2.mockResolvedValueOnce(ok(detail(options)));
-  requestV2.mockResolvedValueOnce(ok(PUBLIC_SKILLS));
+  requestV2.mockResolvedValueOnce(ok({ items: PUBLIC_SKILLS, total: PUBLIC_SKILLS.length, page: 1, page_size: 20 }));
   renderAt(`/my-experts/${EXPERT_ID}/edit`);
   await flush();
 }

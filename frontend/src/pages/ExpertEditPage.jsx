@@ -231,7 +231,7 @@ export default function ExpertEditPage({ expertId }) {
       try {
         const result = await requestV2(`${V2_AUTHORING_SKILLS}/public`);
         if (!cancelled) {
-          setCandidateSkills(result.data ?? []);
+          setCandidateSkills(result.data?.items ?? []);
         }
       } catch (error) {
         if (!cancelled) {
