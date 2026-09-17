@@ -621,10 +621,12 @@ class RoundExecutor:
                 catalog = (
                     await db.execute(
                         select(ProviderCatalog).where(
-                            ProviderCatalog.id == _uuid.UUID(resolved.catalog_id)
+                            ProviderCatalog.id == resolved.catalog_id
                         )
-                    )
-                ).scalar_one()
+                    ).scalar_one()
+                    if resolved.catalog_id is not None
+                    else None
+                )
                 history, current = await self._load_history(db, ctx)
             # 凭据签发并登记（D17；T7 校验消费，settle/收尾弹出——Eng §3.2:78）
             token = create_v2_task_token(
@@ -711,9 +713,16 @@ class RoundExecutor:
         return history, current
 
     @staticmethod
-    def _model_input(catalog: ProviderCatalog, model_id: str) -> tuple[str, ...]:
-        """model_input 按 provider_catalog.model_capabilities（缺失条目视为纯文本）。"""
-        entry = (catalog.model_capabilities or {}).get(model_id) or {}
+    def _model_input(
+        catalog: ProviderCatalog | None, model_id: str
+    ) -> tuple[str, ...]:
+        """model_input 按 provider_catalog.model_capabilities（缺失条目视为纯文本）。
+
+        2026-09-17 去目录化：catalog_id 可为 None（用户自带 base_url 不挂目录）——
+        无目录能力声明时按纯文本处理（保守缺省）。"""
+        entry = (
+            (catalog.model_capabilities or {}).get(model_id) if catalog is not None else None
+        ) or {}
         return tuple(entry.get("input") or ["text"])
 
     def _build_container_spec(

@@ -148,7 +148,7 @@ async def test_create_task_full_transaction(pg, app_engine, domain):
 
     assert task["status"] == "uploading" and task["abort_reason"] is None
     assert task["initial_message_id"] == msg["id"]  # 循环 FK 已回填
-    assert str(task["provider_catalog_id"]) == cid
+    assert task["provider_catalog_id"] is None  # 去目录化：provider 行不挂目录
     assert task["provider_model_id"] == "gpt-4o-mini"
     assert task["provider_key_version"] == 1
     assert task["event_sequence"] == 1

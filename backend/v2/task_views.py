@@ -108,7 +108,7 @@ async def _load_task_views(db: AsyncSession, task_ids: list[_uuid.UUID]) -> list
                 Task.event_sequence,
                 Task.initial_message_id,
                 Task.expert_revision_id,
-                Task.provider_catalog_id,
+                Task.provider_id,
                 Task.provider_model_id,
             ).where(Task.id.in_(task_ids))
         )
