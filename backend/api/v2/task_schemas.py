@@ -8,6 +8,15 @@ ProviderCreateRequest 裁决（D14：未声明字段出现即 400，防契约外
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class McpServerRef(BaseModel):
+    """mcp_refs 条目（Phase 10 M4）：仅 server_id 一键（UUID 形态合法性在服务层
+    收口为 400；此处仅字符长度资源卫生）。extra=forbid 同宿主模型纪律。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    server_id: str = Field(min_length=32, max_length=64)
+
+
 class TaskCreateRequest(BaseModel):
     """POST /api/tasks 请求体（Sup §4：{expert_revision_id, provider_id,
     initial_message}）。
@@ -16,6 +25,9 @@ class TaskCreateRequest(BaseModel):
     缺省回退，PROVIDER_NOT_CONFIGURED 400）；字符串 → 显式指定（非法/非 active
     400/404 沿现行语义）。provider 快照（D14 四键）由路由层从 ResolvedProvider
     单点构造，客户端不可注入——故本模型无 provider_snapshot 字段。
+
+    mcp_refs（Phase 10 M4）：可选用户 MCP 挂载引用（创建事务内校验存在/enabled/
+    owner RLS 一致后冻结进 tasks.mcp_servers 快照；≤3 上限在服务层收口为 400）。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -25,6 +37,7 @@ class TaskCreateRequest(BaseModel):
     # 精确校验；此处字符级粗闸仅挡量级异常载荷，先于业务零 DB 副作用）
     initial_message: str = Field(min_length=1, max_length=65536)
     provider_id: str | None = Field(default=None, min_length=32, max_length=64)
+    mcp_refs: list[McpServerRef] | None = None
 
 
 class TaskCommitRequest(BaseModel):

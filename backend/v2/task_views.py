@@ -10,7 +10,8 @@
   id/state/attempt；``_strip_lease_fields`` 构造器为回调响应面（T7
   query_task_state）提供同红线剥除式防线；Phase 8 T2（Sup §10.3）键集增
   expert/provider 两枚展示字段——**不加 skills 键**（skills 经 discover 详情
-  二次拉取，不进任务视图）；
+  二次拉取，不进任务视图）；Phase 10 M4 增 mcp_servers 键（用户 MCP 挂载
+  快照回显：创建事务冻结的三键描述符，NULL 归一空列表）；
 - deleted 任务统一 404（Sup §7「越权、不存在、已删除资源一律 404」）；
 - 服务函数不 begin 不 commit；调用方会话必须已 set_current_owner（RLS 生效
   前提），本模块不重复设置；
@@ -110,6 +111,7 @@ async def _load_task_views(db: AsyncSession, task_ids: list[_uuid.UUID]) -> list
                 Task.expert_revision_id,
                 Task.provider_id,
                 Task.provider_model_id,
+                Task.mcp_servers,
             ).where(Task.id.in_(task_ids))
         )
     ).all()
@@ -194,6 +196,8 @@ async def _load_task_views(db: AsyncSession, task_ids: list[_uuid.UUID]) -> list
             "provider": (
                 {"display_name": host, "model": t.provider_model_id} if host is not None else None
             ),
+            # Phase 10 M4：用户 MCP 挂载快照回显（冻结三键描述符；NULL 归一空列表）
+            "mcp_servers": list(t.mcp_servers or []),
         }
     return [views_by_id[tid] for tid in task_ids if tid in views_by_id]
 

@@ -157,7 +157,8 @@ async def create_task(
     _limit: None = Depends(_enforce_task_create_limit),
 ) -> JSONResponse:
     """创建任务（D14 create 形状，201）：provider 经 resolve_task_provider
-    （缺省回退/错误码沿现行语义）→ 快照单点构造 → create_task。"""
+    （缺省回退/错误码沿现行语义）→ 快照单点构造 → create_task（mcp_refs 校验
+    与冻结属创建事务，Phase 10 M4）。"""
     uid = str(user_ctx.user.id)
     body = payload.model_dump(exclude_unset=True)
     req_hash = idempotency.request_hash(body)
@@ -175,6 +176,7 @@ async def create_task(
             provider_id=rp.provider_id,
             initial_message=payload.initial_message,
             provider_snapshot=_snapshot_from_resolved(rp),
+            mcp_refs=[ref.model_dump() for ref in payload.mcp_refs] if payload.mcp_refs else None,
         )
         await _idem_store(
             db,

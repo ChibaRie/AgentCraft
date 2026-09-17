@@ -32,6 +32,7 @@ from backend.config import get_settings
 from backend.errors import AgentCraftError, ErrorCode
 from backend.v2.content_hash import canonical_json
 from backend.v2.ids import uuid7
+from backend.v2.mcp_service import snapshot_refs_for_task
 from backend.v2.models import (
     ExpertRevision,
     RevisionTool,
@@ -261,16 +262,20 @@ async def create_task(
     provider_id: str,
     initial_message: str,
     provider_snapshot: dict,
+    mcp_refs: list[dict] | None = None,
 ) -> dict:
     """创建任务（DB §4.2 创建事务，D7c/D14 形状）。
 
     门序：owner 级 ``pg_advisory_xact_lock``（配额临界区串行化）→ initial_message
     校验（非空白 + 提示词预算，先于一切写）→ revision published 门（DB §4.1:4：
-    非 published 不可被新任务选择）→ 配额推进（QUOTA_DAILY/QUOTA_ACTIVE，429）→
-    第一时点工具校验（TOOL_REVOKED 409，D4）→ INSERT task(uploading, 快照列,
-    event_sequence=0) → INSERT task_message(author=user) + message_saved 事件
-    （message/event 同一 event sequence，DB §4.2:4）→ 回填 initial_message_id
-    （use_alter 循环 FK）→ active reservation(kind='active', bytes=0, held)。
+    非 published 不可被新任务选择）→ mcp_refs 校验与冻结（Phase 10 M4：≤3 去重 →
+    存在/enabled/owner RLS 一致，404/400 见 mcp_service.snapshot_refs_for_task；
+    冻结三键描述符进 tasks.mcp_servers，任务期不可变）→ 配额推进
+    （QUOTA_DAILY/QUOTA_ACTIVE，429）→ 第一时点工具校验（TOOL_REVOKED 409，D4）→
+    INSERT task(uploading, 快照列, event_sequence=0) → INSERT task_message(author=
+    user) + message_saved 事件（message/event 同一 event sequence，DB §4.2:4）→
+    回填 initial_message_id（use_alter 循环 FK）→ active reservation
+    (kind='active', bytes=0, held)。
 
     返回 ``{"task": D14 视图, "message": {"id", "event_sequence"}}``（路由层包
     201 ``{data: {...}}`` 信封）。
@@ -297,6 +302,7 @@ async def create_task(
         raise AgentCraftError(
             ErrorCode.REVISION_NOT_PUBLISHED, "专家修订版本不存在或未发布", http_status=400
         )
+    mcp_servers = await snapshot_refs_for_task(db, mcp_refs)
     await _charge_creation_quota(db, owner_uuid)
     await _assert_revision_tools_enabled(db, revision_uuid)
 
@@ -308,6 +314,7 @@ async def create_task(
         provider_catalog_id=catalog_id,
         provider_model_id=model_id,
         provider_key_version=key_version,
+        mcp_servers=mcp_servers,
         status="uploading",
         event_sequence=0,
     )

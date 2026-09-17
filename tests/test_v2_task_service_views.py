@@ -49,6 +49,8 @@ _D14_VIEW_KEYS = {
     "counts",
     "expert",
     "provider",
+    # Phase 10 M4：用户 MCP 挂载快照回显键
+    "mcp_servers",
 }
 _FAKE_CATALOG_ID = "00000000-0000-0000-0000-00000000000c"
 

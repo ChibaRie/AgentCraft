@@ -4,7 +4,8 @@
 - 密文断言走 DB 直查（superuser 绕 RLS），解密用 KeySealer 真实信封（provider_env
   注入的 KEK 材料 seal/open 互通）；出参零 command/env/url 泄漏；
 - 发现 HTTP 行为经服务函数 transport 注入直测（httpx.MockTransport，真实网络零
-  依赖；assert_public_https 打桩）；端点层仅测门序（404 / 501 / 限流 429）；
+  依赖；assert_public_https 打桩）；端点层仅测门序（404 / 502 / 限流 429）；
+  stdio 发现链（M3）的成功/超时/超限路径见 test_v2_mcp_tasks.py；
 - 迁移 0013 往返经 alembic 子进程对一次性库执行（test_v2_migrations 同款）。
 """
 
@@ -683,15 +684,16 @@ async def test_discover_sse_response_parsed(provider_env, pg, monkeypatch):
     assert [t["tool_name"] for t in result["tools"]] == ["read_file", "write_file"]
 
 
-async def test_discover_stdio_501(provider_env, pg):
-    """stdio 发现链占位 501（mcp-sandbox 沙箱镜像属 Phase 10 M5）。"""
+async def test_discover_stdio_unspawnable_502(provider_env, pg):
+    """stdio 发现链（Phase 10 M3 已交付）：spawn 失败（命令不可执行）统一 502；
+    成功路径与超时/超限纪律见 test_v2_mcp_tasks.py（fake 进程驱动）。"""
     await seed_active_user(pg, "mcp-stdio@example.com")
     async with auth_client() as client:
         await login(client, "mcp-stdio@example.com", "User-Passw0rd!")
         data = await _create_ok(client)
         resp = await client.post(f"{_CREATE}/{data['id']}/discover")
-    assert resp.status_code == 501
-    assert resp.json()["error"]["code"] == "NOT_IMPLEMENTED"
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "MCP_DISCOVER_FAILED"
 
 
 async def test_discover_missing_and_cross_user_404(provider_env, pg):

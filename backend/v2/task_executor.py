@@ -18,6 +18,10 @@ dispatch（T5）领取轮并写 lease 三元组后经 ``notify`` 唤醒本执行
 - **事实面/实时面分离**：事实帧（assistant/tool 消息）落 task_messages +
   message_saved 事件（围栏内）；全帧（瞬态+事实+done）publish 到
   TaskStreamRegistry——无订阅者零开销照跑，落库序列是唯一权威。
+- **Phase 10 M4 用户 MCP 挂载**：任务快照 mcp_servers（创建事务冻结三键描述符）
+  → 行解引用 + stdio 解封富化（缺失/停用静默剔除）→ stdio 附件装配（解密启动
+  配置经 env 数据面注入 mcp-sandbox 形态；镜像未配置 WARNING 跳过，容器实体化
+  属 M5）/ http 形态 USER_MCP_URL_<n> env 注入主任务容器（grant 语义不变）。
 - **settle（Sup §9.7.3）**：agent_settled 权威 → 轮 settled（围栏）→
   message_saved 补齐 → KEY_VERSION_REVOKED 比对（provider_key_version 失配或
   provider 撤销/目录停用 → 任务 aborted(provider_key_revoked)，轮照常 settled）
@@ -35,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import json
 import logging
 import os
 import re
@@ -77,7 +82,9 @@ from backend.v2.models import (
     SkillRevision,
     Task,
     TaskMessage,
+    UserMcpServer,
 )
+from backend.v2.provider_crypto import key_sealer
 from backend.v2.provider_service import resolve_task_provider
 from backend.v2.runtime import V2Runtime, owner_session, v2_runtime_from_settings
 from backend.v2.task_release import release_task_holdings
@@ -106,6 +113,13 @@ _ROUND_QUEUE_MAX = 2000
 _ROUND_DEADLINE_STOP_TIMEOUT: float = 5.0
 
 _ROLE_LABELS = {"user": "用户", "assistant": "助手", "tool": "工具"}
+
+# Phase 10 M4：用户 MCP 挂载装配（快照冻结三键 + 执行期富化形态）。
+# stdio 启动配置经 env 数据面注入沙箱（解密明文仅协程内存存活、零宿主文件
+# 落盘；容器实体化与回调凭据属 M5——grant 语义不变）；http 上游 URL 经
+# USER_MCP_URL_<n> 注入主任务容器 env。
+_MCP_LAUNCH_ENV = "AGENTCRAFT_MCP_LAUNCH"
+_MCP_SERVER_ID_ENV = "AGENTCRAFT_MCP_SERVER_ID"
 
 # ---------------------------------------------------------------------------
 # 围栏/续约 SQL（PG；执行器写侧全部携带 lease 谓词——D16 写侧围栏）
@@ -374,6 +388,19 @@ def _build_system_prompt(snapshot: dict) -> str:
     return prompt
 
 
+def _mcp_http_env(entries: list[dict]) -> dict[str, str]:
+    """http 形态用户 MCP → 主任务容器 env 注入（纯函数）：``USER_MCP_URL_<n>``，
+    n 为快照序内 http server 的 0 起序号（stdio 条目不占号）；url 缺失条目跳过。"""
+    env: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("transport_kind") != "http":
+            continue
+        url = entry.get("url")
+        if isinstance(url, str) and url:
+            env[f"USER_MCP_URL_{len(env)}"] = url
+    return env
+
+
 def _build_outgoing_message(history: list[TaskMessage], current: TaskMessage) -> str:
     """组装本轮发出的消息（V1 重播种形态移植，§7.6）：最近 40 条历史嵌入本条
     消息开头，绝不单独发历史（防幻影轮）；无历史则原样发送。"""
@@ -605,6 +632,8 @@ class RoundExecutor:
                     logger.info("轮复核弃权（静默跳过）：round_id=%s", ctx.round_id)
                     return
                 task = (await db.execute(select(Task).where(Task.id == ctx.task_uuid))).scalar_one()
+                # Phase 10 M4：用户 MCP 挂载快照（创建事务冻结三键；任务期不可变）
+                mcp_snapshot = list(task.mcp_servers or [])
             # RIDER A：deadline 起点在复核通过时点记录（dispatch→复核排队不计入）
             ctx.started_at = asyncio.get_running_loop().time()
             ctx.deadline_seconds = self._deadline_seconds
@@ -626,6 +655,9 @@ class RoundExecutor:
                     else None
                 )
                 history, current = await self._load_history(db, ctx)
+                # Phase 10 M4：挂载快照 → 行解引用 + stdio 解封富化（缺失/停用
+                # 静默剔除；明文命令材料仅协程内存存活）
+                mcp_entries = await self._resolve_mcp_entries(db, ctx, mcp_snapshot)
             # 凭据签发并登记（D17；T7 校验消费，settle/收尾弹出——Eng §3.2:78）
             token = create_v2_task_token(
                 task_id=ctx.task_id,
@@ -648,7 +680,12 @@ class RoundExecutor:
                 extension_path=extension_path,
                 task_token=token,
                 model_id=resolved.model_id,
+                mcp_env=_mcp_http_env(mcp_entries),
             )
+            # Phase 10 M4：用户 MCP 附件装配（stdio → mcp-sandbox 形态；容器
+            # 实体化随镜像开关/M5 接线，未配置时 WARNING 跳过不阻塞主流程）
+            attachments = self._build_mcp_attachments(ctx, mcp_entries)
+            await self._mount_mcp_attachments(ctx, attachments)
             await self.ensure_proxy(_V2_PROVIDER)
             transport, removal = await self._make_runtime(spec, extension_path)
             self._removals[ctx.task_id] = removal
@@ -729,10 +766,14 @@ class RoundExecutor:
         extension_path: Path,
         task_token: str,
         model_id: str,
+        mcp_env: dict[str, str] | None = None,
     ) -> ContainerSpec:
         """容器规格（build_container_spec 移植 + D2 修订）：**仅 extension 单挂载**
         （无 /workspace、/task-files、/outputs——全回调模型）；其余安全清单
-        （只读 rootfs、cap_drop、tmpfs、internal 网络）与 V1 逐字一致。"""
+        （只读 rootfs、cap_drop、tmpfs、internal 网络）与 V1 逐字一致。
+
+        Phase 10 M4：``mcp_env``（http 形态用户 MCP 的 USER_MCP_URL_<n> 注入，
+        _mcp_http_env 产物）合并进容器 env。"""
         argv = [
             "pi",
             "--mode",
@@ -757,6 +798,7 @@ class RoundExecutor:
             # V2 无 faux 形态：openai 路径恒指向 provider-proxy（真实 Key 不进容器）
             "OPENAI_BASE_URL": "http://provider-proxy:8080/v1",
             "OPENAI_API_KEY": task_token,
+            **(mcp_env or {}),
         }
         return ContainerSpec(
             container_name=f"pi-task-{ctx.task_id}",
@@ -769,6 +811,123 @@ class RoundExecutor:
             labels={"agentcraft.task_id": str(ctx.task_id)},
             workdir="/tmp",  # D2 无 /workspace：可写点仅 tmpfs（/tmp）
         )
+
+    # -- 用户 MCP 挂载（Phase 10 M4）------------------------------------------
+
+    async def _resolve_mcp_entries(
+        self, db: AsyncSession, ctx: _RoundContext, snapshot: list[dict]
+    ) -> list[dict]:
+        """挂载快照执行期富化（owner 事务内）：冻结三键 → user_mcp_servers 行
+        解引用。行缺失（任务期被删）/已停用（kill switch 任务侧联动属 M7）→
+        WARNING 静默剔除（build_task_snapshot 缺失 skill revision 同型）；
+        stdio 条目解封启动配置（AAD 绑定 server id，明文仅协程内存存活），
+        http 条目附 url（非机密，行内明文）。"""
+        entries: list[dict] = []
+        for item in snapshot:
+            if not isinstance(item, dict):
+                continue
+            try:
+                sid = _uuid.UUID(str(item.get("server_id")))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "任务 MCP 快照条目 server_id 非法（跳过）：round_id=%s", ctx.round_id
+                )
+                continue
+            row = (
+                await db.execute(select(UserMcpServer).where(UserMcpServer.id == sid))
+            ).scalar_one_or_none()
+            if row is None or not row.enabled:
+                logger.warning(
+                    "任务 MCP 快照 server 已删除或停用（跳过）：round_id=%s server_id=%s",
+                    ctx.round_id,
+                    sid,
+                )
+                continue
+            entry = {
+                "server_id": str(row.id),
+                "name": row.name,
+                "transport_kind": row.transport_kind,
+            }
+            if row.transport_kind == "http":
+                entry["url"] = row.url
+            else:
+                plaintext = key_sealer().open(
+                    row.command_encrypted, row.command_dek_wrapped, provider_id=str(row.id)
+                )
+                material = json.loads(plaintext)
+                entry["launch"] = {
+                    "command": material.get("command"),
+                    "args": material.get("args") or [],
+                    "env": material.get("env") or {},
+                }
+            entries.append(entry)
+        return entries
+
+    def _build_mcp_attachments(
+        self, ctx: _RoundContext, snapshot: list[dict]
+    ) -> list[ContainerSpec | None]:
+        """mcp-sandbox 附件装配纯函数（测试直测）：任务快照 mcp_servers（执行期
+        富化形态）→ 每 stdio server 一个 ContainerSpec 或 None。
+
+        入参条目契约：冻结三键 {server_id, name, transport_kind}；stdio 条目由
+        ``_resolve_mcp_entries`` 富化 launch={command,args,env}（解密明文仅协程
+        内存存活）；http 条目不产生附件（URL 走主任务容器 env 注入 _mcp_http_env）。
+
+        stdio 启动配置经 env 数据面只读注入（零宿主文件落盘、不经 shell 拼接）；
+        沙箱镜像未配置（``MCP_SANDBOX_IMAGE`` 空，M5 交付前缺省）→ 对应条目
+        None（调用方 WARNING 跳过）。容器 argv 留空 = 依镜像 ENTRYPOINT，真实
+        入口与回调凭据随 M5 定形（grant 语义不变）。"""
+        image = self._settings.MCP_SANDBOX_IMAGE
+        specs: list[ContainerSpec | None] = []
+        for entry in snapshot:
+            if not isinstance(entry, dict) or entry.get("transport_kind") != "stdio":
+                continue
+            if not image:
+                specs.append(None)
+                continue
+            server_id = str(entry.get("server_id") or "")
+            launch = entry.get("launch") if isinstance(entry.get("launch"), dict) else {}
+            specs.append(
+                ContainerSpec(
+                    container_name=f"mcp-sandbox-{ctx.task_id}-{len(specs) + 1}",
+                    image=image,
+                    argv=[],
+                    env={
+                        _MCP_SERVER_ID_ENV: server_id,
+                        _MCP_LAUNCH_ENV: json.dumps(launch, ensure_ascii=False),
+                    },
+                    mounts=[],
+                    network_name=self._settings.PI_NETWORK_NAME,
+                    labels={
+                        "agentcraft.task_id": str(ctx.task_id),
+                        "agentcraft.mcp_server_id": server_id,
+                    },
+                    workdir="/tmp",
+                )
+            )
+        return specs
+
+    async def _mount_mcp_attachments(
+        self, ctx: _RoundContext, attachments: list[ContainerSpec | None]
+    ) -> None:
+        """M4 装配收口（容器实体化开关）：None 条目（镜像未配置）→ WARNING 跳过
+        不阻塞主流程；已配置条目的沙箱容器创建同样留 M5 接线（当前 WARNING 跳过
+        ——快照/校验/装配函数全交付，实体化归 M5）。"""
+        for spec in attachments:
+            if spec is None:
+                logger.warning(
+                    "Task %s: mcp-sandbox 镜像未配置，跳过用户 MCP stdio 挂载"
+                    "（Phase 10 M5 前不阻塞）：round=%s",
+                    ctx.task_id,
+                    ctx.round_id,
+                )
+            else:
+                logger.warning(
+                    "Task %s: 用户 MCP 容器实体化属 Phase 10 M5，本期跳过：round=%s container=%s",
+                    ctx.task_id,
+                    ctx.round_id,
+                    spec.container_name,
+                )
 
     # -- 事件泵 ---------------------------------------------------------------
 

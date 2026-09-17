@@ -6,7 +6,8 @@ docs/superpowers/plans/2026-09-17-v2-phase-10-mcp-face.md，Sup §4.6 重写随 
 - POST /mcp/servers（写，幂等 + CSRF；stdio 命令材料信封加密）；
 - PUT/DELETE /mcp/servers/{id}（写，幂等 + CSRF）；
 - POST /mcp/servers/{id}/discover（认证 + CSRF + 限流 mcp_discover 10/h，
-  不幂等——沿 provider /test D10 形态）。stdio 发现为占位 501（沙箱镜像属 M5）。
+  不幂等——沿 provider /test D10 形态）。stdio = subprocess 直拉 + stdio 握手
+  （Phase 10 M3；mcp-sandbox 镜像形态属 M5）。
 """
 
 from fastapi import APIRouter, Depends
@@ -105,8 +106,8 @@ async def discover_mcp_server(
 ) -> JSONResponse:
     """工具发现（认证 + CSRF + 限流 mcp_discover 10/h/用户；不幂等——D10 形态）。
 
-    stdio → 501 占位（mcp-sandbox 沙箱镜像属 M5）；http 失败 → 502
-    MCP_DISCOVER_FAILED（零上游细节泄漏）。
+    stdio → subprocess 直拉 + MCP stdio 握手（Phase 10 M3）；http → streamable
+    HTTP 握手。任一传输失败 → 502 MCP_DISCOVER_FAILED（零上游细节泄漏）。
     """
     async with runtime.app_factory() as db:
         await enforce(

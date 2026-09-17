@@ -104,6 +104,13 @@ class Task(TimestampMixin, Base):
     provider_catalog_id: Mapped[_uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     provider_model_id: Mapped[str] = mapped_column(String(200), nullable=False)
     provider_key_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 用户 MCP 挂载快照（Phase 10 M4，迁移 0014）：创建事务冻结 mcp_refs →
+    # [{server_id, name, transport_kind}] 三键描述符（命令材料信封仍只存
+    # user_mcp_servers，执行期按 server_id 解引用解封）；任务期不可变——PUT/
+    # 停用/删除 server 不回写任务，执行期缺失/停用静默剔除（kill switch 联动
+    # 属 M7）。NULL = 未挂载（视图归一空列表）；裸 JSONB 无 FK，随 tasks 行
+    # 既有 owner-RLS 存取
+    mcp_servers: Mapped[list | None] = mapped_column(JSONB)
     # 循环 FK：建表经 use_alter 以 ALTER TABLE 补齐；消息删除时指针置空
     initial_message_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("task_messages.id", ondelete="SET NULL", use_alter=True)

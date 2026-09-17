@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     PI_IDLE_TIMEOUT_MINUTES: int = 10
     PI_WORKER_IMAGE: str = "agentcraft-pi-worker:0.84.3"
     PROVIDER_PROXY_IMAGE: str = "agentcraft-provider-proxy:latest"
+    # Phase 10 M4/M5：用户 MCP stdio 沙箱镜像（mcp-sandbox）。缺省空串 = 镜像
+    # 未部署 → RoundExecutor 跳过用户 MCP 容器装配并 WARNING（M5 交付镜像前
+    # 不阻塞主流程；容器实体化开关随 M5 接线）
+    MCP_SANDBOX_IMAGE: str = ""
     PI_RUNTIME: str = "auto"  # auto | docker | cli | subprocess
     PI_ROUND_TIMEOUT_SECONDS: int = 300
     PI_TASK_MAX_LIFETIME_MINUTES: int = 30  # 任务总超时（§7.8.1），超阈 abort+failed
