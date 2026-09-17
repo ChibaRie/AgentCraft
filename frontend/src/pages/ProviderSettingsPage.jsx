@@ -94,26 +94,25 @@ function AddProviderForm({ catalog, isSubmitting, error, onSubmit, onCancel }) {
       </div>
       <div className="field">
         <label className="field-label" htmlFor="provider-model">
-          模型（目录白名单）
+          模型（可自定义）
         </label>
-        <select
+        <input
           id="provider-model"
           className="field-input"
+          list="provider-model-options"
           value={modelId}
           required
           disabled={!selectedCatalog}
+          maxLength={128}
+          placeholder="输入模型名，或从目录推荐项中选择"
           onChange={(event) => setModelId(event.target.value)}
-        >
-          <option value="" disabled>
-            请选择模型
-          </option>
+        />
+        <datalist id="provider-model-options">
           {models.map((model) => (
-            <option key={model} value={model}>
-              {model}
-            </option>
+            <option key={model} value={model} />
           ))}
-        </select>
-        <p className="field-note">模型列表来自平台目录白名单，不可手动输入。</p>
+        </datalist>
+        <p className="field-note">支持任意自定义模型名（1-128 字符）；下拉建议项来自平台目录。</p>
       </div>
       <div className="field">
         <label className="field-label" htmlFor="provider-api-key">

@@ -281,6 +281,13 @@ export default function LoginPage() {
                         忘记密码？
                       </Link>
                     </p>
+                    {/* 邀请制注册入口（2026-09-17 用户裁决：入口可见化，治理模型不变） */}
+                    <p className="auth-switch-hint">
+                      有邀请码？
+                      <Link className="auth-switch-link" to="/invitations/accept">
+                        前往邀请激活
+                      </Link>
+                    </p>
                   </div>
                 </form>
               </>

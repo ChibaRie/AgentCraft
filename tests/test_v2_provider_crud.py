@@ -96,7 +96,9 @@ async def test_create_rejects_base_url_extra_field(provider_env, pg):
     assert n == 0
 
 
-async def test_create_rejects_disabled_catalog_and_off_whitelist_model(provider_env, pg):
+async def test_create_rejects_disabled_catalog_and_accepts_custom_model(provider_env, pg):
+    """目录 enabled 门恒在；model_id 白名单退役（2026-09-17 用户裁决）——跨目录
+    自定义模型名放行，仅受 1..128 非空白校验约束。"""
     uid = await seed_active_user(pg, "dis@example.com")
     faux = await catalog_id_by_host(pg, "faux.invalid")  # D16：种子恒 enabled=false
     deepseek = await catalog_id_by_host(pg, "api.deepseek.com")
@@ -105,7 +107,9 @@ async def test_create_rejects_disabled_catalog_and_off_whitelist_model(provider_
         resp = await _create(client, faux, model_id="faux-echo", idem="idem-dis-1")
         assert resp.status_code == 400 and resp.json()["error"]["code"] == "CATALOG_ITEM_DISABLED"
         resp = await _create(client, deepseek, model_id="gpt-4o", idem="idem-dis-2")
-        assert resp.status_code == 400 and resp.json()["error"]["code"] == "MODEL_NOT_ALLOWED"
+        assert resp.status_code == 200 and resp.json()["data"]["model_id"] == "gpt-4o"
+        bad = await _create(client, deepseek, model_id="   ", idem="idem-dis-3")
+        assert bad.status_code == 400 and bad.json()["error"]["code"] == "VALIDATION_ERROR"
     del uid
 
 
@@ -345,23 +349,31 @@ async def test_put_absent_api_key_unchanged(provider_env, pg):
     del uid
 
 
-async def test_put_model_id_whitelist_enforced(provider_env, pg):
+async def test_put_model_id_custom_allowed_and_blank_rejected(provider_env, pg):
+    """PUT model_id 白名单退役（2026-09-17 用户裁决）：跨目录模型名放行，
+    空白/超长仍 400 VALIDATION_ERROR。"""
     uid = await seed_active_user(pg, "mdl@example.com")
     pid = await seed_provider(pg, uid, catalog_host="api.openai.com")
     async with auth_client() as client:
         await login(client, "mdl@example.com", "User-Passw0rd!")
         ok = await client.put(
             f"/api/providers/{pid}",
-            json={"model_id": "gpt-4o"},
+            json={"model_id": "deepseek-chat"},
             headers={"Idempotency-Key": "idem-m1"},
         )
         bad = await client.put(
             f"/api/providers/{pid}",
-            json={"model_id": "deepseek-chat"},
+            json={"model_id": "   "},
             headers={"Idempotency-Key": "idem-m2"},
         )
-    assert ok.status_code == 200 and ok.json()["data"]["model_id"] == "gpt-4o"
-    assert bad.status_code == 400 and bad.json()["error"]["code"] == "MODEL_NOT_ALLOWED"
+        oversized = await client.put(
+            f"/api/providers/{pid}",
+            json={"model_id": "m" * 129},
+            headers={"Idempotency-Key": "idem-m3"},
+        )
+    assert ok.status_code == 200 and ok.json()["data"]["model_id"] == "deepseek-chat"
+    assert bad.status_code == 400 and bad.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert oversized.status_code == 400 and oversized.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
 async def test_put_extra_forbid(provider_env, pg):

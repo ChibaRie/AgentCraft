@@ -170,24 +170,27 @@ describe("添加 Provider", () => {
     expect(screen.getByLabelText("API Key").type).toBe("text");
   });
 
-  it("目录→模型联动：白名单是唯一数据源，未选目录时模型下拉禁用", async () => {
+  it("目录→模型联动：目录推荐项进 datalist，未选目录时模型输入禁用（白名单退役为建议项）", async () => {
     await renderWithProviders();
     await openAddForm();
 
     const catalogSelect = screen.getByLabelText("目录条目");
-    const modelSelect = screen.getByLabelText("模型（目录白名单）");
-    expect(modelSelect.disabled).toBe(true);
+    const modelInput = screen.getByLabelText("模型（可自定义）");
+    expect(modelInput.disabled).toBe(true);
 
     fireEvent.change(catalogSelect, { target: { value: CATALOG[0].id } });
-    expect(modelSelect.disabled).toBe(false);
+    expect(modelInput.disabled).toBe(false);
+    const datalist = document.getElementById("provider-model-options");
     expect(
-      within(modelSelect).getAllByRole("option").map((option) => option.textContent)
-    ).toEqual(["请选择模型", "deepseek-chat", "deepseek-reasoner"]);
+      Array.from(datalist.querySelectorAll("option")).map((option) => option.value)
+    ).toEqual(["deepseek-chat", "deepseek-reasoner"]);
 
     fireEvent.change(catalogSelect, { target: { value: CATALOG[1].id } });
     expect(
-      within(modelSelect).getAllByRole("option").map((option) => option.textContent)
-    ).toEqual(["请选择模型", "kimi-k2"]);
+      Array.from(document.getElementById("provider-model-options").querySelectorAll("option")).map(
+        (option) => option.value
+      )
+    ).toEqual(["kimi-k2"]);
   });
 
   it("提交幂等键 → 200 后整体 refetch（列表顺序来源单一），表单关闭", async () => {
@@ -196,7 +199,7 @@ describe("添加 Provider", () => {
     fireEvent.change(screen.getByLabelText("目录条目"), {
       target: { value: CATALOG[0].id },
     });
-    fireEvent.change(screen.getByLabelText("模型（目录白名单）"), {
+    fireEvent.change(screen.getByLabelText("模型（可自定义）"), {
       target: { value: "deepseek-chat" },
     });
     fireEvent.change(screen.getByLabelText("API Key"), {
@@ -233,7 +236,7 @@ describe("添加 Provider", () => {
     fireEvent.change(screen.getByLabelText("目录条目"), {
       target: { value: CATALOG[1].id },
     });
-    fireEvent.change(screen.getByLabelText("模型（目录白名单）"), {
+    fireEvent.change(screen.getByLabelText("模型（可自定义）"), {
       target: { value: "kimi-k2" },
     });
     fireEvent.change(screen.getByLabelText("API Key"), {
@@ -260,7 +263,7 @@ describe("添加 Provider", () => {
     fireEvent.change(screen.getByLabelText("目录条目"), {
       target: { value: CATALOG[0].id },
     });
-    fireEvent.change(screen.getByLabelText("模型（目录白名单）"), {
+    fireEvent.change(screen.getByLabelText("模型（可自定义）"), {
       target: { value: "deepseek-chat" },
     });
     fireEvent.change(screen.getByLabelText("API Key"), {
@@ -297,7 +300,7 @@ describe("添加 Provider", () => {
     fireEvent.change(screen.getByLabelText("目录条目"), {
       target: { value: CATALOG[0].id },
     });
-    fireEvent.change(screen.getByLabelText("模型（目录白名单）"), {
+    fireEvent.change(screen.getByLabelText("模型（可自定义）"), {
       target: { value: "deepseek-chat" },
     });
     fireEvent.change(screen.getByLabelText("API Key"), {

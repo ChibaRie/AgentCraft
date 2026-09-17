@@ -89,15 +89,16 @@ async def test_explicit_catalog_disabled_400(pg):
         rt.close()
 
 
-async def test_explicit_model_off_whitelist_400(pg):
+async def test_explicit_model_custom_resolves(pg):
+    """resolve 不做白名单复验（2026-09-17 用户裁决：model_id 自由化）——存量行的
+    跨目录模型名原样解析（写入时已过 1..128 非空白校验）。"""
     rt = make_v2_runtime(pg)
     try:
         uid = await seed_active_user(pg, "r6@x.test")
         pid = await seed_provider(pg, uid, catalog_host="api.openai.com", model_id="deepseek-chat")
         async with owner_session(rt, str(uid)) as db:
-            with pytest.raises(AgentCraftError) as exc_info:
-                await resolve_task_provider(db, user_id=str(uid), provider_id=str(pid))
-        assert exc_info.value.code == ErrorCode.MODEL_NOT_ALLOWED
+            resolved = await resolve_task_provider(db, user_id=str(uid), provider_id=str(pid))
+        assert resolved.model_id == "deepseek-chat"
     finally:
         rt.close()
 

@@ -36,14 +36,33 @@ def _provider_not_found() -> HTTPException:
     return HTTPException(status_code=404, detail=_NOT_FOUND_DETAIL)
 
 
-def _assert_catalog_usable(catalog: ProviderCatalog, model_id: str | None = None) -> None:
-    """目录可用门（create/test/resolve 三处共用；D11/D17）：enabled 门恒查；
-    model_id 给定时加白名单门。test 路径不传 model_id——D10 连通性测试不做
-    白名单复验（存量行的模型允许目录白名单收缩后仍可测试）。"""
+def _assert_catalog_usable(catalog: ProviderCatalog) -> None:
+    """目录可用门（create/test/resolve 共用）：enabled 门恒查。
+
+    model_id 白名单门于 2026-09-17 用户裁决退役——目录 models 字段转为
+    「推荐清单」（前端下拉建议项），用户可自定义任意合法模型名（见
+    _validate_model_id）；host/FQDN 安全面（SSRF 硬约束）不变。"""
+
     if not catalog.enabled:
         raise AgentCraftError(ErrorCode.CATALOG_ITEM_DISABLED, "目录条目已停用", http_status=400)
-    if model_id is not None and model_id not in list(catalog.models):
-        raise AgentCraftError(ErrorCode.MODEL_NOT_ALLOWED, "模型不在目录白名单", http_status=400)
+
+
+def _validate_model_id(model_id: str) -> None:
+    """model_id 自由化校验（2026-09-17 用户裁决）：非空白首尾字符串，1..128 字符。
+
+    create/PUT 两处共用；空白/超长 → 400 VALIDATION_ERROR（目录白名单语义
+    退役，原 MODEL_NOT_ALLOWED 不再发出——错误码保留注册表不删，供历史
+    幂等记录重放形态）。"""
+
+    stripped = model_id.strip()
+    if not stripped or len(stripped) > 128 or stripped != model_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "VALIDATION_ERROR",
+                "message": "model_id 须为 1..128 字符且首尾无空白的字符串",
+            },
+        )
 
 
 def _out(row: UserProvider, catalog_display_name: str) -> dict:
@@ -176,7 +195,7 @@ async def resolve_task_provider(
     catalog = (
         await db.execute(select(ProviderCatalog).where(ProviderCatalog.id == row.catalog_id))
     ).scalar_one()
-    _assert_catalog_usable(catalog, row.model_id)
+    _assert_catalog_usable(catalog)
     return ResolvedProvider(
         provider_id=str(row.id),
         catalog_id=str(row.catalog_id),
@@ -255,7 +274,8 @@ async def create_provider(
                 status_code=400,
                 detail={"code": "VALIDATION_ERROR", "message": "目录条目不存在"},
             )
-        _assert_catalog_usable(catalog, updates["model_id"])
+        _validate_model_id(updates["model_id"])
+        _assert_catalog_usable(catalog)
         dup = (
             await db.execute(
                 select(UserProvider.id).where(
@@ -441,11 +461,12 @@ async def update_provider(
     idem_key: str,
     idem_hash: str,
 ) -> "dict | Replay":
-    """更新（裁决 D2/D5/D11/D14）：api_key 两态轮换 / is_default 互斥 / model 白名单。
+    """更新（裁决 D2/D5/D11/D14；2026-09-17 model 白名单退役）：api_key 两态轮换
+    / is_default 互斥 / model_id 自由化（1..128 非空白校验）。
 
     门序同 create：幂等 begin（route=具体路径）→ owner 事务（active 行 404 门 →
-    显式 null 400 → model 白名单 → 轮换 seal+version+1+联动 / 默认互斥 → store）。
-    model_id 变更与目录禁用正交（D11：PUT 允许）；白名单按原目录 models 校验。
+    显式 null 400 → model_id 校验 → 轮换 seal+version+1+联动 / 默认互斥 → store）。
+    model_id 变更与目录禁用正交（D11：PUT 允许）。
     updates 为 ProviderUpdateRequest.model_dump(exclude_unset=True)。
     """
     route = f"/api/providers/{provider_id}"
@@ -460,15 +481,7 @@ async def update_provider(
         row = await get_provider_row(db, provider_id)  # 缺失/revoked → 404（跨用户同形）
         _reject_explicit_nulls(updates)  # api_key/model_id/is_default 显式 null → 400
         if "model_id" in updates and updates["model_id"] != row.model_id:
-            catalog = (
-                await db.execute(
-                    select(ProviderCatalog).where(ProviderCatalog.id == row.catalog_id)
-                )
-            ).scalar_one()
-            if updates["model_id"] not in list(catalog.models):
-                raise AgentCraftError(
-                    ErrorCode.MODEL_NOT_ALLOWED, "模型不在目录白名单", http_status=400
-                )
+            _validate_model_id(updates["model_id"])
             row.model_id = updates["model_id"]
         if "api_key" in updates and isinstance(updates["api_key"], str):
             key_ciphertext, dek_wrapped = key_sealer().seal(
