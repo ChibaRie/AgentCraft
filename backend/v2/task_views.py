@@ -192,9 +192,7 @@ async def _load_task_views(db: AsyncSession, task_ids: list[_uuid.UUID]) -> list
             # 上游 host（base_url 解析），行缺失/解析失败 → 整 provider=null。
             "expert": experts_by_rev.get(t.expert_revision_id),
             "provider": (
-                {"display_name": host, "model": t.provider_model_id}
-                if host is not None
-                else None
+                {"display_name": host, "model": t.provider_model_id} if host is not None else None
             ),
         }
     return [views_by_id[tid] for tid in task_ids if tid in views_by_id]

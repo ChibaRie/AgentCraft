@@ -46,6 +46,7 @@ INTERNAL_SERVICE_TABLES = (
 )
 
 # 0001（14）+ 0003（users/user_entitlements）+ 0006（revision_tools）= 17 张
+# + 0013（Phase 10 M1：user_mcp_servers / user_mcp_tools）= 19 张
 RLS_ENABLED_TABLES = frozenset(
     {
         "account_action_tokens",
@@ -63,6 +64,8 @@ RLS_ENABLED_TABLES = frozenset(
         "task_rounds",
         "tasks",
         "user_entitlements",
+        "user_mcp_servers",
+        "user_mcp_tools",
         "user_providers",
         "users",
     }

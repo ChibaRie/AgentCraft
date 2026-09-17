@@ -7,7 +7,7 @@ FastAPI 依赖（get_v2_runtime / get_admin_db / owner_session / client_ip）统
 
 from fastapi import APIRouter
 
-from backend.api.v2 import account, auth, authoring, discover, providers, reports, tasks
+from backend.api.v2 import account, auth, authoring, discover, mcp, providers, reports, tasks
 from backend.v2.runtime import client_ip, get_admin_db, get_v2_runtime, owner_session
 from backend.v2.session_service import get_v2_auth
 
@@ -15,6 +15,7 @@ v2_api_router = APIRouter()
 v2_api_router.include_router(auth.router)
 v2_api_router.include_router(account.router)
 v2_api_router.include_router(providers.router)
+v2_api_router.include_router(mcp.router)
 v2_api_router.include_router(authoring.router)
 v2_api_router.include_router(reports.router)
 v2_api_router.include_router(discover.router)

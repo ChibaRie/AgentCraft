@@ -7,7 +7,9 @@
 + email_outbox INSERT）
 + 0011（Phase 8 T6 owner 护栏生命周期放行：实体 published→draft / 删除级联
 内部写 pg_trigger_depth()>1 / audit_logs INSERT 授 app；0010 未落地——T4 核验
-0001 owner_tables 循环已含 task_messages admin_read，无需迁移）。
+0001 owner_tables 循环已含 task_messages admin_read，无需迁移）
++ 0012（Provider 去目录化：base_url 列/唯一索引重建）
++ 0013（Phase 10 M1 用户 MCP 面：user_mcp_servers / user_mcp_tools）。
 
 直接对 testcontainer PG 建一次性库跑 alembic 子进程（不经模板库克隆），
 验证 upgrade/downgrade/upgrade 往返幂等与种子/角色齐备。
@@ -78,7 +80,7 @@ def test_seeds_and_roles_present(pg_url_base):
                 ver = (
                     await conn.execute(text("SELECT version_num FROM alembic_version"))
                 ).scalar_one()
-                assert ver == "0011"
+                assert ver == "0013"
                 slots = (
                     await conn.execute(text("SELECT count(*) FROM platform_slots"))
                 ).scalar_one()
@@ -107,15 +109,16 @@ def test_seeds_and_roles_present(pg_url_base):
         asyncio.run(_drop_db(pg_url_base, name))
 
 
-async def test_0004_active_entry_unique_index(pg):
-    """0004：活跃条目 (user_id, catalog_id, model_id) 部分唯一索引（裁决 D4）。"""
+async def test_0012_active_entry_unique_index(pg):
+    """0012（原 0004 重建）：活跃条目 (user_id, base_url, model_id) 部分唯一索引
+    （裁决 D4；2026-09-17 去目录化——catalog_id 退出唯一键，base_url 进入）。"""
     async with pg.engine.begin() as conn:
         defs = (
             (
                 await conn.execute(
                     text(
                         "SELECT indexdef FROM pg_indexes "
-                        "WHERE indexname = 'uq_user_providers_active_entry'"
+                        "WHERE indexname = 'uq_user_providers_active_entry_v2'"
                     )
                 )
             )
@@ -133,25 +136,25 @@ async def test_0004_active_entry_unique_index(pg):
                 )
             )
         ).scalar_one()
-        cat = (await conn.execute(text("SELECT id FROM provider_catalog LIMIT 1"))).scalar_one()
         for status in ("revoked", "revoked", "active"):
             await conn.execute(
                 text(
-                    "INSERT INTO user_providers (id, user_id, catalog_id, model_id, "
+                    "INSERT INTO user_providers (id, user_id, catalog_id, base_url, model_id, "
                     "key_ciphertext, dek_wrapped, key_last4, key_version, status, is_default) "
-                    "VALUES (gen_random_uuid(), :u, :c, 'm', 'ct', 'dw', '4KEY', 1, :s, false)"
+                    "VALUES (gen_random_uuid(), :u, NULL, 'https://uq-seed.example.com/v1', 'm', "
+                    "'ct', 'dw', '4KEY', 1, :s, false)"
                 ),
-                {"u": user, "c": cat, "s": status},
+                {"u": user, "s": status},
             )
     # 第二条 active 同三元组 → 唯一冲突（独立事务：revoked 行不参与约束故前三条可共存）
     with pytest.raises(IntegrityError):
         async with pg.engine.begin() as conn:
             await conn.execute(
                 text(
-                    "INSERT INTO user_providers (id, user_id, catalog_id, model_id, "
-                    "key_ciphertext, dek_wrapped, key_last4, key_version, status, is_default) "
-                    "VALUES (gen_random_uuid(), :u, :c, 'm', 'ct', 'dw', '4KEY', 1, "
-                    "'active', false)"
+                    "INSERT INTO user_providers (id, user_id, catalog_id, base_url, model_id, "
+                    "key_ciphertext, dek_wrapped, key_last4, key_version, status, "
+                    "is_default) VALUES (gen_random_uuid(), :u, NULL, "
+                    "'https://uq-seed.example.com/v1', 'm', 'ct', 'dw', '4KEY', 1, 'active', false)"
                 ),
-                {"u": user, "c": cat},
+                {"u": user},
             )

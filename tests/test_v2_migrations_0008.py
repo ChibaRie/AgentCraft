@@ -42,10 +42,10 @@ async def _seed_task_chain(pg) -> dict[str, _uuid.UUID]:
         provider_id = (
             await conn.execute(
                 text(
-                    "INSERT INTO user_providers (id, user_id, catalog_id, model_id, "
+                    "INSERT INTO user_providers (id, user_id, catalog_id, base_url, model_id, "
                     "key_ciphertext, dek_wrapped, key_last4, key_version, status, is_default) "
-                    "VALUES (gen_random_uuid(), :u, :c, 'm', 'ct', 'dw', '4KEY', 1, "
-                    "'active', false) RETURNING id"
+                    "VALUES (gen_random_uuid(), :u, :c, 'https://0008-seed.example.com/v1', "
+                    "'m', 'ct', 'dw', '4KEY', 1, 'active', false) RETURNING id"
                 ),
                 {"u": user_id, "c": catalog_id},
             )

@@ -1,7 +1,8 @@
 """连通性测试端点：SSRF 硬约束（D10）+ 限流 + 解密消费 + 红线。
 
 上游一律 httpx.MockTransport 脚本化，真实网络零依赖。HTTP 行为经服务函数
-transport 注入直测；端点层仅测门序（限流 429 / 404 / CATALOG_ITEM_DISABLED）。
+transport 注入直测；端点层仅测门序（限流 429 / 404；0012 去目录化后目录
+enabled 门退役，见 test_endpoint_disabled_catalog_400 修订）。
 测试行用 T2 KeySealer 造真实信封（open 可解），非占位密文。
 """
 
@@ -28,9 +29,10 @@ async def _seed_provider_with_real_key(pg, uid: str) -> str:
     async with pg.engine.begin() as conn:
         await conn.execute(
             text(
-                "INSERT INTO user_providers (id, user_id, catalog_id, model_id, key_ciphertext, "
-                "dek_wrapped, key_last4, key_version, status, is_default) "
-                "VALUES (:i, :u, :c, 'gpt-4o-mini', :ct, :dw, '3456', 1, 'active', false)"
+                "INSERT INTO user_providers (id, user_id, catalog_id, base_url, model_id, "
+                "key_ciphertext, dek_wrapped, key_last4, key_version, status, is_default) "
+                "VALUES (:i, :u, :c, 'https://api.openai.com/v1', 'gpt-4o-mini', "
+                ":ct, :dw, '3456', 1, 'active', false)"
             ),
             {"i": str(pid), "u": uid, "c": cid, "ct": ct, "dw": dw},
         )
@@ -148,17 +150,32 @@ async def test_endpoint_rate_limited_10_per_hour(provider_env, pg):
 
 
 async def test_endpoint_disabled_catalog_400(provider_env, pg):
-    """D11：目录禁用 → /test 拒绝（400 CATALOG_ITEM_DISABLED）。"""
+    """0012 去目录化修订：目录 enabled 门对 /test 退役（Sup §10.13——provider 行
+    自带 base_url，CATALOG_ITEM_DISABLED 新流程不再发出）。禁用目录后不再 400。
+    base_url 指向不可解析主机（RFC 2606 .invalid）使出网在 net_guard 处干净
+    失败 → 统一失败形态 200 {ok:false}，全程零真实网络（本文件纪律）。"""
     uid = await seed_active_user(pg, "t7@example.com")
-    pid = await _seed_provider_with_real_key(pg, uid)
+    cid = await catalog_id_by_host(pg, "api.openai.com")
+    pid = uuid7()
+    ct, dw = provider_crypto.key_sealer().seal("sk-live-abcdef123456", provider_id=str(pid))
     async with pg.engine.begin() as conn:
         await conn.execute(
-            text("UPDATE provider_catalog SET enabled=false WHERE allowed_host='api.openai.com'")
+            text(
+                "INSERT INTO user_providers (id, user_id, catalog_id, base_url, model_id, "
+                "key_ciphertext, dek_wrapped, key_last4, key_version, status, is_default) "
+                "VALUES (:i, :u, :c, 'https://catalog-gate.invalid/v1', 'gpt-4o-mini', "
+                ":ct, :dw, '3456', 1, 'active', false)"
+            ),
+            {"i": str(pid), "u": uid, "c": cid, "ct": ct, "dw": dw},
+        )
+        await conn.execute(
+            text("UPDATE provider_catalog SET enabled=false WHERE id = :c"), {"c": cid}
         )
     async with auth_client() as client:
         await login(client, "t7@example.com", "User-Passw0rd!")
         resp = await client.post(f"/api/providers/{pid}/test")
-    assert resp.status_code == 400 and resp.json()["error"]["code"] == "CATALOG_ITEM_DISABLED"
+    assert resp.status_code == 200
+    assert resp.json()["data"]["ok"] is False
 
 
 async def test_endpoint_revoked_or_foreign_404(provider_env, pg):

@@ -1,5 +1,7 @@
 """V2 API schema。Task 4 先放空基类；各端点模型由后续任务在此补充。"""
 
+from typing import Annotated, Literal
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
@@ -182,3 +184,41 @@ class ProviderUpdateRequest(V2BaseModel):
     is_default: bool | None = None
     model_id: str | None = Field(default=None, min_length=1, max_length=200)
     base_url: str | None = Field(default=None, min_length=12, max_length=512)
+
+
+class McpServerCreateRequest(V2BaseModel):
+    """POST /mcp/servers 请求体（Phase 10 M2 用户 MCP 面）。
+
+    transport_kind=stdio 时 command 必带（args/env 可选，与 command 一起整体
+    信封加密落库）；transport_kind=http 时 url 必带（仅 https 无 userinfo）。
+    跨字段一致性在服务层收口；schema 只做单字段边界（资源卫生：无界的命令/
+    env 值会在加密前流入内存，故全部截断）。extra=forbid。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=80)
+    transport_kind: Literal["stdio", "http"]
+    command: str | None = Field(default=None, min_length=1, max_length=4096)
+    args: list[Annotated[str, Field(min_length=1, max_length=4096)]] | None = Field(
+        default=None, max_length=64
+    )
+    env: (
+        dict[
+            Annotated[str, Field(min_length=1, max_length=200)],
+            Annotated[str, Field(max_length=4096)],
+        ]
+        | None
+    ) = Field(default=None, max_length=64)
+    url: str | None = Field(default=None, min_length=12, max_length=512)
+
+
+class McpServerUpdateRequest(V2BaseModel):
+    """PUT /mcp/servers/{id} 请求体：name/enabled 三态（缺席=不变、显式 null
+    服务层 400）。transport/command/url 不可经本端点变更——发现缓存与任务
+    快照的一致性优先，变更语义走删除后重注册。extra=forbid。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    enabled: bool | None = None

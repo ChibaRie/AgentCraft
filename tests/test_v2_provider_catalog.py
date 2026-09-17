@@ -54,10 +54,10 @@ async def test_provider_list_active_only_and_exact_fields(provider_env, pg):
     data = resp.json()["data"]
     assert [p["id"] for p in data] == [str(keep)]
     row = data[0]
+    # 0012 去目录化：出参 base_url 替代 catalog_id/catalog_display_name（provider_service._out）
     assert set(row.keys()) == {
         "id",
-        "catalog_id",
-        "catalog_display_name",
+        "base_url",
         "model_id",
         "key_last4",
         "key_version",
@@ -65,5 +65,6 @@ async def test_provider_list_active_only_and_exact_fields(provider_env, pg):
         "is_default",
         "created_at",
     }
+    assert row["base_url"] == "https://api.openai.com/v1"
     assert row["model_id"] == "gpt-4o-mini" and row["is_default"] is True
     assert row["key_last4"] == "ST4K" and row["key_version"] == 1

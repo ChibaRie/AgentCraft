@@ -620,9 +620,7 @@ class RoundExecutor:
                 )
                 catalog = (
                     await db.execute(
-                        select(ProviderCatalog).where(
-                            ProviderCatalog.id == resolved.catalog_id
-                        )
+                        select(ProviderCatalog).where(ProviderCatalog.id == resolved.catalog_id)
                     ).scalar_one()
                     if resolved.catalog_id is not None
                     else None
@@ -713,9 +711,7 @@ class RoundExecutor:
         return history, current
 
     @staticmethod
-    def _model_input(
-        catalog: ProviderCatalog | None, model_id: str
-    ) -> tuple[str, ...]:
+    def _model_input(catalog: ProviderCatalog | None, model_id: str) -> tuple[str, ...]:
         """model_input 按 provider_catalog.model_capabilities（缺失条目视为纯文本）。
 
         2026-09-17 去目录化：catalog_id 可为 None（用户自带 base_url 不挂目录）——

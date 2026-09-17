@@ -14,7 +14,6 @@ from backend.v2.provider_service import ResolvedProvider, resolve_task_provider
 from backend.v2.runtime import owner_session
 from tests.test_v2_runtime import make_v2_runtime
 from tests.v2_provider_helpers import (
-    catalog_id_by_host,
     seed_active_user,
     seed_provider,
 )

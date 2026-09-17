@@ -1,7 +1,7 @@
 """聚合出口：alembic_v2 env.py 的 target_metadata 指向 Base.metadata。
 新模型必须在此 import 才会进入 autogenerate 视野。"""
 
-from backend.v2.models import catalog, content, identity, tasking
+from backend.v2.models import catalog, content, identity, mcp, tasking
 from backend.v2.models.base import Base, TimestampMixin, check_enum, pk_uuid
 from backend.v2.models.catalog import (
     PROVIDER_STATUSES,
@@ -43,6 +43,11 @@ from backend.v2.models.identity import (
     User,
     UserEntitlement,
 )
+from backend.v2.models.mcp import (
+    MCP_TRANSPORT_KINDS,
+    UserMcpServer,
+    UserMcpTool,
+)
 from backend.v2.models.tasking import (
     EVENT_TYPES,
     FILE_STATES,
@@ -66,6 +71,7 @@ __all__ = [
     "ENTITY_STATUSES",
     "EVENT_TYPES",
     "FILE_STATES",
+    "MCP_TRANSPORT_KINDS",
     "MESSAGE_AUTHORS",
     "OUTBOX_PURPOSES",
     "OUTBOX_STATES",
@@ -108,6 +114,8 @@ __all__ = [
     "UsageDaily",
     "User",
     "UserEntitlement",
+    "UserMcpServer",
+    "UserMcpTool",
     "UserProvider",
     "UserQuota",
     "UserQuotaUsage",
@@ -115,6 +123,7 @@ __all__ = [
     "check_enum",
     "content",
     "identity",
+    "mcp",
     "pk_uuid",
     "tasking",
 ]

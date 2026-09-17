@@ -88,6 +88,8 @@ def test_limits_registry_pins_registered_scopes():
         "sse_connect": (60, 3600),  # Phase 6 T8a（D12）：SSE 连接 60 次/小时/用户·任务（T8b 挂接）
         # Phase 7 T1：admin 紧急停止开关 10 次/小时/用户（T6 挂接）
         "admin_kill_switch": (10, 3600),
+        # Phase 10 M2：用户 MCP 工具发现 10 次/小时/用户（沿 provider_test 口径）
+        "mcp_discover": (10, 3600),
     }
 
 

@@ -58,26 +58,33 @@ def _validate_model_id(model_id: str) -> None:
 _NULL_BASE_URL_MESSAGE = "base_url 不支持置空（缺席=不变，字符串=替换）"
 
 
-def _validate_base_url(base_url: str) -> None:
-    """base_url 形态校验（2026-09-17 去目录化裁决）：https、有 host、无 userinfo。
+def validate_https_url(url: str, message: str) -> None:
+    """https 上游地址形态校验（Phase 10 起供 Provider/MCP 两域共用）：
+    https、有 host、无 userinfo、≤512。
 
     仅形态校验；公网可达性（DNS 解析拒内网）在真正出网的两端执行——控制面
-    连通性测试与 provider-proxy 转发前（backend/utils/net_guard，双进程共享）。
+    连通性测试/发现与代理转发前（backend/utils/net_guard，双进程共享）。
     """
-    parsed = urlparse(base_url)
+    parsed = urlparse(url)
     if (
         parsed.scheme != "https"
         or not parsed.hostname
         or "@" in (parsed.netloc or "")
-        or len(base_url) > 512
+        or len(url) > 512
     ):
         raise HTTPException(
             status_code=400,
-            detail={
-                "code": "VALIDATION_ERROR",
-                "message": "base_url 须为 https 上游地址（如 https://api.openai.com/v1），不含凭据",
-            },
+            detail={"code": "VALIDATION_ERROR", "message": message},
         )
+
+
+def _validate_base_url(base_url: str) -> None:
+    """base_url 形态校验（2026-09-17 去目录化裁决）：validate_https_url 的
+    Provider 文案封装。"""
+    validate_https_url(
+        base_url,
+        "base_url 须为 https 上游地址（如 https://api.openai.com/v1），不含凭据",
+    )
 
 
 def _out(row: UserProvider) -> dict:

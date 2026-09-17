@@ -371,7 +371,9 @@ async def test_app_grant_whitelist_table_count(pg: PgDb) -> None:
     补 UPDATE 转 DML；0009 起 admin 写授权矩阵只动 admin role 的 policy 面；
     0011 起 audit_logs 新增 INSERT 全表 + SELECT 限 created_at 单列——作者面
     offline/DELETE 的同事务审计（Sup §10.6「物理毁灭必须有审计痕」），整行审计
-    读仍 app 不可见；content_reviews/alembic_version 仍无授权。本守护即防漂移钉）。"""
+    读仍 app 不可见；0013 起 user_mcp_servers/user_mcp_tools 新增 DML 两张
+    （Phase 10 M1 用户 MCP 面）；content_reviews/alembic_version 仍无授权。
+    本守护即防漂移钉）。"""
     async with pg.engine.begin() as conn:
         n = (
             await conn.execute(
@@ -382,7 +384,7 @@ async def test_app_grant_whitelist_table_count(pg: PgDb) -> None:
                 )
             )
         ).scalar_one()
-    assert n == 29
+    assert n == 31
 
 
 async def test_owner_tables_have_rls_enabled_and_forced(pg: PgDb) -> None:
