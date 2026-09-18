@@ -62,6 +62,8 @@ class ErrorCode(str, Enum):
     TASK_ROUND_BUSY = "TASK_ROUND_BUSY"  # 429
     FILE_NOT_FOUND = "FILE_NOT_FOUND"  # 404
     TOOL_CALL_REJECTED = "TOOL_CALL_REJECTED"  # 400
+    # 502；用户 MCP 工具调用失败（Phase 10 M5；上游/容器失败统一面）
+    MCP_CALL_FAILED = "MCP_CALL_FAILED"
     # —— V1 既有（legacy 保留）——
     PROMPT_TOO_LARGE = "PROMPT_TOO_LARGE"
 

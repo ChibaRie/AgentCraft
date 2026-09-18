@@ -389,6 +389,7 @@ async def test_admin_task_snapshot_owner_shape_with_expert_provider(pg, admin_en
             "counts",
             "expert",
             "provider",
+            "mcp_servers",
         }
         assert data["id"] == tid and data["status"] == "queued"
         assert data["active_round"] == {**data["active_round"], "state": "pending"}

@@ -46,6 +46,13 @@ const TOOLS: Array<{
   schema: Record<string, unknown>; callbackPath: string;
 }> = __TOOLS_JSON__ as never;
 
+// Phase 10 M6：用户挂载的 MCP 工具（快照冻结；全部经 /internal/mcp/call
+// 回调治理链执行）。工具名统一加 user_ 前缀防与平台工具撞名。
+const USER_MCP_TOOLS: Array<{
+  name: string; label: string; description: string;
+  schema: Record<string, unknown>; serverId: string; toolName: string;
+}> = __USER_MCP_TOOLS_JSON__ as never;
+
 const BACKEND = process.env.AGENTCRAFT_BACKEND_URL!;
 const TASK_TOKEN = process.env.AGENTCRAFT_TASK_TOKEN!;
 const TASK_ID = __TASK_ID__;
@@ -94,6 +101,40 @@ __FAUX_BLOCK__
         return {
           content: [{ type: "text", text: JSON.stringify(data.data) }],
           details: { tool: t.name, version: t.version },
+        };
+      },
+    });
+  }
+  for (const t of USER_MCP_TOOLS) {
+    pi.registerTool({
+      name: t.name,
+      label: t.label,
+      description: t.description,
+      parameters: t.schema as never,
+      execute: async (callId: string, args: Record<string, unknown>, signal: AbortSignal) => {
+        const res = await fetch(`${BACKEND}/internal/mcp/call`, {
+          method: "POST",
+          headers: { "X-Task-Token": TASK_TOKEN, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            task_id: TASK_ID,
+            server_id: t.serverId,
+            tool_name: t.toolName,
+            arguments: args,
+          }),
+          signal,
+        });
+        if (!res.ok) {
+          let message = `MCP 工具调用失败: HTTP ${res.status}`;
+          try {
+            const err = await res.json();
+            if (err?.error?.message) message = err.error.message;
+          } catch {}
+          throw new Error(message);
+        }
+        const data = await res.json();
+        return {
+          content: [{ type: "text", text: JSON.stringify(data.data) }],
+          details: { tool: t.name, serverId: t.serverId, toolName: t.toolName },
         };
       },
     });
@@ -199,6 +240,35 @@ _NO_FAUX_BLOCK = """  // OpenAI 兼容上游走 chat/completions 协议：经扩
   });"""
 
 
+def _user_mcp_registration(user_mcp_tools: Sequence[dict]) -> list[dict]:
+    """用户 MCP 工具快照 → task.ts 注册块（Phase 10 M6）。
+
+    统一加 user_ 前缀防与平台工具撞名；形态异常条目跳过（外部缓存防御）。
+    """
+    registered: list[dict] = []
+    for item in user_mcp_tools:
+        if not isinstance(item, dict):
+            continue
+        tool_name = item.get("tool_name")
+        server_id = item.get("server_id")
+        if not isinstance(tool_name, str) or not tool_name:
+            continue
+        if not isinstance(server_id, str) or not server_id:
+            continue
+        schema = item.get("schema")
+        registered.append(
+            {
+                "name": f"user_{tool_name}",
+                "label": str(item.get("label") or tool_name),
+                "description": str(item.get("description") or ""),
+                "schema": schema if isinstance(schema, dict) else {"type": "object"},
+                "serverId": server_id,
+                "toolName": tool_name,
+            }
+        )
+    return registered
+
+
 class ExtensionGenerator:
     """生成任务扩展 task.ts（写盘到控制面数据目录，挂载前完成）。"""
 
@@ -212,6 +282,7 @@ class ExtensionGenerator:
         provider: str,
         *,
         model_input: Sequence[str] = ("text", "image"),
+        user_mcp_tools: Sequence[dict] = (),
     ) -> Path:
         """生成 task-<task_id>.ts。tools 为 (tool_id, version) 选择子：
         ① 未知组合 → ValueError（生成时点白名单，调用方负责 enabled 校验——
@@ -219,15 +290,21 @@ class ExtensionGenerator:
         ② callback_path 非空即注册（Phase 6 D2 全回调：harness/container 统一
            路径——四容器工具经 /internal/tools/* 回调，check_code_style 经
            /internal/harness/*；callback_path 为空的描述符不注册）；
-        ③ 模板安全化（S2 §5，Phase 6 D5 方案 a）：faux/task_id/TOOLS JSON 先注入，
-           终检断言模板区零 token（唯一豁免是待填充的 __MODEL_INPUT__ 占位符，
-           命中 ValueError 拒生成）；model_input 载荷最后注入且此后无任何
-           replace/扫描——数据区豁免 token 断言（载荷中 token 字样原样出产物）。
+        ③ 模板安全化（S2 §5，Phase 6 D5 方案 a）：faux/task_id/TOOLS JSON/用户
+           MCP 描述符先注入，终检断言模板区零 token（唯一豁免是待填充的
+           __MODEL_INPUT__ 占位符，命中 ValueError 拒生成）；model_input 载荷
+           最后注入且此后无任何 replace/扫描——数据区豁免 token 断言（载荷中
+           token 字样原样出产物）。
+        ④ Phase 10 M6：user_mcp_tools 为快照冻结的用户 MCP 工具描述符
+           （{name,label,description,schema,server_id,tool_name}）——name 统一
+           加 user_ 前缀防撞名；schema 形态/长度在服务层收口，此处只做形态防御。
 
         task_id 类型（Phase 6 T6a，D17 申报例外）：int → 数字字面量（V1 路径
         byte-identical）；str（V2 UUID）→ 带引号的 TS 字符串字面量（json.dumps
         转义），文件名 ``task-<task_id>.ts`` 原样取串。
         """
+        registered_user = _user_mcp_registration(user_mcp_tools)
+
         registered: list[dict] = []
         for tool_id, version in tools:
             tool = PLATFORM_TOOLS.get((tool_id, version))
@@ -262,6 +339,10 @@ class ExtensionGenerator:
             _EXTENSION_TEMPLATE.replace("__FAUX_BLOCK__", faux_block)
             .replace("__TASK_ID__", task_id_literal)
             .replace("__TOOLS_JSON__", json.dumps(registered, ensure_ascii=False))
+            .replace(
+                "__USER_MCP_TOOLS_JSON__",
+                json.dumps(registered_user, ensure_ascii=False),
+            )
         )
         # 终检（S2 §5 缺陷 A 闭环，Phase 6 D5 方案 a）：位于 TOOLS JSON 注入之后、
         # model_input 注入之前——此时载荷尚未进入 source，断言作用于模板区。

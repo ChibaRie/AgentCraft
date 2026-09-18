@@ -5,6 +5,7 @@ import {
   DoorOpen,
   Moon,
   Plug,
+  PlugsConnected,
   Sun,
   UserCircle,
   Users,
@@ -170,6 +171,17 @@ function UserMenu() {
           >
             <Plug size={16} aria-hidden="true" />
             Provider 设置
+          </Link>
+        )}
+        {v2User && (
+          <Link
+            role="menuitem"
+            className="usermenu-item"
+            to="/settings/mcp"
+            onClick={() => setIsOpen(false)}
+          >
+            <PlugsConnected size={16} aria-hidden="true" />
+            MCP 服务器
           </Link>
         )}
         {v2User && (

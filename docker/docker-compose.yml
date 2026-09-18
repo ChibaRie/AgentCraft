@@ -57,6 +57,17 @@ services:
       - pi-worker
     networks:
       - internal
+  # MCP stdio 沙箱镜像（Phase 10 M5）：仅用于镜像构建；控制面每次发现/调用经
+  # `docker run`（ContainerSpec，--rm 一次性）从该镜像拉起，不作为常驻服务运行。
+  mcp-sandbox:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mcp-sandbox
+    image: agentcraft-mcp-sandbox:latest
+    profiles:
+      - mcp-sandbox
+    networks:
+      - internal
 
 networks:
   internal:

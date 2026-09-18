@@ -12,17 +12,16 @@ Phase 5 裁决受控逆转）；端点形态范本 = Sup §10.11 作者面 + Pro
   授权随迁移 0011，action/detail 由服务层固定字面量写入）。
 """
 
-import asyncio
 import json
-import os
 import uuid as _uuid
-from contextlib import suppress
 
 import httpx
 from fastapi import HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import Settings, get_settings
+from backend.v2 import mcp_sandbox
 from backend.v2.idempotency import begin, store, subject_user
 from backend.v2.ids import uuid7
 from backend.v2.models import AuditLog, UserMcpServer, UserMcpTool
@@ -207,6 +206,20 @@ async def create_server(
     return detail
 
 
+async def _terminate_tasks_for_server(runtime: V2Runtime, server_id: str) -> dict:
+    """用户 MCP server 停用/删除后的任务侧联动（Phase 10 M7）。
+
+    terminator 实现位于 task_executor（反向 import 本模块）——此处惰性导入避循环；
+    executor 未接线（None）时只做快照圈定、不联动停轮（与 platform kill switch
+    同降级）。审计/业务事务已提交后调用，故联动失败不回滚停用/删除（红线：
+    停止优先，失败向上由调用面感知）。
+    """
+    from backend.v2.task_executor import build_mcp_server_terminator
+
+    terminator = build_mcp_server_terminator(runtime, runtime.executor)
+    return await terminator(server_id)
+
+
 _NULL_NAME_MESSAGE = "name 不支持置空（缺席=不变，字符串=替换）"
 _NULL_ENABLED_MESSAGE = "enabled 不支持置空（缺席=不变，布尔=覆盖）"
 
@@ -236,6 +249,7 @@ async def update_server(
         return Replay(replay["status_code"], replay["response_json"])
 
     detail: dict
+    revoked = False
     async with owner_session(runtime, user_id) as db:
         row = await _get_server_row(db, server_id)  # 缺失 → 404（跨用户同形）
         for field, message in (("name", _NULL_NAME_MESSAGE), ("enabled", _NULL_ENABLED_MESSAGE)):
@@ -249,6 +263,7 @@ async def update_server(
         if "enabled" in updates and updates["enabled"] != row.enabled:
             row.enabled = updates["enabled"]
             changed.append("enabled")
+            revoked = updates["enabled"] is False  # M7：停用联动任务侧
         await db.flush()
         detail = _server_out(row)
         db.add(
@@ -275,6 +290,10 @@ async def update_server(
             status_code=200,
             response_json={"data": detail},
         )
+    if revoked:
+        # M7 kill switch：停用后终结快照挂载该 server 的 queued/running 任务。
+        # 回执不入 PUT 出参（保 M2 响应形状）；联动失败不改变停用结果。
+        await _terminate_tasks_for_server(runtime, str(server_id))
     return detail
 
 
@@ -329,6 +348,9 @@ async def delete_server(
             status_code=200,
             response_json=body,
         )
+    # M7：物理删后任务侧联动——快照仍挂载该 server 的 queued/running 任务终结。
+    # 回执不入 DELETE 出参（保 M2 响应形状）；联动失败不改变删除结果。
+    await _terminate_tasks_for_server(runtime, str(server_id))
     return body["data"]
 
 
@@ -348,7 +370,6 @@ _MCP_PROTOCOL_VERSION = "2025-03-26"
 # 流式 reader 单行上限加少量余量（越限 readline 以 ValueError 浮出 → 同一 502 面）
 _STDIO_TIMEOUT_SECONDS = 10.0
 _STDIO_MAX_OUTPUT_BYTES = 2 * 1024 * 1024
-_STDIO_STREAM_LIMIT_MARGIN = 4096
 
 
 def _parse_json_rpc_body(raw: bytes) -> dict | None:
@@ -434,123 +455,42 @@ def _open_stdio_material(row: UserMcpServer) -> dict:
     return {"command": command, "args": list(args), "env": dict(env)}
 
 
-async def _stdio_send(proc: asyncio.subprocess.Process, payload: dict) -> None:
-    """换行分隔 JSON-RPC 单帧写入（MCP stdio 传输形态）。"""
-    proc.stdin.write(json.dumps(payload).encode("utf-8") + b"\n")
-    await proc.stdin.drain()
-
-
-async def _stdio_recv(
-    proc: asyncio.subprocess.Process, want_id: int, *, max_output_bytes: int
-) -> dict:
-    """读取指定 id 的 JSON-RPC 响应行：非 JSON 行（日志/通知）跳过、EOF/输出
-    超限（累计预算）→ 统一 502 面。"""
-    received = 0
-    while True:
-        line = await proc.stdout.readline()
-        if not line:
-            raise _discover_failed()  # 子进程 EOF（提前退出/崩溃）
-        received += len(line)
-        if received > max_output_bytes:
-            raise _discover_failed()
-        try:
-            message = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(message, dict) and message.get("id") == want_id:
-            return message
-
-
-def _rpc_result_of(message: dict) -> dict:
-    """JSON-RPC 响应 → result 对象：error 响应/非 dict result → 统一 502 面。"""
-    if "error" in message or not isinstance(message.get("result"), dict):
-        raise _discover_failed()
-    return message["result"]
-
-
-async def _stdio_handshake(proc: asyncio.subprocess.Process, *, max_output_bytes: int) -> list:
-    """MCP stdio 握手：initialize → notifications/initialized → tools/list
-    （换行分隔 JSON-RPC）。任何 EOF/协议失败/输出超限 → 统一 502 面。"""
-    await _stdio_send(
-        proc,
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": _MCP_PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {"name": "agentcraft", "version": "1.0"},
-            },
-        },
-    )
-    _rpc_result_of(await _stdio_recv(proc, 1, max_output_bytes=max_output_bytes))
-    await _stdio_send(proc, {"jsonrpc": "2.0", "method": "notifications/initialized"})
-    await _stdio_send(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-    listing = _rpc_result_of(await _stdio_recv(proc, 2, max_output_bytes=max_output_bytes))
-    raw_tools = listing.get("tools")
-    if not isinstance(raw_tools, list):
-        raise _discover_failed()
-    return raw_tools
-
-
-_STDIO_REAP_WAIT_SECONDS = 1.0
-
-
-async def _terminate_stdio_process(proc: asyncio.subprocess.Process) -> None:
-    """子进程回收（关 stdin → kill → 有界 wait；幂等，已退出零操作）。
-
-    Windows Proactor 已知形态：子进程写端阻塞在满管道（超大单行输出触发
-    reader 流上限后缓冲清空、写端仍堵）时 kill，``wait()`` 的进程退出通知可能
-    永不送达——等待必须有界，超时即放弃收尾（进程已被 TerminateProcess 终止，
-    句柄由事件循环/GC 收场），不得让发现链卡死。"""
-    if proc.returncode is not None:
-        return
-    with suppress(Exception):  # noqa: BLE001 - 优雅退出优先：多数 server 退出于 stdin EOF
-        proc.stdin.close()
-    with suppress(ProcessLookupError):
-        proc.kill()
-    with suppress(Exception):  # noqa: BLE001 - 收尾尽力而为（见 docstring）
-        await asyncio.wait_for(proc.wait(), _STDIO_REAP_WAIT_SECONDS)
-
-
 async def discover_stdio(
     row: UserMcpServer,
     *,
     timeout: float = _STDIO_TIMEOUT_SECONDS,
     max_output_bytes: int = _STDIO_MAX_OUTPUT_BYTES,
+    settings: Settings | None = None,
+    session_factory=None,
 ) -> list[dict]:
-    """stdio 发现链服务函数（Phase 10 M3）：信封解封启动配置 → subprocess 直拉 →
-    MCP stdio 握手（initialize → tools/list）→ 归一化工具描述符。
+    """stdio 发现链服务函数（Phase 10 M3/M5）：信封解封启动配置 → 一次性
+    mcp-sandbox 容器内 stdio 握手（initialize → tools/list）→ 归一化工具描述符。
 
-    子进程纪律：整体握手 ``timeout``（缺省 10s）超时、stdout 输出
-    ``max_output_bytes``（缺省 2MB）上限（累计预算 + reader 单行流上限双闸）、
-    退出前 kill 回收；任何失败统一 502 MCP_DISCOVER_FAILED（零上游/材料细节
-    泄漏）。``timeout``/``max_output_bytes`` 仅供测试注入收窄验证。
+    安全底线：用户命令绝不在控制面宿主机执行——统一经 ``mcp_sandbox`` 拉起
+    受限容器（只读 rootfs、cap_drop、internal 网络、零宿主挂载）。镜像未配置
+    或容器通道不可用 → 502 MCP_DISCOVER_FAILED；任何失败零材料细节泄漏。
+    ``timeout``/``max_output_bytes`` 仅供测试注入收窄验证。
     """
+    settings = settings or get_settings()
     material = _open_stdio_material(row)
     try:
-        proc = await asyncio.create_subprocess_exec(
-            material["command"],
-            *material["args"],
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            env={**os.environ, **material["env"]},
-            limit=max_output_bytes + _STDIO_STREAM_LIMIT_MARGIN,
-        )
-    except (OSError, ValueError):
+        if session_factory is None:
+            session = await mcp_sandbox.open_stdio_session(
+                image=settings.MCP_SANDBOX_IMAGE,
+                network_name=settings.PI_NETWORK_NAME,
+                launch=material,
+                task_id=f"discover-{row.id}",
+                server_id=str(row.id),
+                timeout=timeout,
+                max_output_bytes=max_output_bytes,
+                settings=settings,
+            )
+        else:  # 测试注入：协议面真件、传输层替身（生产恒走沙箱）
+            session = session_factory(material, timeout, max_output_bytes)
+        async with session:
+            raw_tools = await session.list_tools()
+    except (mcp_sandbox.McpSandboxError, OSError, ValueError):
         raise _discover_failed() from None
-    try:
-        raw_tools = await asyncio.wait_for(
-            _stdio_handshake(proc, max_output_bytes=max_output_bytes), timeout
-        )
-    except asyncio.TimeoutError:
-        raise _discover_failed() from None
-    except (OSError, ValueError):
-        raise _discover_failed() from None
-    finally:
-        await _terminate_stdio_process(proc)
     if len(raw_tools) > _MAX_TOOLS_PER_SERVER:
         raise HTTPException(
             status_code=502,
@@ -638,12 +578,13 @@ async def discover_server(
     user_id: str,
     server_id: str,
     transport: httpx.AsyncBaseTransport | None = None,
+    stdio_session_factory=None,
 ) -> dict:
-    """发现链（限流在路由层）：404 门 → stdio：subprocess 直拉 + stdio 握手
-    （discover_stdio，M3）/ http：出网前 SSRF 公网校验（net_guard，provider
-    连通性测试同款）→ 握手拉 tools → owner 事务内先删后插缓存（幂等）+ 同事务
-    审计。子进程/网络请求均不进 owner 事务（provider test 同款——读出行后即关
-    会话，写回前二次 404 门；expire_on_commit=False 保证脱离会话的行属性可读）。
+    """发现链（限流在路由层）：404 门 → stdio：一次性 mcp-sandbox 容器内
+    stdio 握手（discover_stdio，M3/M5）/ http：出网前 SSRF 公网校验（net_guard，
+    provider 连通性测试同款）→ 握手拉 tools → owner 事务内先删后插缓存（幂等）+
+    同事务审计。容器/网络请求均不进 owner 事务（provider test 同款——读出行后
+    即关会话，写回前二次 404 门；expire_on_commit=False 保证脱离会话的行属性可读）。
     """
     async with owner_session(runtime, user_id) as db:
         row = await _get_server_row(db, server_id)
@@ -651,7 +592,13 @@ async def discover_server(
         url = None if is_stdio else row.url
 
     if is_stdio:
-        tools = await discover_stdio(row)
+        settings = get_settings()
+        tools = await discover_stdio(
+            row,
+            timeout=settings.MCP_DISCOVER_TIMEOUT_SECONDS,
+            settings=settings,
+            session_factory=stdio_session_factory,
+        )
     else:
         from backend.utils.net_guard import EgressBlockedError, assert_public_https
 
@@ -701,6 +648,162 @@ async def discover_server(
             for t in tools
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# 工具调用（Phase 10 M5）：stdio 经一次性 mcp-sandbox 容器；http 控制面直连
+# （http 无用户命令面，出网前复用 net_guard 公网校验）。
+# ---------------------------------------------------------------------------
+
+_CALL_TIMEOUT_SECONDS = 30.0
+_CALL_RESULT_MAX_BYTES = 102400  # 100KB（Sup §6.8 结果截断口径）
+
+
+def _call_failed() -> HTTPException:
+    """调用失败统一 502 面：不透传上游/容器/网络细节。"""
+    return HTTPException(
+        status_code=502,
+        detail={"code": "MCP_CALL_FAILED", "message": "MCP 服务器调用失败"},
+    )
+
+
+async def call_stdio_tool(
+    row: UserMcpServer,
+    *,
+    tool_name: str,
+    arguments: dict,
+    timeout: float = _CALL_TIMEOUT_SECONDS,
+    max_result_bytes: int = _CALL_RESULT_MAX_BYTES,
+    settings: Settings | None = None,
+    session_factory=None,
+) -> dict:
+    """stdio tools/call：信封解封启动配置 → 一次性 mcp-sandbox 容器内调用。
+
+    用户命令绝不在控制面宿主机执行；任何失败统一 502（零材料泄漏）。
+    """
+    settings = settings or get_settings()
+    material = _open_stdio_material(row)
+    try:
+        if session_factory is None:
+            session = await mcp_sandbox.open_stdio_session(
+                image=settings.MCP_SANDBOX_IMAGE,
+                network_name=settings.PI_NETWORK_NAME,
+                launch=material,
+                task_id=f"call-{row.id}",
+                server_id=str(row.id),
+                timeout=timeout,
+                settings=settings,
+            )
+        else:  # 测试注入：协议面真件、传输层替身（生产恒走沙箱）
+            session = session_factory(material, timeout, _MAX_DISCOVER_RESPONSE_BYTES)
+        async with session:
+            return await session.call_tool(tool_name, arguments, max_result_bytes=max_result_bytes)
+    except (mcp_sandbox.McpSandboxError, OSError, ValueError):
+        raise _call_failed() from None
+
+
+async def _mcp_http_call_tool(
+    url: str,
+    *,
+    tool_name: str,
+    arguments: dict,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> dict:
+    """MCP streamable HTTP tools/call（initialize → initialized → tools/call）。"""
+    endpoint = url.rstrip("/") + "/mcp"
+    headers = {"accept": "application/json, text/event-stream"}
+    try:
+        async with httpx.AsyncClient(
+            transport=transport, follow_redirects=False, trust_env=False, timeout=_DISCOVER_TIMEOUT
+        ) as client:
+            init = await client.post(
+                endpoint,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": _MCP_PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "clientInfo": {"name": "agentcraft", "version": "1.0"},
+                    },
+                },
+                headers=headers,
+            )
+            if init.status_code // 100 != 2:
+                raise _call_failed()
+            session_id = init.headers.get("mcp-session-id")
+            if session_id:
+                headers["mcp-session-id"] = session_id
+            await client.post(
+                endpoint,
+                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                headers=headers,
+            )
+            resp = await client.post(
+                endpoint,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": tool_name, "arguments": arguments},
+                },
+                headers=headers,
+            )
+            if resp.status_code // 100 != 2:
+                raise _call_failed()
+            total = 0
+            chunks: list[bytes] = []
+            async for chunk in resp.aiter_bytes():
+                total += len(chunk)
+                if total > _MAX_DISCOVER_RESPONSE_BYTES:
+                    raise _call_failed()
+                chunks.append(chunk)
+    except httpx.HTTPError:
+        raise _call_failed() from None
+    rpc = _parse_json_rpc_body(b"".join(chunks))
+    if rpc is None or "error" in rpc:
+        raise _call_failed()
+    result = rpc.get("result")
+    if not isinstance(result, dict):
+        raise _call_failed()
+    return {
+        "content": _truncate_result(mcp_sandbox._content_to_text(result.get("content"))),
+        "is_error": bool(result.get("isError")),
+    }
+
+
+def _truncate_result(content: str) -> str:
+    return mcp_sandbox._truncate(content, _CALL_RESULT_MAX_BYTES)
+
+
+async def call_user_mcp_tool(
+    row: UserMcpServer,
+    *,
+    tool_name: str,
+    arguments: dict,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> dict:
+    """按 transport 分派 tools/call（stdio 沙箱 / http 直连）；失败统一 502。"""
+    if row.transport_kind == "stdio":
+        settings = get_settings()
+        return await call_stdio_tool(
+            row,
+            tool_name=tool_name,
+            arguments=arguments,
+            timeout=settings.MCP_CALL_TIMEOUT_SECONDS,
+            max_result_bytes=settings.MCP_RESULT_MAX_BYTES,
+            settings=settings,
+        )
+    from backend.utils.net_guard import EgressBlockedError, assert_public_https
+
+    try:
+        assert_public_https(row.url)
+    except EgressBlockedError:
+        raise _call_failed() from None
+    return await _mcp_http_call_tool(
+        row.url, tool_name=tool_name, arguments=arguments, transport=transport
+    )
 
 
 # ---------------------------------------------------------------------------

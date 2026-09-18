@@ -38,7 +38,8 @@ from backend.errors import AgentCraftError, ErrorCode
 from backend.models.task import Task
 from backend.services import harness_service
 from backend.services.task_token import TaskTokenInvalid, decode_task_token
-from backend.v2.models import AuditLog, TaskRound, UserProvider
+from backend.v2 import mcp_service
+from backend.v2.models import AuditLog, TaskRound, UserMcpServer, UserMcpTool, UserProvider
 from backend.v2.models import Task as V2Task  # V2 任务行（owner_id 语义；V1 Task 属 sqlite 面）
 from backend.v2.provider_crypto import key_sealer
 from backend.v2.runtime import V2Runtime, get_optional_v2_runtime, get_v2_runtime, owner_session
@@ -343,6 +344,91 @@ async def query_task_state_tool(
         excluded = frozenset(str(k) for k in (perms.get("exclude") or ()))
         view = await get_task_view(db, owner_id=claims["owner_id"], task_id=claims["task_id"])
     return {"data": {"task": _strip_lease_fields(view, excluded)}}
+
+
+# ---------------------------------------------------------------------------
+# 用户 MCP 工具回调（Phase 10 M5）：/internal/mcp/call
+# ---------------------------------------------------------------------------
+
+
+class V2McpCallRequest(V2ToolRequestBase):
+    server_id: str
+    tool_name: str
+    arguments: dict
+
+
+def _mcp_revoked() -> AgentCraftError:
+    """kill switch 统一 403：server/tool 停用或快照未授予（零内部细节）。"""
+    return AgentCraftError(ErrorCode.TOOL_REVOKED, "MCP 工具已停用或未挂载", http_status=403)
+
+
+@router.post("/mcp/call")
+async def call_user_mcp_tool(
+    payload: V2McpCallRequest,
+    request: Request,
+    rt: V2Runtime = Depends(get_v2_runtime),
+) -> dict[str, object]:
+    """用户 MCP 工具回调（Phase 10 M5）——V2 语义重建的 /internal/mcp/call。
+
+    校验链（失败统一 401 同信封在前，403 kill switch 在后）：
+    decode + executor 登记表（``_require_v2_task_token``）→ epoch fence
+    （``_assert_round_live``）→ 任务快照能力上限（server_id 必须在该任务
+    mcp_servers 内）→ server 行 enabled（RLS owner 圈定）→ 发现缓存工具
+    enabled → 出 owner 事务后经 mcp_service 分派（stdio 一次性沙箱 / http
+    直连）。命令材料红线：容器调用不在 DB 事务内，材料零日志。
+    """
+    claims = _require_v2_task_token(request, payload, rt)
+    try:
+        server_uuid = _uuid.UUID(str(payload.server_id))
+    except (TypeError, ValueError) as exc:
+        raise _mcp_revoked() from exc
+    async with owner_session(rt, claims["owner_id"]) as db:
+        await _assert_round_live(db, claims)
+        snapshot = (
+            await db.execute(
+                select(V2Task.mcp_servers).where(V2Task.id == _uuid.UUID(claims["task_id"]))
+            )
+        ).scalar_one_or_none()
+        snapshot_ids = {
+            str(item.get("server_id")) for item in (snapshot or []) if isinstance(item, dict)
+        }
+        if str(payload.server_id) not in snapshot_ids:
+            logger.warning(
+                "用户 MCP 回调校验失败 layer=snapshot task_id=%s server_id=%s",
+                claims["task_id"],
+                payload.server_id,
+            )
+            raise _mcp_revoked()
+        server = (
+            await db.execute(select(UserMcpServer).where(UserMcpServer.id == server_uuid))
+        ).scalar_one_or_none()
+        if server is None or not server.enabled:
+            logger.warning(
+                "用户 MCP 回调校验失败 layer=server-revoked task_id=%s server_id=%s",
+                claims["task_id"],
+                payload.server_id,
+            )
+            raise _mcp_revoked()
+        tool = (
+            await db.execute(
+                select(UserMcpTool).where(
+                    UserMcpTool.server_id == server.id,
+                    UserMcpTool.tool_name == payload.tool_name,
+                )
+            )
+        ).scalar_one_or_none()
+        if tool is None or not tool.enabled:
+            logger.warning(
+                "用户 MCP 回调校验失败 layer=tool-revoked task_id=%s server_id=%s",
+                claims["task_id"],
+                payload.server_id,
+            )
+            raise _mcp_revoked()
+
+    result = await mcp_service.call_user_mcp_tool(
+        server, tool_name=payload.tool_name, arguments=payload.arguments
+    )
+    return {"data": result}
 
 
 # ---------------------------------------------------------------------------

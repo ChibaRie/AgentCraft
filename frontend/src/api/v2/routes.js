@@ -8,6 +8,7 @@ export const V2_AUTH = "/api/auth";
 export const V2_ACCOUNT = "/api/account";
 export const V2_USERS = "/api/users";
 export const V2_PROVIDERS = "/api/providers";
+export const V2_MCP_SERVERS = "/api/mcp/servers";
 
 // —— Phase 8 T0 一次性预扩全（T8-T12b 只导入，不修改本文件）：T14 cutover 已切契约路径。
 export const V2_TASKS = "/api/tasks";

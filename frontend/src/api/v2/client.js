@@ -32,6 +32,8 @@ export const V2_SESSION_EXPIRED_EVENT = "v2:session-expired";
 export const V2_IDEMPOTENCY_REQUIRED = [
   /^\/api\/providers$/,
   /^\/api\/providers\/[^/]+$/,
+  /^\/api\/mcp\/servers$/,
+  /^\/api\/mcp\/servers\/[^/]+$/,
   /^\/api\/auth\/sessions\/[^/]+$/,
   /^\/api\/auth\/invitations\/accept$/,
   /^\/api\/auth\/email-verification\/confirm$/,

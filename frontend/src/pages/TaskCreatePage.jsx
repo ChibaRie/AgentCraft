@@ -7,7 +7,7 @@ import {
   newIdempotencyKey,
   requestV2,
 } from "../api/v2/client.js";
-import { V2_DISCOVER, V2_PROVIDERS, V2_TASKS } from "../api/v2/routes.js";
+import { V2_DISCOVER, V2_MCP_SERVERS, V2_PROVIDERS, V2_TASKS } from "../api/v2/routes.js";
 
 /**
  * P09 任务创建页（Phase 8 T8 按 detached 模型全量重建；契约 = Sup §3/§4/§10.2）。
@@ -32,6 +32,7 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const MAX_FILES = 10;
 const MAX_SINGLE_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_MESSAGE_CHARS = 65536;
+const MAX_MCP_REFS = 3;
 const DISCOVER_PAGE_SIZE = 50;
 
 const FALLBACK_MESSAGE = "操作失败，请稍后重试";
@@ -201,6 +202,8 @@ export default function TaskCreatePage() {
   const [selected, setSelected] = useState(null); // {id, rid, name, description, ...}
   const [providers, setProviders] = useState([]);
   const [providerId, setProviderId] = useState(""); // "" = 默认（用户默认或系统）
+  const [mcpServers, setMcpServers] = useState([]);
+  const [mcpRefIds, setMcpRefIds] = useState([]); // 已选挂载（≤MAX_MCP_REFS）
   const [message, setMessage] = useState("");
   const [files, setFiles] = useState([]);
   const [submitState, setSubmitState] = useState("idle");
@@ -247,6 +250,40 @@ export default function TaskCreatePage() {
     };
   }, []);
 
+  // ②b 用户 MCP server 列表（Phase 10 M7/M8；失败不阻塞建任务）
+  useEffect(() => {
+    let cancelled = false;
+    requestV2(V2_MCP_SERVERS)
+      .then((result) => {
+        if (!cancelled) {
+          const enabled = (Array.isArray(result.data) ? result.data : []).filter(
+            (server) => server.enabled
+          );
+          setMcpServers(enabled);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setMcpServers([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function toggleMcpRef(serverId) {
+    setMcpRefIds((current) => {
+      if (current.includes(serverId)) {
+        return current.filter((id) => id !== serverId);
+      }
+      if (current.length >= MAX_MCP_REFS) {
+        return current;
+      }
+      return [...current, serverId];
+    });
+  }
+
   // 深链预选：?expert={id} 命中列表即选；未命中（分页外/草稿）→ discover 详情兜底
   useEffect(() => {
     if (experts === null || selected || !expertParam) {
@@ -283,6 +320,9 @@ export default function TaskCreatePage() {
     const body = { expert_revision_id: selected.rid, initial_message: message.trim() };
     if (providerId) {
       body.provider_id = providerId; // 缺省项（""）→ 键整体缺席
+    }
+    if (mcpRefIds.length > 0) {
+      body.mcp_refs = mcpRefIds.map((serverId) => ({ server_id: serverId }));
     }
     return requestV2(V2_TASKS, {
       method: "POST",
@@ -455,6 +495,32 @@ export default function TaskCreatePage() {
               <p className="field-note">
                 缺省使用你的默认 Provider；所选 Provider 在创建时冻结为任务快照，
                 之后修改配置不影响本任务。
+              </p>
+            </div>
+
+            <div className="field">
+              <label className="field-label" htmlFor="task-mcp">
+                挂载 MCP 服务器（可选，至多 {MAX_MCP_REFS} 个）
+              </label>
+              <div className="task-create-mcp-list" id="task-mcp">
+                {mcpServers.length === 0 ? (
+                  <p className="field-note">没有已启用的 MCP 服务器。</p>
+                ) : (
+                  mcpServers.map((server) => (
+                    <label key={server.id} className="task-create-mcp-item">
+                      <input
+                        type="checkbox"
+                        checked={mcpRefIds.includes(server.id)}
+                        onChange={() => toggleMcpRef(server.id)}
+                      />
+                      {server.name}
+                      <span className="provider-model-badge">{server.transport_kind}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+              <p className="field-note">
+                所选 MCP 服务器在建任务时冻结，运行期工具调用受 MCP 沙箱与 kill switch 治理。
               </p>
             </div>
 

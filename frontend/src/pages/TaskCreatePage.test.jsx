@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { V2ApiError, requestV2 } from "../api/v2/client.js";
-import { V2_DISCOVER, V2_PROVIDERS, V2_TASKS } from "../api/v2/routes.js";
+import { V2_DISCOVER, V2_MCP_SERVERS, V2_PROVIDERS, V2_TASKS } from "../api/v2/routes.js";
 import TaskCreatePage from "./TaskCreatePage.jsx";
 
 // 页面级网络面 mock：requestV2 换 vi.fn（V2ApiError/newIdempotencyKey/getCsrfToken 保留真实实现）
@@ -84,6 +84,7 @@ const COMMIT_OK = {
 // requestV2 路由键（method + path）
 const DISCOVER_KEY = `GET ${V2_DISCOVER}/experts?page=1&page_size=50`;
 const PROVIDERS_KEY = `GET ${V2_PROVIDERS}`;
+const MCP_SERVERS_KEY = `GET ${V2_MCP_SERVERS}`;
 const CREATE_KEY = `POST ${V2_TASKS}`;
 const QUOTA_PATH = `${V2_TASKS}/${TASK_ID}/quota`;
 const QUOTA_KEY = `GET ${QUOTA_PATH}`;
@@ -172,10 +173,11 @@ function renderPage() {
 }
 
 /** 挂载并等待专家/Provider 两个装载 GET 落定 */
-async function mountWith({ experts = [EXPERT_CARD], providers = [] } = {}) {
+async function mountWith({ experts = [EXPERT_CARD], providers = [], mcpServers = [] } = {}) {
   routeRequestV2({
     [DISCOVER_KEY]: okList(experts),
     [PROVIDERS_KEY]: ok(providers),
+    [MCP_SERVERS_KEY]: ok(mcpServers),
   });
   renderPage();
   await flush();
@@ -256,6 +258,31 @@ describe("① 专家选择与 revision id 透传", () => {
     fireEvent.click(button);
     await flush();
     expect(createCallOptions()).toBeNull();
+  });
+});
+
+describe("MCP 挂载选择", () => {
+  it("勾选已启用 MCP server → 创建 payload 含 mcp_refs", async () => {
+    const server = {
+      id: "m1000000-0000-0000-0000-00000000000f",
+      name: "Filesystem",
+      transport_kind: "stdio",
+      enabled: true,
+      has_command: true,
+    };
+    routeRequestV2({
+      [CREATE_KEY]: TASKS_CREATED,
+      [QUOTA_KEY]: QUOTA_VIEW,
+      [COMMIT_KEY]: COMMIT_OK,
+    });
+    await mountWith({ mcpServers: [server] });
+    await selectExpert();
+    typeMessage();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Filesystem/ }));
+    fireEvent.click(submitButton());
+    await flush();
+    const options = createCallOptions();
+    expect(options.body.mcp_refs).toEqual([{ server_id: server.id }]);
   });
 });
 
@@ -361,6 +388,7 @@ describe("④ 提交编排（create→files→commit）", () => {
     expect(timeline).toEqual([
       DISCOVER_KEY,
       PROVIDERS_KEY,
+      MCP_SERVERS_KEY,
       CREATE_KEY,
       QUOTA_KEY,
       `fetch ${FILES_PATH}`,
@@ -396,7 +424,7 @@ describe("④ 提交编排（create→files→commit）", () => {
     fireEvent.click(submitButton());
     await flush();
 
-    expect(timeline).toEqual([DISCOVER_KEY, PROVIDERS_KEY, CREATE_KEY, QUOTA_KEY, COMMIT_KEY]);
+    expect(timeline).toEqual([DISCOVER_KEY, PROVIDERS_KEY, MCP_SERVERS_KEY, CREATE_KEY, QUOTA_KEY, COMMIT_KEY]);
     const commitOptions = requestV2.mock.calls.find(([path]) => path === COMMIT_PATH)[1];
     expect(commitOptions.body).toEqual({ manifest: [] });
     expect(screen.getByText("任务页标记")).toBeTruthy();

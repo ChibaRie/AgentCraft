@@ -25,6 +25,7 @@ import PasswordResetRequestPage from "./pages/PasswordResetRequestPage.jsx";
 import ProfilePage from "./pages/ProfilePage.jsx";
 import SkillManagePage from "./pages/SkillManagePage.jsx";
 // 注意：此 import 用 ./ 形式——../ 形式在当前 rollup 解析器上对（且仅对）此文件失败
+import McpSettingsPage from "./pages/McpSettingsPage.jsx";
 import ProviderSettingsPage from "./pages/ProviderSettingsPage.jsx";
 import TaskChatPage from "./pages/TaskChatPage.jsx";
 import TaskCreatePage from "./pages/TaskCreatePage.jsx";
@@ -131,6 +132,14 @@ export default function AppRoutes() {
           element={
             <RequireAuth>
               <ProviderSettingsPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/settings/mcp"
+          element={
+            <RequireAuth>
+              <McpSettingsPage />
             </RequireAuth>
           }
         />

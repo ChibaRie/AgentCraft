@@ -9,7 +9,8 @@
 内部写 pg_trigger_depth()>1 / audit_logs INSERT 授 app；0010 未落地——T4 核验
 0001 owner_tables 循环已含 task_messages admin_read，无需迁移）
 + 0012（Provider 去目录化：base_url 列/唯一索引重建）
-+ 0013（Phase 10 M1 用户 MCP 面：user_mcp_servers / user_mcp_tools）。
++ 0013（Phase 10 M1 用户 MCP 面：user_mcp_servers / user_mcp_tools）
++ 0014（Phase 10 M4 任务快照挂载列：tasks.mcp_servers JSONB）。
 
 直接对 testcontainer PG 建一次性库跑 alembic 子进程（不经模板库克隆），
 验证 upgrade/downgrade/upgrade 往返幂等与种子/角色齐备。
@@ -80,7 +81,7 @@ def test_seeds_and_roles_present(pg_url_base):
                 ver = (
                     await conn.execute(text("SELECT version_num FROM alembic_version"))
                 ).scalar_one()
-                assert ver == "0013"
+                assert ver == "0014"
                 slots = (
                     await conn.execute(text("SELECT count(*) FROM platform_slots"))
                 ).scalar_one()

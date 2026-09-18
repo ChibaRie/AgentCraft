@@ -10,8 +10,9 @@
   http → USER_MCP_URL_<n> env、无 mcp-sandbox 镜像跳过路径）。
 """
 
+import asyncio
 import json
-import logging
+import os
 import sys
 import uuid as _uuid
 
@@ -21,7 +22,6 @@ from sqlalchemy import select, text
 
 from backend.v2 import mcp_service
 from backend.v2.models import UserMcpServer
-from backend.v2.provider_crypto import key_sealer
 from backend.v2.runtime import owner_session
 from backend.v2.task_executor import _mcp_http_env, _RoundContext
 from tests.v2_provider_helpers import seed_active_user, seed_provider, seed_task_for_provider
@@ -112,6 +112,47 @@ async def _stdio_row(runtime, uid: str, server_id: str) -> UserMcpServer:
         ).scalar_one()
 
 
+# 测试替身：把沙箱传输替换为宿主 subprocess（仅测试；生产恒走 mcp-sandbox
+# 容器）。协议面（SandboxStdioSession）仍为真件——用于 M3 握手/超时/超限回归。
+class _HostTransport:
+    def __init__(self, material):
+        self._argv = [material["command"], *material["args"]]
+        self._env = material["env"]
+        self._proc = None
+
+    async def start(self):
+        self._proc = await asyncio.create_subprocess_exec(
+            *self._argv,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env={**os.environ, **self._env},
+            limit=4 * 1024 * 1024,
+        )
+        return "host"
+
+    async def write_line(self, line):
+        self._proc.stdin.write((line + "\n").encode())
+        await self._proc.stdin.drain()
+
+    async def readline(self):
+        line = await self._proc.stdout.readline()
+        return line.decode().rstrip("\r\n") if line else None
+
+    async def close(self):
+        if self._proc is not None and self._proc.returncode is None:
+            self._proc.kill()
+            await self._proc.wait()
+
+
+def _host_session_factory(material, timeout, max_output_bytes):
+    from backend.v2.mcp_sandbox import SandboxStdioSession
+
+    return SandboxStdioSession(
+        _HostTransport(material), timeout=timeout, max_output_bytes=max_output_bytes
+    )
+
+
 # fake MCP stdio server（python -c 内联）：FAKE_MCP_MODE 控制行为分支
 # ok=正常回 tools / error=tools/list 回 JSON-RPC error / silent=tools/list 不回 /
 # flood=tools/list 夹带 4MB 填充（输出超限路径）。
@@ -169,7 +210,12 @@ async def test_discover_stdio_caches_tools(provider_env, pg):
         args=["-c", _FAKE_MCP_SERVER],
         env={"FAKE_MCP_MODE": "ok"},
     )
-    result = await mcp_service.discover_server(provider_env, user_id=str(uid), server_id=data["id"])
+    result = await mcp_service.discover_server(
+        provider_env,
+        user_id=str(uid),
+        server_id=data["id"],
+        stdio_session_factory=_host_session_factory,
+    )
     assert result["server_id"] == data["id"]
     assert result["transport_kind"] == "stdio"
     assert result["tools"] == [
@@ -256,7 +302,7 @@ async def test_discover_stdio_timeout_502(provider_env, pg):
     )
     row = await _stdio_row(provider_env, uid, data["id"])
     with pytest.raises(HTTPException) as exc_info:
-        await mcp_service.discover_stdio(row, timeout=0.5)
+        await mcp_service.discover_stdio(row, timeout=0.5, session_factory=_host_session_factory)
     assert exc_info.value.status_code == 502
     assert exc_info.value.detail["code"] == "MCP_DISCOVER_FAILED"
 
@@ -273,7 +319,9 @@ async def test_discover_stdio_output_cap_502(provider_env, pg):
     )
     row = await _stdio_row(provider_env, uid, data["id"])
     with pytest.raises(HTTPException) as exc_info:
-        await mcp_service.discover_stdio(row, max_output_bytes=64 * 1024)
+        await mcp_service.discover_stdio(
+            row, max_output_bytes=64 * 1024, session_factory=_host_session_factory
+        )
     assert exc_info.value.status_code == 502
     assert exc_info.value.detail["code"] == "MCP_DISCOVER_FAILED"
 
@@ -436,54 +484,6 @@ def _make_ctx() -> _RoundContext:
     )
 
 
-async def test_build_mcp_attachments_stdio_launch_envelope(pg, provider_env, monkeypatch):
-    """stdio → mcp-sandbox ContainerSpec：解密启动配置经 env 信封注入（只读数据面）。"""
-    from tests.v2_executor_helpers import _make_executor
-
-    executor, _streams, _transports = _make_executor(provider_env)
-    monkeypatch.setattr(executor._settings, "MCP_SANDBOX_IMAGE", "agentcraft-mcp-sandbox:test")
-    launch = {"command": "node", "args": ["server.js"], "env": {"MCP_TOKEN": "t"}}
-    ctx = _make_ctx()
-    snapshot = [
-        {
-            "server_id": str(_uuid.uuid4()),
-            "name": "fs",
-            "transport_kind": "stdio",
-            "launch": launch,
-        },
-        {
-            "server_id": str(_uuid.uuid4()),
-            "name": "web",
-            "transport_kind": "http",
-            "url": "https://mcp.example.com",
-        },
-    ]
-    specs = executor._build_mcp_attachments(ctx, snapshot)
-    assert len(specs) == 1  # http 形态不产生附件（URL 走任务容器 env）
-    spec = specs[0]
-    assert spec.image == "agentcraft-mcp-sandbox:test"
-    assert spec.network_name == executor._settings.PI_NETWORK_NAME
-    assert spec.mounts == []
-    assert spec.env["AGENTCRAFT_MCP_SERVER_ID"] == snapshot[0]["server_id"]
-    assert json.loads(spec.env["AGENTCRAFT_MCP_LAUNCH"]) == launch
-    assert spec.labels["agentcraft.task_id"] == ctx.task_id
-    assert spec.labels["agentcraft.mcp_server_id"] == snapshot[0]["server_id"]
-    # 明文命令材料不进容器 argv（env 数据面注入；零宿主文件落盘）
-    assert "node" not in json.dumps(spec.argv)
-
-
-async def test_build_mcp_attachments_no_image_skips(pg, provider_env):
-    """mcp-sandbox 镜像未配置（M5 前缺省空串）→ 对应条目 None（跳过不阻塞）。"""
-    from tests.v2_executor_helpers import _make_executor
-
-    executor, _streams, _transports = _make_executor(provider_env)
-    snapshot = [
-        {"server_id": str(_uuid.uuid4()), "name": "fs", "transport_kind": "stdio"},
-    ]
-    assert executor._build_mcp_attachments(_make_ctx(), snapshot) == [None]
-    assert executor._build_mcp_attachments(_make_ctx(), []) == []
-
-
 def test_mcp_http_env_injection():
     """http 形态 → 任务容器 env USER_MCP_URL_<n>（n 为 http server 0 起序号，
     stdio 条目不占号）。"""
@@ -518,32 +518,36 @@ async def test_build_container_spec_injects_mcp_env(pg, provider_env):
     assert spec.env["USER_MCP_URL_0"] == "https://a.example.com"
 
 
-async def test_round_with_mcp_snapshot_skips_mount_when_no_image(
-    pg, provider_env, tmp_path, caplog
-):
-    """生产路径：快照含 stdio server（真实解密富化）→ 无镜像 WARNING 跳过，
-    轮照常完成（不阻塞主流程）。"""
+async def test_round_with_mcp_snapshot_registers_tools(pg, provider_env, tmp_path, caplog):
+    """生产路径（M5 语义）：快照含 stdio server + 发现工具缓存 → 轮装配把工具
+    注册进 task.ts（user_ 前缀 + /internal/mcp/call），stdio 命令材料**不在轮
+    装配期解封**；轮照常完成（真实调用属 /internal/mcp/call 网关）。"""
     from backend.v2.task_dispatcher import _instance_id, dispatch_once
     from backend.v2.task_storage import TaskStorage
     from tests.v2_executor_helpers import _make_executor, _run_round, _scalar
 
     provider_env.storage = TaskStorage(tmp_path / "task-storage")
-    uid = str(await seed_task_user(pg, "m4-round@x.test"))
+    uid = str(await seed_task_user(pg, "m5-round@x.test"))
     pid = str(await seed_provider(pg, uid))
     tid = str(await seed_task_for_provider(pg, uid, pid, status="queued"))
-    # superuser 播种 enabled stdio server（真实信封密文）并冻结进任务快照
     sid = str(_uuid.uuid4())
-    sealed, dek = key_sealer().seal(
-        json.dumps({"command": "node", "args": ["x.js"], "env": {}}), provider_id=sid
-    )
+    # 密文为非法形态：若轮装配期解封会抛错；不解封则轮正常完成（语义钉）
     async with pg.engine.begin() as conn:
         await conn.execute(
             text(
                 "INSERT INTO user_mcp_servers (id, owner_id, name, transport_kind, "
                 "command_encrypted, command_dek_wrapped, enabled) "
-                "VALUES (:i, :u, 'fs', 'stdio', :c, :d, true)"
+                "VALUES (:i, :u, 'fs', 'stdio', 'not-a-real-ciphertext', 'x', true)"
             ),
-            {"i": _uuid.UUID(sid), "u": uid, "c": sealed, "d": dek},
+            {"i": _uuid.UUID(sid), "u": uid},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO user_mcp_tools (id, server_id, tool_name, name, description, "
+                "schema_json, enabled) VALUES (gen_random_uuid(), :s, 'echo', 'Echo', "
+                "'echo tool', '{\"type\": \"object\"}', true)"
+            ),
+            {"s": _uuid.UUID(sid)},
         )
         await conn.execute(
             text("UPDATE tasks SET mcp_servers = :m WHERE id = :t"),
@@ -554,8 +558,281 @@ async def test_round_with_mcp_snapshot_skips_mount_when_no_image(
         )
     executor, _streams, _transports = _make_executor(provider_env, instance_id=_instance_id())
     provider_env.executor = executor
-    with caplog.at_level(logging.WARNING, logger="agentcraft.task.executor"):
-        assert await dispatch_once(provider_env) == 1
-        assert await _run_round(provider_env, executor, tid) == 1
+    assert await dispatch_once(provider_env) == 1
+    assert await _run_round(provider_env, executor, tid) == 1
     assert await _scalar(pg, "SELECT status FROM tasks WHERE id = :t", t=tid) == "ready"
-    assert any("mcp-sandbox" in r.message for r in caplog.records)
+    src = (provider_env.storage.extension_root() / f"task-{tid}.ts").read_text(encoding="utf-8")
+    assert '"name": "user_echo"' in src
+    assert "/internal/mcp/call" in src
+
+
+# ---------------------------------------------------------------------------
+# M5：沙箱执行链（ContainerSpec 安全清单 + stdio 协议往返 + 网关校验）
+# ---------------------------------------------------------------------------
+
+
+def test_build_sandbox_spec_safety_envelope(monkeypatch):
+    """mcp-sandbox 容器规格安全清单：零挂载、非 root、internal 网络、argv 数组
+    直传（不经 shell）、启动材料只进 env。"""
+    from backend.v2 import mcp_sandbox
+
+    spec = mcp_sandbox.build_sandbox_spec(
+        image="agentcraft-mcp-sandbox:test",
+        network_name="agentcraft-internal",
+        launch={"command": "node", "args": ["s.js", "--x"], "env": {"TOKEN": "t"}},
+        task_id="t1",
+        server_id="abcdef01-0000-0000-0000-000000000000",
+    )
+    assert spec.image == "agentcraft-mcp-sandbox:test"
+    assert spec.mounts == []
+    assert spec.network_name == "agentcraft-internal"
+    assert spec.user == "mcpworker"
+    assert spec.labels["agentcraft.component"] == "mcp-sandbox"
+    assert spec.argv == ["node", "s.js", "--x"]
+    assert spec.env == {"TOKEN": "t"}
+    # 安全清单经共享 ContainerSpec 施加（只读 rootfs/cap_drop/no-new-privileges）
+    kwargs = spec.to_api_kwargs()["HostConfig"]
+    assert kwargs["ReadonlyRootfs"] is True
+    assert kwargs["CapDrop"] == ["ALL"]
+    assert "no-new-privileges" in kwargs["SecurityOpt"]
+    assert kwargs["Binds"] == []
+
+
+def test_validate_launch_rejects_bad_shapes():
+    from backend.v2 import mcp_sandbox
+
+    for bad in (
+        None,
+        {},
+        {"command": ""},
+        {"command": "node", "args": "notalist"},
+        {"command": "node", "env": {"K": 1}},
+    ):
+        with pytest.raises(mcp_sandbox.McpSandboxError):
+            mcp_sandbox.validate_launch(bad)
+
+
+class _FakeSandboxTransport:
+    """脚本化沙箱传输：按写入请求依序回包（模拟容器内 MCP server）。"""
+
+    def __init__(self, responses):
+        self._responses = responses
+        self.written: list[dict] = []
+        self.closed = False
+        self.started = False
+
+    async def start(self):
+        self.started = True
+        return "cid"
+
+    async def write_line(self, line):
+        self.written.append(json.loads(line))
+
+    async def readline(self):
+        if not self._responses:
+            return None
+        return json.dumps(self._responses.pop(0))
+
+    async def close(self):
+        self.closed = True
+
+
+async def test_sandbox_session_handshake_and_call():
+    """stdio 会话：initialize → initialized 通知 → tools/call，content 归一 +
+    结果形态（is_error）——不依赖 Docker 的协议层直测。"""
+    from backend.v2.mcp_sandbox import SandboxStdioSession
+
+    transport = _FakeSandboxTransport(
+        [
+            {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "x"}},
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"content": [{"type": "text", "text": "hello"}]},
+            },
+        ]
+    )
+    async with SandboxStdioSession(transport, timeout=5.0) as session:
+        out = await session.call_tool("echo", {"x": 1}, max_result_bytes=1024)
+    assert out == {"content": "hello", "is_error": False}
+    methods = [m.get("method") for m in transport.written]
+    assert methods[0] == "initialize"
+    assert methods[1] == "notifications/initialized"
+    assert methods[2] == "tools/call"
+    assert transport.written[2]["params"] == {"name": "echo", "arguments": {"x": 1}}
+    assert transport.closed
+
+
+async def test_sandbox_session_list_tools():
+    from backend.v2.mcp_sandbox import SandboxStdioSession
+
+    transport = _FakeSandboxTransport(
+        [
+            {"jsonrpc": "2.0", "id": 1, "result": {}},
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]},
+            },
+        ]
+    )
+    async with SandboxStdioSession(transport, timeout=5.0) as session:
+        tools = await session.list_tools()
+    assert tools == [{"name": "echo", "inputSchema": {"type": "object"}}]
+
+
+async def test_sandbox_session_error_raises():
+    from backend.v2.mcp_sandbox import McpSandboxError, SandboxStdioSession
+
+    transport = _FakeSandboxTransport(
+        [
+            {"jsonrpc": "2.0", "id": 1, "result": {}},
+            {"jsonrpc": "2.0", "id": 2, "error": {"message": "boom"}},
+        ]
+    )
+    with pytest.raises(McpSandboxError):
+        async with SandboxStdioSession(transport, timeout=5.0) as session:
+            await session.call_tool("echo", {}, max_result_bytes=1024)
+
+
+def test_truncate_result_bytes():
+    from backend.v2.mcp_sandbox import _truncate
+
+    assert _truncate("abc", 100) == "abc"
+    out = _truncate("x" * 1000, 50)
+    assert len(out.encode()) <= 50
+    assert out.endswith("…（结果超长已截断）")
+
+
+# ---------------------------------------------------------------------------
+# M6：扩展生成器用户 MCP 注册块
+# ---------------------------------------------------------------------------
+
+
+def test_extension_generator_user_mcp_tools(tmp_path):
+    """用户 MCP 工具注册块：user_ 前缀 + /internal/mcp/call + serverId/toolName。"""
+    from backend.engine.extension_generator import ExtensionGenerator
+
+    src = (
+        ExtensionGenerator(tmp_path)
+        .generate(
+            "task-1",
+            [("check_code_style", "1")],
+            "openai",
+            user_mcp_tools=[
+                {
+                    "server_id": "11111111-1111-1111-1111-111111111111",
+                    "tool_name": "echo",
+                    "label": "Echo",
+                    "description": "echo tool",
+                    "schema": {"type": "object"},
+                }
+            ],
+        )
+        .read_text(encoding="utf-8")
+    )
+    assert "USER_MCP_TOOLS" in src
+    assert "/internal/mcp/call" in src
+    assert '"name": "user_echo"' in src
+    assert '"serverId": "11111111-1111-1111-1111-111111111111"' in src
+    assert '"toolName": "echo"' in src
+
+
+def test_extension_generator_no_user_tools_empty(tmp_path):
+    from backend.engine.extension_generator import ExtensionGenerator
+
+    src = ExtensionGenerator(tmp_path).generate("t", [], "openai").read_text(encoding="utf-8")
+    assert "USER_MCP_TOOLS: Array" in src  # 常量恒存在但空数组
+    assert '"name": "user_' not in src
+
+
+# ---------------------------------------------------------------------------
+# M7：kill switch 任务侧联动（server 停用/删除 → 挂载任务 aborted）
+# ---------------------------------------------------------------------------
+
+
+async def test_disable_server_aborts_mounted_queued_task(pg, api_env):
+    """停用 server（PUT enabled=false）→ 快照挂载它的 queued 任务终结为
+    aborted(tool_revoked)（M7 kill switch；响应形状保持 M2 不变，断言落库）。"""
+    from tests.v2_executor_helpers import _make_executor
+
+    _, pid, rid = await seed_login_domain(pg, "m7-disable@example.com")
+    client = await login_client(pg, "m7-disable@example.com")
+    srv = await _create_server(client, idem="idem-m7-1")
+    created = await _create_task(
+        client, rid, pid, mcp_refs=[{"server_id": srv["id"]}], idem="idem-m7-t1"
+    )
+    assert created.status_code == 201, created.text
+    tid = created.json()["data"]["task"]["id"]
+    commit = await client.post(
+        f"/api/tasks/{tid}/input/commit",
+        json={"manifest": []},
+        headers={"Idempotency-Key": "idem-m7-commit"},
+    )
+    assert commit.status_code == 200, commit.text
+
+    executor, _streams, _transports = _make_executor(api_env, instance_id="m7-test")
+    api_env.executor = executor
+    resp = await client.put(
+        f"{_CREATE}/{srv['id']}",
+        json={"enabled": False},
+        headers={"Idempotency-Key": "idem-m7-put"},
+    )
+    assert resp.status_code == 200, resp.text
+    # M2 响应形状不变（无 termination 键）；效果落库
+    assert "termination" not in resp.json()["data"]
+    async with pg.engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, abort_reason FROM tasks WHERE id = :t"),
+                {"t": _uuid.UUID(tid)},
+            )
+        ).first()
+    assert row is not None
+    assert row[0] == "aborted" and row[1] == "tool_revoked"
+
+
+async def test_delete_server_aborts_mounted_running_task(pg, api_env, tmp_path):
+    """删除 server → 快照挂载它的 running 任务经 bounded-stop 终结
+    aborted(tool_revoked)（executor 在场时收口运行轮）。"""
+    from tests.v2_executor_helpers import _make_executor, _scalar
+    from tests.v2_task_helpers import seed_running_task
+
+    uid, pid, _rid = await seed_login_domain(pg, "m7-delete@example.com")
+    client = await login_client(pg, "m7-delete@example.com")
+    srv = await _create_server(client, idem="idem-m7-2")
+    tid = await seed_running_task(pg, uid, pid)
+    async with pg.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE tasks SET mcp_servers = :m WHERE id = :t"),
+            {
+                "m": json.dumps(
+                    [{"server_id": srv["id"], "name": "My MCP", "transport_kind": "stdio"}]
+                ),
+                "t": _uuid.UUID(tid),
+            },
+        )
+    executor, _streams, _transports = _make_executor(api_env, instance_id="exec-test")
+    api_env.executor = executor
+    resp = await client.delete(f"{_CREATE}/{srv['id']}", headers={"Idempotency-Key": "idem-m7-del"})
+    assert resp.status_code == 200, resp.text
+    assert "termination" not in resp.json()["data"]  # M2 响应形状不变
+    assert await _scalar(pg, "SELECT status FROM tasks WHERE id = :t", t=str(tid)) == "aborted"
+
+
+@pytest.fixture(autouse=True)
+def _stdio_sandbox_host_stub(monkeypatch):
+    """测试隔离：stdio 发现/调用的容器传输替换为宿主 subprocess 替身。
+
+    真实容器实体化与安全清单由 test_v2_mcp_tasks 的沙箱规格直测覆盖；
+    无 Docker daemon 的 CI 上协议面（SandboxStdioSession）仍为真件。
+    """
+    from backend.v2 import mcp_sandbox as svc_sandbox
+
+    async def fake_open_stdio_session(**kwargs):
+        return _host_session_factory(
+            kwargs["launch"], kwargs["timeout"], kwargs.get("max_output_bytes", 2 * 1024 * 1024)
+        )
+
+    monkeypatch.setattr(svc_sandbox, "open_stdio_session", fake_open_stdio_session)
+    yield

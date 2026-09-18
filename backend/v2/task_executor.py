@@ -18,10 +18,11 @@ dispatch（T5）领取轮并写 lease 三元组后经 ``notify`` 唤醒本执行
 - **事实面/实时面分离**：事实帧（assistant/tool 消息）落 task_messages +
   message_saved 事件（围栏内）；全帧（瞬态+事实+done）publish 到
   TaskStreamRegistry——无订阅者零开销照跑，落库序列是唯一权威。
-- **Phase 10 M4 用户 MCP 挂载**：任务快照 mcp_servers（创建事务冻结三键描述符）
-  → 行解引用 + stdio 解封富化（缺失/停用静默剔除）→ stdio 附件装配（解密启动
-  配置经 env 数据面注入 mcp-sandbox 形态；镜像未配置 WARNING 跳过，容器实体化
-  属 M5）/ http 形态 USER_MCP_URL_<n> env 注入主任务容器（grant 语义不变）。
+- **Phase 10 M4/M5 用户 MCP 挂载**：任务快照 mcp_servers（创建事务冻结三键
+  描述符）→ 行解引用 + 发现工具缓存（缺失/停用静默剔除）→ 扩展生成器注册
+  ``user_`` 前缀工具块（全部经 /internal/mcp/call 治理链）；http 形态
+  USER_MCP_URL_<n> env 注入主任务容器。stdio 命令材料**不在轮装配期解封**——
+  单次调用时由网关按 server_id 解引用并在一次性 mcp-sandbox 容器内执行。
 - **settle（Sup §9.7.3）**：agent_settled 权威 → 轮 settled（围栏）→
   message_saved 补齐 → KEY_VERSION_REVOKED 比对（provider_key_version 失配或
   provider 撤销/目录停用 → 任务 aborted(provider_key_revoked)，轮照常 settled）
@@ -83,8 +84,8 @@ from backend.v2.models import (
     Task,
     TaskMessage,
     UserMcpServer,
+    UserMcpTool,
 )
-from backend.v2.provider_crypto import key_sealer
 from backend.v2.provider_service import resolve_task_provider
 from backend.v2.runtime import V2Runtime, owner_session, v2_runtime_from_settings
 from backend.v2.task_release import release_task_holdings
@@ -118,9 +119,6 @@ _ROLE_LABELS = {"user": "用户", "assistant": "助手", "tool": "工具"}
 # stdio 启动配置经 env 数据面注入沙箱（解密明文仅协程内存存活、零宿主文件
 # 落盘；容器实体化与回调凭据属 M5——grant 语义不变）；http 上游 URL 经
 # USER_MCP_URL_<n> 注入主任务容器 env。
-_MCP_LAUNCH_ENV = "AGENTCRAFT_MCP_LAUNCH"
-_MCP_SERVER_ID_ENV = "AGENTCRAFT_MCP_SERVER_ID"
-
 # ---------------------------------------------------------------------------
 # 围栏/续约 SQL（PG；执行器写侧全部携带 lease 谓词——D16 写侧围栏）
 # ---------------------------------------------------------------------------
@@ -401,6 +399,41 @@ def _mcp_http_env(entries: list[dict]) -> dict[str, str]:
     return env
 
 
+def _user_mcp_tool_descriptors(entries: list[dict]) -> list[dict]:
+    """执行期富化条目 → 生成器用户 MCP 工具描述符（纯函数）：每 server 的
+    ``tools`` 缓存（tool_name/name/description/schema_json）展平为注册块入参。
+
+    server_id/tool_name 用于回调定位；schema 缺省给空 object。条目形态异常
+    一律跳过（发现缓存是外部数据，防御性收口）。"""
+    out: list[dict] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        server_id = entry.get("server_id")
+        if not isinstance(server_id, str) or not server_id:
+            continue
+        tools = entry.get("tools")
+        if not isinstance(tools, list):
+            continue
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            tool_name = tool.get("tool_name")
+            if not isinstance(tool_name, str) or not tool_name:
+                continue
+            schema = tool.get("schema_json")
+            out.append(
+                {
+                    "server_id": server_id,
+                    "tool_name": tool_name,
+                    "label": tool.get("name") or tool_name,
+                    "description": tool.get("description") or "",
+                    "schema": schema if isinstance(schema, dict) else {"type": "object"},
+                }
+            )
+    return out
+
+
 def _build_outgoing_message(history: list[TaskMessage], current: TaskMessage) -> str:
     """组装本轮发出的消息（V1 重播种形态移植，§7.6）：最近 40 条历史嵌入本条
     消息开头，绝不单独发历史（防幻影轮）；无历史则原样发送。"""
@@ -672,6 +705,7 @@ class RoundExecutor:
                 snapshot["tools"],
                 _V2_PROVIDER,
                 model_input=self._model_input(catalog, resolved.model_id),
+                user_mcp_tools=_user_mcp_tool_descriptors(mcp_entries),
             )
             message = _build_outgoing_message(history, current)
             spec = self._build_container_spec(
@@ -682,10 +716,6 @@ class RoundExecutor:
                 model_id=resolved.model_id,
                 mcp_env=_mcp_http_env(mcp_entries),
             )
-            # Phase 10 M4：用户 MCP 附件装配（stdio → mcp-sandbox 形态；容器
-            # 实体化随镜像开关/M5 接线，未配置时 WARNING 跳过不阻塞主流程）
-            attachments = self._build_mcp_attachments(ctx, mcp_entries)
-            await self._mount_mcp_attachments(ctx, attachments)
             await self.ensure_proxy(_V2_PROVIDER)
             transport, removal = await self._make_runtime(spec, extension_path)
             self._removals[ctx.task_id] = removal
@@ -818,10 +848,14 @@ class RoundExecutor:
         self, db: AsyncSession, ctx: _RoundContext, snapshot: list[dict]
     ) -> list[dict]:
         """挂载快照执行期富化（owner 事务内）：冻结三键 → user_mcp_servers 行
-        解引用。行缺失（任务期被删）/已停用（kill switch 任务侧联动属 M7）→
-        WARNING 静默剔除（build_task_snapshot 缺失 skill revision 同型）；
-        stdio 条目解封启动配置（AAD 绑定 server id，明文仅协程内存存活），
-        http 条目附 url（非机密，行内明文）。"""
+        解引用 + 发现工具缓存（enabled）。
+
+        行缺失（任务期被删）/已停用 → WARNING 静默剔除（build_task_snapshot
+        缺失 skill revision 同型；kill switch 任务侧联动属 M7）。stdio 命令
+        材料**不在此解封**——单次调用时由 /internal/mcp/call 网关按 server_id
+        解引用并在一次性 mcp-sandbox 容器内执行（Phase 10 M5）；本函数只产出
+        注册块所需的非机密描述符（name/tools 缓存）与 http URL。
+        """
         entries: list[dict] = []
         for item in snapshot:
             if not isinstance(item, dict):
@@ -843,91 +877,35 @@ class RoundExecutor:
                     sid,
                 )
                 continue
+            tool_rows = (
+                (
+                    await db.execute(
+                        select(UserMcpTool)
+                        .where(UserMcpTool.server_id == row.id, UserMcpTool.enabled.is_(True))
+                        .order_by(UserMcpTool.tool_name.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
             entry = {
                 "server_id": str(row.id),
                 "name": row.name,
                 "transport_kind": row.transport_kind,
+                "tools": [
+                    {
+                        "tool_name": t.tool_name,
+                        "name": t.name,
+                        "description": t.description,
+                        "schema_json": t.schema_json,
+                    }
+                    for t in tool_rows
+                ],
             }
             if row.transport_kind == "http":
                 entry["url"] = row.url
-            else:
-                plaintext = key_sealer().open(
-                    row.command_encrypted, row.command_dek_wrapped, provider_id=str(row.id)
-                )
-                material = json.loads(plaintext)
-                entry["launch"] = {
-                    "command": material.get("command"),
-                    "args": material.get("args") or [],
-                    "env": material.get("env") or {},
-                }
             entries.append(entry)
         return entries
-
-    def _build_mcp_attachments(
-        self, ctx: _RoundContext, snapshot: list[dict]
-    ) -> list[ContainerSpec | None]:
-        """mcp-sandbox 附件装配纯函数（测试直测）：任务快照 mcp_servers（执行期
-        富化形态）→ 每 stdio server 一个 ContainerSpec 或 None。
-
-        入参条目契约：冻结三键 {server_id, name, transport_kind}；stdio 条目由
-        ``_resolve_mcp_entries`` 富化 launch={command,args,env}（解密明文仅协程
-        内存存活）；http 条目不产生附件（URL 走主任务容器 env 注入 _mcp_http_env）。
-
-        stdio 启动配置经 env 数据面只读注入（零宿主文件落盘、不经 shell 拼接）；
-        沙箱镜像未配置（``MCP_SANDBOX_IMAGE`` 空，M5 交付前缺省）→ 对应条目
-        None（调用方 WARNING 跳过）。容器 argv 留空 = 依镜像 ENTRYPOINT，真实
-        入口与回调凭据随 M5 定形（grant 语义不变）。"""
-        image = self._settings.MCP_SANDBOX_IMAGE
-        specs: list[ContainerSpec | None] = []
-        for entry in snapshot:
-            if not isinstance(entry, dict) or entry.get("transport_kind") != "stdio":
-                continue
-            if not image:
-                specs.append(None)
-                continue
-            server_id = str(entry.get("server_id") or "")
-            launch = entry.get("launch") if isinstance(entry.get("launch"), dict) else {}
-            specs.append(
-                ContainerSpec(
-                    container_name=f"mcp-sandbox-{ctx.task_id}-{len(specs) + 1}",
-                    image=image,
-                    argv=[],
-                    env={
-                        _MCP_SERVER_ID_ENV: server_id,
-                        _MCP_LAUNCH_ENV: json.dumps(launch, ensure_ascii=False),
-                    },
-                    mounts=[],
-                    network_name=self._settings.PI_NETWORK_NAME,
-                    labels={
-                        "agentcraft.task_id": str(ctx.task_id),
-                        "agentcraft.mcp_server_id": server_id,
-                    },
-                    workdir="/tmp",
-                )
-            )
-        return specs
-
-    async def _mount_mcp_attachments(
-        self, ctx: _RoundContext, attachments: list[ContainerSpec | None]
-    ) -> None:
-        """M4 装配收口（容器实体化开关）：None 条目（镜像未配置）→ WARNING 跳过
-        不阻塞主流程；已配置条目的沙箱容器创建同样留 M5 接线（当前 WARNING 跳过
-        ——快照/校验/装配函数全交付，实体化归 M5）。"""
-        for spec in attachments:
-            if spec is None:
-                logger.warning(
-                    "Task %s: mcp-sandbox 镜像未配置，跳过用户 MCP stdio 挂载"
-                    "（Phase 10 M5 前不阻塞）：round=%s",
-                    ctx.task_id,
-                    ctx.round_id,
-                )
-            else:
-                logger.warning(
-                    "Task %s: 用户 MCP 容器实体化属 Phase 10 M5，本期跳过：round=%s container=%s",
-                    ctx.task_id,
-                    ctx.round_id,
-                    spec.container_name,
-                )
 
     # -- 事件泵 ---------------------------------------------------------------
 
@@ -1450,19 +1428,71 @@ async def _terminate_one(
     return {"flipped": True, "round_cancelled": [str(r) for r in cancelled_rounds]}
 
 
+_MCP_TERMINATOR_CANDIDATES_SQL = text(
+    "SELECT t.id, t.owner_id, t.status FROM tasks t "
+    "WHERE t.status IN ('queued','running') "
+    "AND t.mcp_servers @> CAST(:frag AS jsonb) ORDER BY t.created_at, t.id"
+)
+
+
+async def _terminate_candidates(
+    runtime: V2Runtime,
+    executor: RoundExecutor,
+    candidates: list,
+    *,
+    stop_timeout: float,
+) -> dict:
+    """逐候选任务两段式终结（build_terminator / build_mcp_server_terminator
+    共用）：running 先 bounded stop → owner_session 单事务 fresh 翻转
+    aborted(tool_revoked) + 活跃轮收口 + 对称释放 → post-commit 推帧。回执
+    ``{stopped, aborted_task_ids, receipts}``。"""
+    stopped = 0
+    aborted_task_ids: list[str] = []
+    receipts: list[dict] = []
+    for task_id, owner_id, snapshot_status in candidates:
+        task_id = str(task_id)
+        receipt: dict = {
+            "task_id": task_id,
+            "status_before": str(snapshot_status),
+            "flipped": False,
+        }
+        if snapshot_status == "running":
+            async with runtime.admin_factory() as session:
+                row = (
+                    await session.execute(_TERMINATOR_ACTIVE_ROUND_SQL, {"tid": task_id})
+                ).first()
+            if row is not None:
+                stop = await executor.stop_round(
+                    str(row.id), reason="tool_revoked", timeout=stop_timeout
+                )
+                receipt["stop"] = stop
+                # T7 显式字段读取（Phase 7 §5.6 转办「鸭子型判别/stop.get None
+                # 防御局部化」）：stop_round 回执恒含 stopped 键（本模块冻结形状
+                # {round_id, mode, stopped}）——.get 的 None 兜底会把「回执缺键」
+                # 静默当 False 吞掉，收敛为下标读取让契约破坏在此 fast-fail
+                if stop["stopped"]:
+                    stopped += 1
+        frames: list[dict] = []
+        async with owner_session(runtime, str(owner_id)) as db:
+            receipt.update(
+                await _terminate_one(db, task_id=task_id, owner_id=str(owner_id), frames=frames)
+            )
+        # post-commit 推帧（Phase 8 T5，§9.10.10；注册表缺位 no-op）
+        publish_runtime_frames(runtime, task_id, *frames)
+        if receipt["flipped"]:
+            aborted_task_ids.append(task_id)
+        receipts.append(receipt)
+    return {"stopped": stopped, "aborted_task_ids": aborted_task_ids, "receipts": receipts}
+
+
 def build_terminator(
     runtime: V2Runtime, executor: RoundExecutor, *, stop_timeout: float = 5.0
 ) -> KillTerminator:
     """D4 kill switch 任务侧联动真件（app-role 两段式，不加 tasks admin 写
     policy）：admin 只读圈定（revision_tools 反查 → queued/running 任务）→
-    running 先 executor.stop_round（bounded，进程内原语）→ 逐任务 owner_session
-    单事务 fresh 分支翻转 aborted(tool_revoked) + 活跃轮收口 + 对称释放。
+    逐候选两段式终结（``_terminate_candidates``），reason 复用 ``tool_revoked``。
 
-    回执 ``{stopped, aborted_task_ids, receipts}``；already_in_state 重入幂等
-    （终结类条件 UPDATE 同态=成功不抛——与 set_tool_enabled 短路同语义）。
-    queued→aborted 的 pending round 条件 UPDATE→cancelled 与 _terminalize_queued
-    同型。stop_timeout 为冻结接口的加法扩展 keyword（缺省 5s，测试注入缩短值）。
-    Phase 6 无生产调用点（kill_tool terminator 注入位 Phase 7 接线，T9 注记）。
+    stop_timeout 为冻结接口的加法扩展 keyword（缺省 5s，测试注入缩短值）。
     """
 
     async def terminate(tool_id: str, version: str) -> dict:
@@ -1472,43 +1502,31 @@ def build_terminator(
                     _TERMINATOR_CANDIDATES_SQL, {"tool_id": tool_id, "version": version}
                 )
             ).all()
-        stopped = 0
-        aborted_task_ids: list[str] = []
-        receipts: list[dict] = []
-        for task_id, owner_id, snapshot_status in candidates:
-            task_id = str(task_id)
-            receipt: dict = {
-                "task_id": task_id,
-                "status_before": str(snapshot_status),
-                "flipped": False,
-            }
-            if snapshot_status == "running":
-                async with runtime.admin_factory() as session:
-                    row = (
-                        await session.execute(_TERMINATOR_ACTIVE_ROUND_SQL, {"tid": task_id})
-                    ).first()
-                if row is not None:
-                    stop = await executor.stop_round(
-                        str(row.id), reason="tool_revoked", timeout=stop_timeout
-                    )
-                    receipt["stop"] = stop
-                    # T7 显式字段读取（Phase 7 §5.6 转办「鸭子型判别/stop.get None
-                    # 防御局部化」）：stop_round 回执恒含 stopped 键（本模块冻结形状
-                    # {round_id, mode, stopped}）——.get 的 None 兜底会把「回执缺键」
-                    # 静默当 False 吞掉，收敛为下标读取让契约破坏在此 fast-fail
-                    if stop["stopped"]:
-                        stopped += 1
-            frames: list[dict] = []
-            async with owner_session(runtime, str(owner_id)) as db:
-                receipt.update(
-                    await _terminate_one(db, task_id=task_id, owner_id=str(owner_id), frames=frames)
-                )
-            # post-commit 推帧（Phase 8 T5，§9.10.10；注册表缺位 no-op）
-            publish_runtime_frames(runtime, task_id, *frames)
-            if receipt["flipped"]:
-                aborted_task_ids.append(task_id)
-            receipts.append(receipt)
-        return {"stopped": stopped, "aborted_task_ids": aborted_task_ids, "receipts": receipts}
+        return await _terminate_candidates(runtime, executor, candidates, stop_timeout=stop_timeout)
+
+    return terminate
+
+
+def build_mcp_server_terminator(
+    runtime: V2Runtime, executor: RoundExecutor | None, *, stop_timeout: float = 5.0
+) -> Callable[[str], Awaitable[dict]]:
+    """用户 MCP server kill switch 任务侧联动（Phase 10 M7）。
+
+    server 停用/删除后，圈定任务快照挂载了该 server 的 queued/running 任务
+    （``tasks.mcp_servers @> [{"server_id": sid}]``）→ 复用两段式终结
+    （running 先 bounded stop，任务 aborted(tool_revoked)）。executor None
+    （未接线）→ 只圈定翻转不联动停轮（与 build_terminator 同降级）。
+    """
+
+    async def terminate(server_id: str) -> dict:
+        frag = json.dumps([{"server_id": str(server_id)}])
+        async with runtime.admin_factory() as session:
+            candidates = (
+                await session.execute(_MCP_TERMINATOR_CANDIDATES_SQL, {"frag": frag})
+            ).all()
+        if executor is None:
+            return {"stopped": 0, "aborted_task_ids": [], "receipts": [], "skipped": True}
+        return await _terminate_candidates(runtime, executor, candidates, stop_timeout=stop_timeout)
 
     return terminate
 

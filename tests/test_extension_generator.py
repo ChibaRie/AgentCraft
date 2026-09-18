@@ -17,8 +17,10 @@ def test_harness_tool_registered_via_constant_table(tmp_path):
     src = path.read_text(encoding="utf-8")
     assert '"check_code_style"' in src
     assert "/internal/harness/check-code-style" in src
-    assert "server_id" not in src  # V1 MCP 语义消亡
-    assert "/internal/mcp/call" not in src  # 回调端点已删（T4 契约）
+    # Phase 10 M5/M6 受控逆转（2026-09-17）：/internal/mcp/call 与 user MCP
+    # 注册块重建——但仅经 USER_MCP_TOOLS（快照驱动），平台工具块零 server_id
+    assert "/internal/mcp/call" in src
+    assert "USER_MCP_TOOLS" in src
     assert "pi.registerProvider" in src  # provider 块保留
 
 

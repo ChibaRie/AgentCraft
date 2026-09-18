@@ -45,10 +45,12 @@ class Settings(BaseSettings):
     PI_IDLE_TIMEOUT_MINUTES: int = 10
     PI_WORKER_IMAGE: str = "agentcraft-pi-worker:0.84.3"
     PROVIDER_PROXY_IMAGE: str = "agentcraft-provider-proxy:latest"
-    # Phase 10 M4/M5：用户 MCP stdio 沙箱镜像（mcp-sandbox）。缺省空串 = 镜像
-    # 未部署 → RoundExecutor 跳过用户 MCP 容器装配并 WARNING（M5 交付镜像前
-    # 不阻塞主流程；容器实体化开关随 M5 接线）
-    MCP_SANDBOX_IMAGE: str = ""
+    # Phase 10 M5：用户 MCP stdio 沙箱镜像（mcp-sandbox）。发现/调用经一次性
+    # 容器执行；镜像未构建时发现/调用统一 502 MCP_DISCOVER_FAILED / MCP_CALL_FAILED
+    MCP_SANDBOX_IMAGE: str = "agentcraft-mcp-sandbox:latest"
+    MCP_DISCOVER_TIMEOUT_SECONDS: float = 10.0  # 单次发现握手超时（M5）
+    MCP_CALL_TIMEOUT_SECONDS: float = 30.0  # 单次 tools/call 超时（Sup §6.8）
+    MCP_RESULT_MAX_BYTES: int = 102400  # 工具结果截断上限（100KB，Sup §6.8）
     PI_RUNTIME: str = "auto"  # auto | docker | cli | subprocess
     PI_ROUND_TIMEOUT_SECONDS: int = 300
     PI_TASK_MAX_LIFETIME_MINUTES: int = 30  # 任务总超时（§7.8.1），超阈 abort+failed

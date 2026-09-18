@@ -1,0 +1,24 @@
+# MCP stdio 沙箱镜像（Phase 10 M5，从 Phase 5 删除前的 v0.4.0 形态恢复改造）。
+#
+# 用途：用户注册的 stdio MCP server 命令只在本镜像的一次性容器内执行——
+# 控制面每次 tools/list 或 tools/call 经 `docker run`（ContainerSpec.workdir=
+# /workspace, user=mcpworker, mounts=[]）拉起一个 --rm 容器，握手完成后销毁。
+# 宿主零挂载；只读 rootfs、cap_drop=ALL、no-new-privileges、仅 internal 网络
+# 由运行时（ContainerSpec 安全清单）施加，本镜像不再自行声明。
+#
+# 预装常用 MCP server（filesystem）便于开箱即用；用户命令经容器 argv 直传，
+# 不经 shell 拼接。受限网络可用 --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+FROM node:22-slim
+
+ARG NPM_REGISTRY=https://registry.npmjs.org
+
+RUN npm config set registry ${NPM_REGISTRY} && \
+    npm install -g @modelcontextprotocol/server-filesystem && \
+    useradd --create-home --shell /bin/bash mcpworker && \
+    mkdir -p /workspace && chown mcpworker:mcpworker /workspace
+
+USER mcpworker
+WORKDIR /workspace
+
+# 命令由控制面经容器 argv 追加（ContainerSpec.argv），无固定入口
+CMD ["sleep", "infinity"]
