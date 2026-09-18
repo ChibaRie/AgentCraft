@@ -83,11 +83,13 @@ class UserProvider(TimestampMixin, Base):
             unique=True,
             postgresql_where=text("is_default = true"),
         ),
-        # 0004：活跃条目部分唯一索引（裁决 D4）——模型/迁移双保险
+        # 0012 去目录化后重建：活跃条目部分唯一索引
+        # (user_id, base_url, model_id) WHERE status='active'，索引名 uq_..._v2
+        # 与迁移 0012 一字不差（0004 旧索引名/列已被 0012 drop+recreate）
         Index(
-            "uq_user_providers_active_entry",
+            "uq_user_providers_active_entry_v2",
             "user_id",
-            "catalog_id",
+            "base_url",
             "model_id",
             unique=True,
             postgresql_where=text("status = 'active'"),

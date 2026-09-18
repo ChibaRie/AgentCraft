@@ -11,8 +11,10 @@
     SET NULL 反查与产物列表扫描共用）；
 (4) tasks 加列 pending_terminal VARCHAR(20) NULL（D19 终态意图位：running/queued
     期间的 complete/abort/delete 请求落列，轮收口事务读列定终态并清列），
-    CHECK IN ('completed','aborted','deleted')，约束名 ck_tasks_pending_terminal_enum
-    与模型 check_enum 命名约定产物一字不差（模型侧双保险）。
+    CHECK IN ('completed','aborted','deleted')。命名实况注记（Phase 10 收口对齐）：
+    op.create_check_constraint 的显式名仍走 Base 的 ck 命名约定，二次前缀后 DB 上
+    实际名为 ck_tasks_ck_tasks_pending_terminal_enum——模型 CheckConstraint 已按
+    实况写同名，autogenerate 零差异。
 
 模型层同步映射：backend/v2/models/tasking.py（Task.pending_terminal +
 TaskFile.produced_in_round_id）。

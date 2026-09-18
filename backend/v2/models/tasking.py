@@ -79,8 +79,14 @@ class Task(TimestampMixin, Base):
     __table_args__ = (
         check_enum("tasks", "status", TASK_STATUSES),
         # 终态意图位（Phase 6 D19）：running/queued 期间的 complete/abort/delete 请求
-        # 落此列，轮收口事务读列定终态并清列；CHECK 词表与迁移 0008 一字不差
-        check_enum("tasks", "pending_terminal", PENDING_TERMINAL_VALUES),
+        # 落此列，轮收口事务读列定终态并清列。词表唯一来源 = task_state.
+        # PENDING_TERMINAL_VALUES；约束名按迁移 0008 实际产物对齐：
+        # op.create_check_constraint 的显式名仍走 ck 命名约定，二次前缀成
+        # ck_tasks_ck_tasks_pending_terminal_enum
+        CheckConstraint(
+            "pending_terminal IN (" + ", ".join(f"'{v}'" for v in PENDING_TERMINAL_VALUES) + ")",
+            name="ck_tasks_pending_terminal_enum",
+        ),
         Index("ix_tasks_owner_created", "owner_id", "created_at"),  # DB §5: owner_id, created_at
         Index("ix_tasks_id_owner", "id", "owner_id"),  # DB §5: id, owner_id
         Index(
@@ -88,6 +94,13 @@ class Task(TimestampMixin, Base):
             "status",
             "created_at",
             postgresql_where=text("status = 'queued'"),  # DB §5: 队列调度 partial
+        ),
+        # 0008 终态清扫扫描面（迁移侧建、模型侧同步声明；此前为知悉漂移）
+        Index(
+            "ix_tasks_terminal",
+            "status",
+            "created_at",
+            postgresql_where=text("status IN ('completed','failed','aborted','deleted')"),
         ),
     )
     id: Mapped[_uuid.UUID] = pk_uuid()
@@ -223,6 +236,12 @@ class TaskRound(TimestampMixin, Base):
     __tablename__ = "task_rounds"
     __table_args__ = (
         check_enum("task_rounds", "state", ROUND_STATES),
+        # 0008 dispatcher 领取扫描面（迁移侧建、模型侧同步声明；此前为知悉漂移）
+        Index(
+            "ix_task_rounds_pending",
+            "task_id",
+            postgresql_where=text("state = 'pending'"),
+        ),
         Index(
             "one_active_round_per_task",
             "task_id",

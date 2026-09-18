@@ -56,6 +56,24 @@ async def _drop_db(base: str, name: str) -> None:
     await eng.dispose()
 
 
+def test_model_metadata_matches_migrated_schema(pg_url_base):
+    """漂移门（CI Alembic drift check 的 pytest 内镜像）：upgrade head 后的库
+    与模型元数据必须零差异。
+
+    Phase 10 收口新增——此前 0008 部分索引/CHECK 约束名与 0012 唯一索引重建仅在
+    迁移侧落地、模型未同步（Progress 5.5/5.7 知悉漂移登记），CI 漂移门首次跑
+    main 即红（run 35299989964）。本用例把该门前移到常规测试，防同类漂移再进 main。
+    """
+    name = "ac_drift_" + uuid.uuid4().hex[:8]
+    dsn = f"{pg_url_base}/{name}"
+    asyncio.run(_create_db(pg_url_base, name))
+    try:
+        _run_alembic(dsn, "upgrade", "head")
+        _run_alembic(dsn, "check")
+    finally:
+        asyncio.run(_drop_db(pg_url_base, name))
+
+
 def test_upgrade_downgrade_upgrade_cycle(pg_url_base):
     name = "ac_mig_" + uuid.uuid4().hex[:8]
     dsn = f"{pg_url_base}/{name}"
