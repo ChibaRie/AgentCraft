@@ -33,6 +33,11 @@
 - **BYOK Provider**：自带 https 上游地址（OpenAI 兼容）+ 自定义模型名 + Key；
   Key 信封加密入库、接口只回尾 4 位掩码；提供连通性测试；
   未配置有效 Provider 时不能创建任务
+- **用户自带 MCP**：注册 stdio/http MCP Server（stdio 的命令+参数+env 整体信封
+  加密，API 零明文出参）→ 发现工具并缓存 → 建任务时挂载（≤3 个，快照冻结）；
+  stdio 命令只在一次性 `mcp-sandbox` 容器内执行，工具调用经 `/internal/mcp/call`
+  治理链（任务令牌 + epoch fence + 快照能力上限 + server/tool 启停门）；
+  server 停用/删除联动终止挂载它的 queued/running 任务
 - **专家发现与任务流**：浏览/搜索公开专家 → 四步建任务（选专家 / 选 Provider /
   写任务描述 / 上传输入文件）→ 显式「开始任务」冻结输入清单与 SHA-256 →
   排队或运行 → 流式对话 → 下载产物（AI 生成标识随元数据返回）
@@ -118,6 +123,8 @@ cd frontend && npm run dev   # http://127.0.0.1:5173
 
 ```bash
 docker compose -f docker/docker-compose.yml --profile pi-worker build pi-worker
+# 用户自带 MCP（stdio）沙箱镜像（Phase 10 M5）
+docker compose -f docker/docker-compose.yml --profile mcp-sandbox build mcp-sandbox
 ```
 
 演示数据（可选，幂等，仅限本地开发）：
@@ -145,11 +152,13 @@ ruff check backend tests && ruff format --check backend tests
 cd frontend && npm test && npm run build
 ```
 
-当前基线：后端 `pytest` 收集 1023 项（含 52 个 V1 冻结面跳过项）、
-`backend/` 语句覆盖率 **88%**；ruff check + format 双绿；前端 vitest
-**43 文件 / 424 用例**全绿 + 生产构建通过。CI（GitHub Actions）跑后端 + 前端双 job，
-并含 `alembic -c alembic_v2.ini check` 迁移漂移门。覆盖率排除清单见
-`pyproject.toml [tool.coverage.run] omit`（V1 历史迁移链、`tools/`、V1 冻结面）。
+当前基线：后端 `pytest` 收集 1058 项、全量 0 failed（EXIT=0）；
+`backend/` 语句覆盖率门槛 **80%**（CI 强制）；ruff check + format 双绿；前端 vitest
+**44 文件 / 429 用例**全绿 + 生产构建通过。CI（GitHub Actions）跑后端 + 前端双 job，
+并含 `alembic -c alembic_v2.ini check` 迁移漂移门（同一门已前移为常规测试
+`tests/test_v2_migrations.py::test_model_metadata_matches_migrated_schema`）。
+覆盖率排除清单见 `pyproject.toml [tool.coverage.run] omit`
+（V1 历史迁移链、`tools/`、V1 冻结面）。
 
 ## 目录结构
 
@@ -158,14 +167,16 @@ backend/
   api/v2/         # V2 契约路由（auth/account/providers/authoring/reports/discover/tasks）
   api/v2/admin/   # admin 七面（invitations/users/reviews/reports/catalog/audit/tasks）
   v2/             # V2 服务层：口令·会话·邀请·outbox·限流·幂等·Provider·审核·举报·
-                  #            任务域·调度与执行·工具治理·审计
-  v2/models/      # V2 ORM（identity / catalog / content / tasking）
+                  #            任务域·调度与执行·工具治理·审计·用户 MCP（mcp_service /
+                  #            mcp_sandbox 一次性容器执行链）
+  v2/models/      # V2 ORM（identity / catalog / content / tasking / mcp）
   engine/         # Pi 引擎集成层（Docker 传输 / 扩展生成 / 平台工具常量表；V1 冻结面保留）
-  alembic_v2/     # V2 PostgreSQL 迁移链（0001-0012）
+  alembic_v2/     # V2 PostgreSQL 迁移链（0001-0014）
   provider_proxy.py  # 按任务令牌路由的薄代理（独立容器运行）
   middleware/     # 上传门禁
   services/       # task_token / harness_service（check_code_style）
-docker/           # control / pi-worker / provider-proxy / docker-socket-proxy
+docker/           # control / pi-worker / provider-proxy / docker-socket-proxy /
+                  # mcp-sandbox（用户 stdio MCP 一次性容器镜像）
 frontend/src/     # pages（用户面 + admin 面）/ components / api/v2 / lib / styles
 harness/          # Harness 工具（validate_skill、check_code_style）+ 上下文契约片段
 tests/            # 后端测试（v2_* 系列 + 公共夹具；默认不依赖 Docker）
@@ -176,7 +187,8 @@ data/             # 本地数据卷与 Skill 包样例
 ## 数据库迁移双链
 
 - `alembic_v2.ini` + `backend/alembic_v2/` —— **V2 主链**（PostgreSQL）；
-  当前 head `0012`（Provider 去目录化：`user_providers.base_url` + 活跃唯一索引重建）。
+  当前 head `0014`（0012 Provider 去目录化：`user_providers.base_url` + 活跃唯一索引
+  重建；0013 用户 MCP 面两表；0014 `tasks.mcp_servers` 挂载快照列）。
 - `alembic.ini` + `backend/alembic/` —— **V1 历史链**（SQLite，已冻结）；
   V1 应用面已物理删除，此链仅为历史数据形态留存与 reference，不再演进。
 
@@ -204,4 +216,7 @@ data/             # 本地数据卷与 Skill 包样例
 - **Provider 上游**：须为 OpenAI 兼容 `chat/completions` 端点；
   Provider Proxy 不做 Responses API 转换（Pi 扩展注册 `openai-completions` 协议）。
 - **邮件出站**：dev 为 `console` 传输；生产 `mail-egress` 属部署阶段接线。
-- **用户自带 MCP**：用户可注册自带 MCP Server（stdio/http），任务创建时按≤3 个挂载并在沙箱 + 治理链内执行。stdio 命令只在一次性 mcp-sandbox 容器内运行（只读 rootfs、cap_drop、internal 网络、零宿主挂载），工具调用经 /internal/mcp/call（任务令牌 + epoch fence + 快照能力上限 + kill switch）；HTTP MCP 经 SSRF 校验后控制面直连。已知边界：一次性容器无跨调用会话状态；部署阶段 egress 白名单收口。
+- **用户自带 MCP**：stdio 命令只在一次性 `mcp-sandbox` 容器内执行（只读 rootfs、
+  `cap_drop ALL`、internal 网络、零宿主挂载）；HTTP MCP 经 SSRF 公网校验后控制面直连。
+  已知边界：一次性容器无跨调用会话状态；Beta 期 internal 网络出网面为部署阶段
+  egress 白名单收口。契约详见上层 `docs/.../API_Supplement_v2.0.1.md` §10.14。
