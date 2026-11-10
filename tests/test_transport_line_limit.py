@@ -41,7 +41,9 @@ def _write_docker_stub(tmp_path: Path, name: str, emit: Path) -> str:
     """
     if sys.platform == "win32":
         stub = tmp_path / f"{name}.cmd"
-        stub.write_text(f'@echo off\r\n"{sys.executable}" "{emit}"\r\n', encoding="ascii")
+        # cmd.exe 按系统 ANSI 代码页解析批处理；ASCII 在非 ASCII 工程路径
+        # （如含中文的 sys.executable）下会 UnicodeEncodeError。
+        stub.write_text(f'@echo off\r\n"{sys.executable}" "{emit}"\r\n', encoding="mbcs")
     else:
         stub = tmp_path / f"{name}.sh"
         stub.write_text(
