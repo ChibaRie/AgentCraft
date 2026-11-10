@@ -66,7 +66,8 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "replace-me"
     JWT_ALGORITHM: str = "HS256"
     MCP_ENCRYPTION_ACTIVE_KID: str = "primary"
-    # Argon2/信封密钥环材料，provider-proxy 与 skill_import 共用；历史名保留（用户 MCP 面已下线）
+    # Argon2/信封密钥环材料，V1 冻结面与 skill_import 共用；历史名保留
+    # （用户 MCP 面已于 Phase 10 重建，不使用该 keyring）
     MCP_ENCRYPTION_KEYRING: str = ""
     JWT_EXPIRE_MINUTES: int = 120
     DATABASE_URL: str = "sqlite+aiosqlite:///./agentcraft.db"
@@ -143,14 +144,16 @@ class Settings(BaseSettings):
             decoded[name] = material
         if len(set(decoded.values())) != len(decoded):
             raise ValueError("四把 V2 密钥材料必须互不相同")
-        if not self.PROXY_GRANT_SECRET:
-            raise ValueError("PROXY_GRANT_SECRET 在 V2 模式下必须设置")
-        if self.PROXY_GRANT_SECRET.startswith("change-me-"):
-            raise ValueError("PROXY_GRANT_SECRET 不得使用 change-me- 占位符")
+        self._validate_grant_secret()
         if not self.SESSION_COOKIE_SECURE and not self.ALLOW_INSECURE_SECRETS:
             raise ValueError(
                 "SESSION_COOKIE_SECURE=false 仅限 ALLOW_INSECURE_SECRETS=true 的开发环境"
             )
+
+    def _validate_grant_secret(self) -> None:
+        """V2 模式 grant 兑换凭据必配；`.env.example` 占位值拒绝。"""
+        if not self.PROXY_GRANT_SECRET or self.PROXY_GRANT_SECRET.startswith("change-me-"):
+            raise ValueError("PROXY_GRANT_SECRET 在 V2 模式下必须设置（不得为 change-me- 占位符）")
 
 
 def get_settings() -> Settings:
