@@ -154,7 +154,7 @@ ruff check backend tests && ruff format --check backend tests
 cd frontend && npm test && npm run build
 ```
 
-当前基线：后端 `pytest` 收集 1058 项、全量 0 failed（EXIT=0）；
+当前基线：后端 `pytest` 收集 1067 项、全量 0 failed（EXIT=0）；
 `backend/` 语句覆盖率门槛 **80%**（CI 强制）；ruff check + format 双绿；前端 vitest
 **44 文件 / 429 用例**全绿 + 生产构建通过。CI（GitHub Actions）跑后端 + 前端双 job，
 并含 `alembic -c alembic_v2.ini check` 迁移漂移门（同一门已前移为常规测试
