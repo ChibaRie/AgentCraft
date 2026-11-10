@@ -260,7 +260,7 @@ def test_task_container_env_excludes_grant_secret():
     assert "PROXY_GRANT_SECRET" not in source
 
 
-def test_compose_grant_secret_only_on_proxy_service():
+def test_compose_grant_secret_not_hardcoded():
     """compose 注入面：PROXY_GRANT_SECRET 不得硬编码；control 与 provider-proxy
     均经 env_file ../.env 读取（控制面校验方与兑换方各取所需），pi-worker 面禁出现。"""
     compose = (Path(__file__).resolve().parents[1] / "docker" / "docker-compose.yml").read_text(
@@ -326,3 +326,6 @@ def test_control_image_ships_v2_alembic_config():
         encoding="utf-8"
     )
     assert "COPY alembic_v2.ini ./" in dockerfile
+    # 生产无出网：不得用 `uv run`（会补同步 dev 依赖）；直接走镜像 venv
+    assert 'CMD ["uvicorn"' in dockerfile
+    assert '"uv", "run"' not in dockerfile
