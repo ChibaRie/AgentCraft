@@ -132,6 +132,7 @@ def _base_kwargs(**over):
         EMAIL_OUTBOX_ENCRYPTION_KEY=base64.urlsafe_b64encode(b"o" * 32).decode().rstrip("="),
         RATE_LIMIT_HMAC_KEY=base64.urlsafe_b64encode(b"r" * 32).decode().rstrip("="),
         PROVIDER_KEY_ENCRYPTION_KEY=base64.urlsafe_b64encode(b"p" * 32).decode().rstrip("="),
+        PROXY_GRANT_SECRET="proxy-grant-secret-" + "g" * 20,
     )
     kwargs.update(over)
     return Settings(**kwargs)
@@ -219,6 +220,7 @@ def _set_v2_env(monkeypatch, *, omit: str | None = None, override: dict[str, str
         "EMAIL_OUTBOX_ENCRYPTION_KEY": _KEY_B,
         "RATE_LIMIT_HMAC_KEY": _KEY_C,
         "PROVIDER_KEY_ENCRYPTION_KEY": _KEY_D,
+        "PROXY_GRANT_SECRET": "proxy-grant-secret-" + "g" * 20,
     }
     if override:
         values.update(override)
@@ -245,3 +247,36 @@ def test_v2_mode_provider_kek_must_differ(monkeypatch):
 def test_v2_mode_four_keys_ok(monkeypatch):
     _set_v2_env(monkeypatch)
     get_settings()  # 不抛
+
+
+def test_v2_mode_requires_proxy_grant_secret(monkeypatch):
+    """V2 模式缺 PROXY_GRANT_SECRET → 启动失败（grant 端点 fail-closed 的
+    配置面前置，防新环境上线后 BYOK 全 401）。"""
+    _set_v2_env(monkeypatch, omit="PROXY_GRANT_SECRET")
+    with pytest.raises(RuntimeError, match="PROXY_GRANT_SECRET"):
+        get_settings()
+
+
+def test_v2_mode_rejects_placeholder_proxy_grant_secret(monkeypatch):
+    """`.env.example` 的 change-me- 占位值必须被拒绝（防模板直启）。"""
+    _set_v2_env(
+        monkeypatch,
+        override={"PROXY_GRANT_SECRET": "change-me-proxy-grant-secret-0000000000000000"},
+    )
+    with pytest.raises(RuntimeError, match="PROXY_GRANT_SECRET"):
+        get_settings()
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "PROXY_GRANT_SECRET",
+        "PROVIDER_PROXY_GRANT_URL",
+        "PI_NETWORK_NAME",
+        "PROVIDER_PROXY_IMAGE",
+        "MCP_SANDBOX_IMAGE",
+    ],
+)
+def test_env_example_lists_phase9_phase10_runtime_keys(key):
+    text = (Path(__file__).resolve().parents[1] / ".env.example").read_text(encoding="utf-8")
+    assert f"{key}=" in text

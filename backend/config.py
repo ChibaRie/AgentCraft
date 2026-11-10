@@ -143,6 +143,10 @@ class Settings(BaseSettings):
             decoded[name] = material
         if len(set(decoded.values())) != len(decoded):
             raise ValueError("四把 V2 密钥材料必须互不相同")
+        if not self.PROXY_GRANT_SECRET:
+            raise ValueError("PROXY_GRANT_SECRET 在 V2 模式下必须设置")
+        if self.PROXY_GRANT_SECRET.startswith("change-me-"):
+            raise ValueError("PROXY_GRANT_SECRET 不得使用 change-me- 占位符")
         if not self.SESSION_COOKIE_SECURE and not self.ALLOW_INSECURE_SECRETS:
             raise ValueError(
                 "SESSION_COOKIE_SECURE=false 仅限 ALLOW_INSECURE_SECRETS=true 的开发环境"
