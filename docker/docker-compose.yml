@@ -50,6 +50,9 @@ services:
         required: false
     networks:
       - internal
+      # bridge（compose default）供出网到用户 Provider 上游；internal 网络无路由。
+      # 与 dev 形态 docker_ensure_proxy_container 的 internal+bridge 双网络同构。
+      - default
     environment:
       # Phase 9 T1：grant 控制面地址（internal 网络内 agentcraft-control 别名）
       PROVIDER_PROXY_GRANT_URL: ${PROVIDER_PROXY_GRANT_URL:-http://agentcraft-control:8000/internal/provider-grant}

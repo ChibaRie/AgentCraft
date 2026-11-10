@@ -314,6 +314,8 @@ def test_compose_wires_grant_topology():
     assert "image: agentcraft-provider-proxy:latest" in proxy_block
     assert "container_name: provider-proxy" in proxy_block
     assert "../.env" in proxy_block
+    # 上游出网：internal 网络无路由，proxy 必须同时接 default(bridge)
+    assert "- default" in proxy_block
 
     worker_block = compose.partition("\n  pi-worker:")[2].partition("\nnetworks:")[0]
     assert "PROVIDER_PROXY_GRANT_URL" not in worker_block

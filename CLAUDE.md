@@ -95,7 +95,9 @@ face is inert — useful only for the frozen `/internal` routes.
 
 V2 mode additionally requires four independent b64url-32-byte keys (`MFA_ENCRYPTION_KEY`,
 `EMAIL_OUTBOX_ENCRYPTION_KEY`, `RATE_LIMIT_HMAC_KEY`, `PROVIDER_KEY_ENCRYPTION_KEY`) — pairwise
-distinct and distinct from `SECRET_KEY`/`TASK_TOKEN_SECRET`. `get_settings()` converts pydantic
+distinct and distinct from `SECRET_KEY`/`TASK_TOKEN_SECRET` — plus a non-empty
+`PROXY_GRANT_SECRET` (change-me- placeholders rejected) for provider-grant redemption.
+`get_settings()` converts pydantic
 `ValidationError` into a sanitized `RuntimeError` because pydantic echoes input fragments in
 tracebacks (`config.py:152-162`).
 
