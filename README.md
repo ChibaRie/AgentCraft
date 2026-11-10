@@ -125,6 +125,8 @@ cd frontend && npm run dev   # http://127.0.0.1:5173
 docker compose -f docker/docker-compose.yml --profile pi-worker build pi-worker
 # 用户自带 MCP（stdio）沙箱镜像（Phase 10 M5）
 docker compose -f docker/docker-compose.yml --profile mcp-sandbox build mcp-sandbox
+# 控制面与 provider-proxy（BYOK 真实链路必需；dev 也可用 same compose 文件）
+docker compose -f docker/docker-compose.yml build control provider-proxy
 ```
 
 演示数据（可选，幂等，仅限本地开发）：
@@ -198,8 +200,8 @@ data/             # 本地数据卷与 Skill 包样例
 
 - 上层 `docs/AgentCraft-V2-Public-Beta/` —— V2 契约基线（PRD / Engineering Spec /
   Database Design / Deployment & Ops Spec v2.0.0 + API 补遗 v2.0.1）。
-- 上层 `docs/AgentCraft_V2_Progress.md` —— V2 升级进展与问题记录（阶段 0-9 全量交付、
-  裁决与遗留清单，v2.1）。
+- 上层 `docs/AgentCraft_V2_Progress.md` —— V2 升级进展与问题记录（阶段 0-10 全量交付、
+  裁决与遗留清单，v2.2）。
 - 上层 `docs/superpowers/` —— `specs/` 实施设计、`plans/` 阶段计划与完成记录、
   `reports/` 手测留痕与 SBOM。
 - V1 历史：上层 `docs/AgentCraft-V1/`（PRD / Spec / DB / Scaffold Plan v0.4.x 与原型）；
@@ -211,8 +213,9 @@ data/             # 本地数据卷与 Skill 包样例
 - **单实例部署**：dispatcher / executor 按单实例语义编排（`V2_TASK` 运行参数可调）；
   水平扩展属部署阶段。
 - **部署阶段待接线**：Linux VM + nginx + gVisor、runner-manager 独立服务、
-  专用 egress proxy、mail-egress、Ed25519 建连凭据与 mTLS 通道。应用层以
-  `SandboxBackend` / `TaskCredential` 两抽象预留，归属划分见 Eng §7.1 应用层对账表。
+  专用 egress proxy、mail-egress、Ed25519 建连凭据与 mTLS 通道。`SandboxBackend` /
+  `TaskCredential` 是部署阶段需要新增的抽象（当前代码未定义），归属划分见
+  Eng §7.1 应用层对账表。
 - **Provider 上游**：须为 OpenAI 兼容 `chat/completions` 端点；
   Provider Proxy 不做 Responses API 转换（Pi 扩展注册 `openai-completions` 协议）。
 - **邮件出站**：dev 为 `console` 传输；生产 `mail-egress` 属部署阶段接线。

@@ -11,7 +11,7 @@
   （403 TOOL_REVOKED）→ permissions 服务端强制（TOOL_CALL_REJECTED 400）。
   permissions 形态闸（含请求形态/content_base64 解码）在 owner 会话内 fence
   之后执行——fenced 旧令牌即便携带畸形请求体也一律 401。
-  用户 MCP 语义已下线（/internal/mcp/call 删除）；
+  用户 MCP 回调于 Phase 10 以 V2 语义重建（/internal/mcp/call，见下）；
 - /internal/provider-grant：provider-proxy 专用 Key 兑换（Phase 8 T5b，
   Sup §10.10 D16① 六钉）——proxy 专用凭据（env PROXY_GRANT_SECRET）+
   V2 任务令牌（仅定位 round）+ epoch fence 同构断言，响应仅从已验 claims

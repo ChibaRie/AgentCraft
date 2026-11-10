@@ -355,9 +355,8 @@ async def delete_server(
 
 
 # ---------------------------------------------------------------------------
-# 发现链（http：streamable HTTP 握手；stdio：subprocess 直拉 + stdio 握手，
-# Phase 10 M3——mcp-sandbox 镜像形态属 M5，本函数为服务面真件、测试以
-# fake 进程驱动真实协议往返）
+# 发现链（http：streamable HTTP 握手；stdio：一次性 mcp-sandbox 容器内
+# initialize→tools/list（Phase 10 M5）。测试以 fake 进程驱动真实协议往返）
 # ---------------------------------------------------------------------------
 
 _DISCOVER_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
