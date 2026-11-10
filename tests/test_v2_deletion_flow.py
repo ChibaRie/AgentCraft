@@ -756,7 +756,7 @@ async def test_sweep_deletes_user_mcp_server_payloads(pg, flow_env):
                 "(id, owner_id, name, transport_kind, command_encrypted, "
                 " command_dek_wrapped, enabled) "
                 "VALUES (:i, :u, 'mcp-test', 'stdio', '{\"ct\":\"x\"}', "
-                " '{\"kid\":\"k\"}', true)"
+                ' \'{"kid":"k"}\', true)'
             ),
             {"i": server_id, "u": uid},
         )

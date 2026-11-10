@@ -261,15 +261,15 @@ def test_task_container_env_excludes_grant_secret():
 
 
 def test_compose_grant_secret_only_on_proxy_service():
-    """compose 注入面：PROXY_GRANT_SECRET 仅出现在 provider-proxy 服务块
-    （control 经 env_file ../.env 读取，不显式声明；pi-worker 面禁出现）。"""
+    """compose 注入面：PROXY_GRANT_SECRET 不得硬编码；control 与 provider-proxy
+    均经 env_file ../.env 读取（控制面校验方与兑换方各取所需），pi-worker 面禁出现。"""
     compose = (Path(__file__).resolve().parents[1] / "docker" / "docker-compose.yml").read_text(
         encoding="utf-8"
     )
-    head, _sep, rest = compose.partition("\n  provider-proxy:")
+    _head, _sep, rest = compose.partition("\n  provider-proxy:")
     proxy_block, _sep2, tail = rest.partition("\n  docker-socket-proxy:")
-    assert "PROXY_GRANT_SECRET" in proxy_block
-    assert "PROXY_GRANT_SECRET" not in head
+    assert "PROXY_GRANT_SECRET:" not in compose  # 不写明文/空值覆盖
+    assert "env_file" in proxy_block and "../.env" in proxy_block
     assert "PROXY_GRANT_SECRET" not in tail
 
 
@@ -301,12 +301,28 @@ def test_compose_wires_grant_topology():
     control_block = compose.partition("\n  control:")[2].partition("\n  provider-proxy:")[0]
     assert "agentcraft-control" in control_block
     assert "internal:" in control_block
+    # 与 backend/engine/docker_transport.py 的 compose 形态探测/容器网络名对齐
+    assert "container_name: agentcraft-control" in control_block
+    assert "PI_NETWORK_NAME: agentcraft_internal" in control_block
 
     proxy_block = compose.partition("\n  provider-proxy:")[2].partition("\n  docker-socket-proxy:")[
         0
     ]
     assert "PROVIDER_PROXY_GRANT_URL" in proxy_block
+    # dev 闭环：可 build、镜像名与 Settings 默认一致、代码与 .env 可挂载
+    assert "build:" in proxy_block
+    assert "image: agentcraft-provider-proxy:latest" in proxy_block
+    assert "container_name: provider-proxy" in proxy_block
+    assert "../.env" in proxy_block
 
     worker_block = compose.partition("\n  pi-worker:")[2].partition("\nnetworks:")[0]
     assert "PROVIDER_PROXY_GRANT_URL" not in worker_block
     assert "PROXY_GRANT_SECRET" not in worker_block
+
+
+def test_control_image_ships_v2_alembic_config():
+    """控制面镜像必须带 alembic_v2.ini，否则容器内无法执行 V2 迁移。"""
+    dockerfile = (Path(__file__).resolve().parents[1] / "docker" / "Dockerfile.control").read_text(
+        encoding="utf-8"
+    )
+    assert "COPY alembic_v2.ini ./" in dockerfile

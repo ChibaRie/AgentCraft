@@ -1,3 +1,5 @@
+# 本地开发 / 镜像构建用。生产拓扑见 Ops Spec §2：不得照搬这里的 ports
+# 与 docker-socket-proxy（生产由 nginx/gVisor/runner-manager/egress 承担）。
 name: agentcraft
 
 services:
@@ -5,8 +7,14 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.control
+    container_name: agentcraft-control
+    # dev 回环发布；生产集成由 nginx 终结 TLS 后转发
     ports:
       - "127.0.0.1:8000:8000"
+    environment:
+      # 任务容器网络名必须与 compose 实际网络名一致（项目名 agentcraft +
+      # 网络键 internal → agentcraft_internal），否则回调/代理 DNS 不可达。
+      PI_NETWORK_NAME: agentcraft_internal
     env_file:
       - path: ../.env
         required: false
@@ -25,14 +33,24 @@ services:
       - provider-proxy
 
   provider-proxy:
-    image: provider-proxy:placeholder
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.provider-proxy
+    image: agentcraft-provider-proxy:latest
+    container_name: provider-proxy
     expose:
       - "8080"
+    # 与 dev 形态 docker_ensure_proxy_container 同构：代码只读挂载 + .env 注入，
+    # 真实 Key/密钥环不进入镜像层。
+    volumes:
+      - "..:/app:ro"
+      - "../.env:/app/.env:ro"
+    env_file:
+      - path: ../.env
+        required: false
     networks:
       - internal
     environment:
-      # Sup §10.10 钉一：grant 兑换专用凭据（.env 供给；task 容器 env 禁出现）
-      PROXY_GRANT_SECRET: ${PROXY_GRANT_SECRET:-}
       # Phase 9 T1：grant 控制面地址（internal 网络内 agentcraft-control 别名）
       PROVIDER_PROXY_GRANT_URL: ${PROVIDER_PROXY_GRANT_URL:-http://agentcraft-control:8000/internal/provider-grant}
 
