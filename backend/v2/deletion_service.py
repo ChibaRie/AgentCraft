@@ -39,10 +39,12 @@
   邮箱地址不可回收；mfa_secret_enc 清空；password_hash 换随机 Argon2（事务外
   预算，昂贵 CPU 不持行锁）——凭据全灭）→ ``revoke_all``（rowcount=1 才执行——
   并发 cancel 恢复的用户不得误杀其新会话）。users 行不删除：审计等 FK 引用
-  （SET NULL 语义）经行存活而保留。Key 密文删除属 user_providers 域（DB Design
-  §157；裁决 D15）——Phase 3 已交付：匿名化后同事务显式 DELETE user_providers
-  行（users 行不删除 → user_id CASCADE 永不触发，必须显式删；tasks.provider_id
-  FK RESTRICT，Phase 6 接线 TERMINATE_TASKS_HOOK 时任务清理须先于此 DELETE）。
+  （SET NULL 语义）经行存活而保留。Key/命令密文删除属 user_providers 与
+  user_mcp_servers 域（DB Design §157；裁决 D15；Phase 10 M1 新增表）——Phase 3
+  已交付 user_providers；Phase 10 补 user_mcp_servers：匿名化后同事务显式 DELETE
+  两类密文行（users 行不删除 → user_id CASCADE 永不触发，必须显式删；
+  tasks.provider_id FK RESTRICT，Phase 6 接线 TERMINATE_TASKS_HOOK 时任务清理须
+  先于此 DELETE；user_mcp_tools 随 FK CASCADE 清除）。
   任务卷清理仍属任务域 Phase 6（经 TERMINATE_TASKS_HOOK 注入）。
 
 防探测（cancel）：全部失效形态（未知/错 purpose/过期/已消费/非 deleting 状态）
@@ -395,11 +397,11 @@ async def cancel_deletion(
 
 
 async def sweep_expired(runtime: V2Runtime) -> int:
-    """到期清理：deleting 且 deadline <= now() → deleted + 匿名化 + user_providers
-    密文行显式删除（D15）+ 全会话失效。
+    """到期清理：deleting 且 deadline <= now() → deleted + 匿名化 + user_providers /
+    user_mcp_servers 密文行显式删除（D15/Phase 10）+ 全会话失效。
 
     admin 会话圈定候选（users_admin_read 全量只读），逐用户 owner 事务匿名化
-    （GUC=user）后显式删 user_providers 行；UPDATE rowcount=0（并发 cancel 恢复）
+    （GUC=user）后显式删两类密文行；UPDATE rowcount=0（并发 cancel 恢复）
     → 跳过且不撤销其会话。返回处理数（rowcount=1 的用户数）。
     """
     async with runtime.admin_factory() as db:
@@ -430,6 +432,12 @@ async def sweep_expired(runtime: V2Runtime) -> int:
             # FK RESTRICT）。
             await db.execute(
                 text("DELETE FROM user_providers WHERE user_id = :u"), {"u": str(user_id)}
+            )
+            # Phase 10 用户 MCP：stdio 命令/args/env 为信封密文，与 user_providers
+            # 同属注销必须清除的个人数据；users 行只匿名化不删除，CASCADE 不触发，
+            # 必须显式 DELETE。user_mcp_tools 随 FK ON DELETE CASCADE 清除。
+            await db.execute(
+                text("DELETE FROM user_mcp_servers WHERE owner_id = :u"), {"u": str(user_id)}
             )
             await revoke_all(db, user_id)
             processed += 1

@@ -743,6 +743,56 @@ async def test_sweep_deletes_user_provider_rows(pg, flow_env):
     assert n == 0 and status == "deleted"
 
 
+async def test_sweep_deletes_user_mcp_server_payloads(pg, flow_env):
+    """注销 sweep 必须显式删 user_mcp_servers（users 行不删，CASCADE 永不触发）；
+    发现缓存 user_mcp_tools 随 FK CASCADE 一并删除。"""
+    uid = await seed_active_user(pg, "sweep-mcp@example.com")
+    server_id = uuid.uuid4()
+    tool_id = uuid.uuid4()
+    async with pg.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO user_mcp_servers "
+                "(id, owner_id, name, transport_kind, command_encrypted, "
+                " command_dek_wrapped, enabled) "
+                "VALUES (:i, :u, 'mcp-test', 'stdio', '{\"ct\":\"x\"}', "
+                " '{\"kid\":\"k\"}', true)"
+            ),
+            {"i": server_id, "u": uid},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO user_mcp_tools (id, server_id, tool_name, enabled) "
+                "VALUES (:i, :s, 'list_directory', true)"
+            ),
+            {"i": tool_id, "s": server_id},
+        )
+        await conn.execute(
+            text(
+                "UPDATE users SET status='deleting', "
+                "deletion_deadline_at = now() - interval '1 hour' WHERE id = :u"
+            ),
+            {"u": uid},
+        )
+
+    swept = await deletion_service.sweep_expired(flow_env)
+
+    assert swept == 1
+    async with pg.engine.connect() as conn:
+        servers = (
+            await conn.execute(
+                text("SELECT count(*) FROM user_mcp_servers WHERE owner_id = :u"), {"u": uid}
+            )
+        ).scalar_one()
+        tools = (
+            await conn.execute(
+                text("SELECT count(*) FROM user_mcp_tools WHERE server_id = :s"),
+                {"s": server_id},
+            )
+        ).scalar_one()
+    assert servers == 0 and tools == 0
+
+
 # ---------- A5：Idempotency-Key 必带 + schema 边界 ----------
 
 
