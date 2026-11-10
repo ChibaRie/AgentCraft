@@ -125,7 +125,7 @@ cd frontend && npm run dev   # http://127.0.0.1:5173
 docker compose -f docker/docker-compose.yml --profile pi-worker build pi-worker
 # 用户自带 MCP（stdio）沙箱镜像（Phase 10 M5）
 docker compose -f docker/docker-compose.yml --profile mcp-sandbox build mcp-sandbox
-# 控制面与 provider-proxy（BYOK 真实链路必需；dev 也可用 same compose 文件）
+# 控制面与 provider-proxy（BYOK 真实链路必需；dev 与镜像构建共用同一 compose 文件）
 docker compose -f docker/docker-compose.yml build control provider-proxy
 ```
 
