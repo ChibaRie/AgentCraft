@@ -20,14 +20,21 @@ React 18 + Vite 5 | Pi coding-agent 0.84.3 | Docker.
 
 ## Repository layout: two nested git repos
 
+> **Git scoping constraint (2026-11-10, user directive):** run git operations
+> (`status` / `log` / `diff` / `commit` / `branch` / `tag` / `push`, etc.) **only** inside this
+> directory, `D:\工作\泰迪智能\AgentCraft\agentcraft`. NEVER run git in the parent docs
+> directory or any other directory. Files under `../docs/` may still be read and edited, but
+> their version-control operations are out of scope for this workspace.
+
 The parent `Desktop/AgentCraft/` is a separate **docs repo** (branch `master`, **no remote** —
 sole copy of the design baselines). This directory is the **code repo** (branch `main`, remote
 `origin` = github.com/ChibaRie/AgentCraft).
 
 - Bare `git` here hits the code repo. Design contracts, phase plans, and the progress log live
   one level up, in `../docs/` (see [Docs map](#docs-map-and-workflow)).
-- Contract changes go to the docs repo; implementation to the code repo. Both use
-  `type: description` conventional commits with **Chinese** descriptions.
+- Contract changes are edited under `../docs/`; implementation changes are committed in this
+  code repo. Commits in this repo use `type: description` conventional commits with **Chinese**
+  descriptions. Git operations in the parent docs repo are prohibited by the constraint above.
 
 ## Commands
 
