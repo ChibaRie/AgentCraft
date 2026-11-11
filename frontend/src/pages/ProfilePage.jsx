@@ -92,7 +92,9 @@ export default function ProfilePage() {
             <div className="profile-meta">
               <div className="profile-meta-row">
                 <span className="profile-meta-key">用户 ID</span>
-                <span className="profile-meta-value">{displayUser.id}</span>
+                <span className="profile-meta-value" title={displayUser.id}>
+                  {displayUser.id}
+                </span>
               </div>
               <div className="profile-meta-row">
                 <span className="profile-meta-key">角色</span>

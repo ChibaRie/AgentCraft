@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
-import { ShieldCheck } from "@phosphor-icons/react";
+import { Check, ShieldCheck } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { V2ApiError, requestV2 } from "../api/v2/client.js";
 import { V2_AUTH } from "../api/v2/routes.js";
 import { useRetryAfter } from "../hooks/useRetryAfter.js";
 import OtpInput from "./OtpInput.jsx";
 
-const COPY_RESET_MS = 2000;
+const COPY_RESET_MS = 2500;
+const COPY_FADE_MS = 220;
 const FALLBACK_MESSAGE = "操作失败，请稍后重试";
 
 /**
@@ -16,16 +17,27 @@ const FALLBACK_MESSAGE = "操作失败，请稍后重试";
  */
 function CopyBlock({ label, text, buttonLabel }) {
   const [copyState, setCopyState] = useState("idle"); // idle | copied | failed
+  const [isFading, setIsFading] = useState(false);
+  const [copyEpoch, setCopyEpoch] = useState(0);
 
   useEffect(() => {
-    if (copyState !== "copied") {
+    if (copyState === "idle") {
       return undefined;
     }
-    const timer = window.setTimeout(() => setCopyState("idle"), COPY_RESET_MS);
-    return () => window.clearTimeout(timer);
-  }, [copyState]);
+    const fadeTimer = window.setTimeout(() => setIsFading(true), COPY_RESET_MS - COPY_FADE_MS);
+    const resetTimer = window.setTimeout(() => {
+      setCopyState("idle");
+      setIsFading(false);
+    }, COPY_RESET_MS);
+    return () => {
+      window.clearTimeout(fadeTimer);
+      window.clearTimeout(resetTimer);
+    };
+  }, [copyState, copyEpoch]);
 
   async function handleCopy() {
+    setIsFading(false);
+    setCopyEpoch((value) => value + 1);
     try {
       await navigator.clipboard.writeText(text);
       setCopyState("copied");
@@ -35,14 +47,32 @@ function CopyBlock({ label, text, buttonLabel }) {
     }
   }
 
+  const isCopied = copyState === "copied";
   return (
     <div className="v2-secret-block">
       <div className="v2-secret-body">
         <span className="v2-secret-label">{label}</span>
         <pre className="v2-secret-text">{text}</pre>
       </div>
-      <button type="button" className="v2-secret-copy" onClick={handleCopy}>
-        {copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : buttonLabel}
+      <button
+        type="button"
+        className={
+          "v2-secret-copy" +
+          (isCopied ? " is-copied" : "") +
+          (isFading ? " is-fading" : "")
+        }
+        onClick={handleCopy}
+      >
+        {isCopied ? (
+          <>
+            <Check size={12} weight="bold" aria-hidden="true" />
+            已复制
+          </>
+        ) : copyState === "failed" ? (
+          "复制失败"
+        ) : (
+          buttonLabel
+        )}
       </button>
     </div>
   );

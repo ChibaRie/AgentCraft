@@ -188,7 +188,7 @@ export default function AuditPage() {
             {alert}
           </p>
         ) : null}
-        <div className="provider-form">
+        <div className="provider-form audit-filters">
           <div className="field">
             <label className="field-label" htmlFor="audit-actor-id">
               操作者 ID

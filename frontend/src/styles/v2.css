@@ -1,31 +1,9 @@
 /* ============================================================
-   V2 认证面增量样式（FE-T3 OTP / 429 提示——双 Tab 已随 T14 会话归一
-   拆除；FE-T4 pending 横幅 / 落地页补充原语）。设计令牌全部沿用
-   global.css（灰阶/圆角/阴影/运动节奏零新取值）。
+   AgentCraft V2 — 认证、会话、MCP 与治理面的局部原语。
+   全部沿用 global.css 的明度、权重与运动令牌；不新增边框。
    ============================================================ */
 
-/* ---------- 双 Tab 滑块已随 T14 会话归一拆除（LoginPage 单 Tab）；
-   .v2-tab 保留——admin 子导航（AdminLayout NavLink）复用该按钮语言 ---------- */
-
-.v2-tab {
-  position: relative;
-  z-index: 1;
-  border: 0;
-  background: none;
-  padding: 8px 0;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-3);
-  cursor: pointer;
-  transition: color var(--duration-fast) var(--ease-out);
-}
-
-.v2-tab[aria-pressed="true"] {
-  color: var(--ink-strong);
-}
-
-/* ---------- OTP 分格（8 等宽格 + 透明覆盖输入） ---------- */
+/* ---------- OTP：凹槽分格 + 双环咬合 ---------- */
 
 .v2-otp {
   position: relative;
@@ -33,681 +11,324 @@
 
 .v2-otp-cells {
   display: flex;
-  gap: 8px;
+  gap: 7px;
 }
 
 .otp-cell {
-  flex: 1 1 0; /* 分格等宽 */
-  min-width: 0;
-  height: 52px;
   display: grid;
+  flex: 1 1 0;
   place-items: center;
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--radius-control);
-  background: var(--surface);
-  font-size: 18px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  height: 50px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--well);
   color: var(--ink-strong);
+  font-family: var(--font-mono);
+  font-size: 19px;
+  font-weight: var(--fw-medium);
+  font-variant-numeric: tabular-nums;
+  box-shadow: inset 0 1px 2px rgba(28, 28, 24, 0.035);
   transition:
-    border-color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out);
+    background-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-soft);
 }
 
 .otp-cell.is-filled {
-  border-color: var(--text-2);
+  background: var(--surface-2);
+  color: var(--ink-strong);
 }
 
-/* 焦点高亮当前输入格（is-active 由组件按 value.length 计算） */
 .v2-otp:focus-within .otp-cell.is-active {
-  border-color: var(--ink-strong);
-  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.08);
+  background: var(--surface);
+  box-shadow:
+    0 0 0 1.5px var(--focus-inner),
+    0 0 0 4px var(--focus-outer),
+    inset 0 1px 0 var(--inset-highlight);
+  transform: translateY(-1px);
 }
 
-/* 透明输入覆盖分格接收键入/粘贴；字符由分格呈现（避免双写）。
-   font-size ≥16px 防移动端聚焦缩放；光标隐藏（焦点态由分格高亮承担）。 */
 .v2-otp-input {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  border: 0;
-  padding: 0;
   margin: 0;
+  padding: 0;
+  border: 0;
   background: transparent;
   color: transparent;
   caret-color: transparent;
-  font-size: 16px;
+  font-size: 17px;
   text-align: center;
   cursor: text;
 }
 
 .v2-otp-input:focus {
   outline: none;
+  box-shadow: none;
 }
-
-/* ---------- 429 倒计时提示 ---------- */
 
 .v2-retry-hint {
   margin: 0;
-  font-size: 13px;
   color: var(--text-2);
+  font-size: 13px;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- pending 全局横幅（AppShell：NavBar 之下） ---------- */
-
-.v2-pending-banner {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 12px;
-  padding: 9px 24px;
-  border-bottom: 1px solid var(--hairline);
-  background: var(--surface-2);
-  font-size: 13.5px;
-  color: var(--text-2);
-}
-
-.v2-pending-banner-title {
-  color: var(--ink-strong);
-  font-weight: 600;
-}
-
-.v2-pending-banner-dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--ink-strong);
-}
-
-/* 呼吸点：opacity 单属性运动；reduced-motion 静止（与 global.css 动效纪律一致） */
-@media (prefers-reduced-motion: no-preference) {
-  .v2-pending-banner-dot {
-    animation: v2-pending-pulse 2.4s var(--ease-out) infinite;
-  }
-}
-
-@keyframes v2-pending-pulse {
-  50% {
-    opacity: 0.3;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .v2-pending-banner-dot {
-    animation: none;
-  }
-}
-
-.v2-pending-banner-resend {
-  margin-left: auto;
-  padding: 4px 12px;
-  font-size: 13px;
-  white-space: nowrap;
-}
-
-.v2-pending-banner-note {
-  color: var(--ink-strong);
-}
-
-.v2-pending-banner-error {
-  color: var(--ink-strong);
-  font-weight: 600;
-}
-
-/* ---------- 邀请接受页：只读令牌展示 ---------- */
+/* ---------- 只读令牌 / 密钥块 ---------- */
 
 .v2-readonly-input {
-  color: var(--text-2);
+  overflow: hidden;
   background: var(--surface-2);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text-2);
+  font-family: var(--font-mono);
   font-size: 13px;
   letter-spacing: 0.02em;
-  overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* ---------- 个人中心安全区块（T6）：两步验证密钥复制块 ---------- */
-
-.profile-security-form {
-  display: grid;
-  gap: 14px;
-  margin-top: 16px;
-}
-
-.profile-security-actions {
-  display: grid;
-  gap: 10px;
-  justify-items: start;
-}
-
-/* 已启用状态行（与描述文案分开：exact 文本节点供状态辨认） */
-.profile-security-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--ink-strong);
-}
-
-/* 卡内纵向节奏：状态行→描述、描述→操作区（setup 视图由 form grid 统一走 gap） */
-.profile-security-status + .profile-expert-desc {
-  margin-top: 6px;
-}
-
-.profile-expert-desc + .profile-security-actions {
-  margin-top: 16px;
 }
 
 .v2-secret-block {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--radius-control);
+  gap: 9px;
+  padding: 11px 12px;
+  border: 0;
+  border-radius: var(--r-sm);
   background: var(--surface-2);
 }
 
 .v2-secret-body {
-  flex: 1 1 auto;
-  min-width: 0;
   display: grid;
+  flex: 1;
   gap: 4px;
+  min-width: 0;
 }
 
 .v2-secret-label {
-  font-size: 12px;
-  font-weight: 600;
   color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
-/* base32 全文 / otpauth 链接等宽展示：break-all 允许长串换行；
-   user-select: all 点击即整段选中（配合复制按钮的人工兜底路径） */
 .v2-secret-text {
   margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text-2);
+  font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.55;
-  letter-spacing: 0.02em;
-  color: var(--text-2);
-  word-break: break-all;
+  letter-spacing: 0.015em;
   white-space: pre-wrap;
+  word-break: break-all;
   user-select: all;
 }
 
+/* 复制反馈：对勾 + 2.5s 后淡出归位 */
 .v2-secret-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   flex: none;
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--radius-control);
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-xs);
   background: var(--surface);
-  padding: 5px 10px;
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 600;
   color: var(--ink-strong);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out);
+  font-size: 12.5px;
+  font-weight: var(--fw-semibold);
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    opacity 260ms var(--ease-out);
 }
 
 .v2-secret-copy:hover {
-  background: var(--surface-2);
+  background: var(--surface-3);
 }
 
-/* ---------- 个人中心安全区块（T7）：设备与登录卡片 ---------- */
-
-.v2-session-list {
-  list-style: none;
-  margin: 16px 0 0;
-  padding: 0;
+.v2-secret-copy.is-copied {
+  background: var(--ink-strong);
+  color: var(--on-ink);
 }
 
-.v2-session-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--hairline);
+.v2-secret-copy.is-copied svg {
+  animation: check-pop 380ms var(--ease-soft) both;
 }
 
-.v2-session-row:last-child {
-  border-bottom: 0;
-  padding-bottom: 0;
+.v2-secret-copy.is-fading {
+  opacity: 0;
 }
 
-.v2-session-main {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
+/* ---------- Provider V2 行 ---------- */
 
-.v2-session-device {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ink-strong);
-  overflow-wrap: anywhere;
-}
-
-/* 「本机」徽标：与 status-chip 同构的全圆角小徽（surface-2 底 + 发丝线） */
-.v2-session-badge {
-  flex: none;
-  padding: 1px 8px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: 999px;
-  background: var(--surface-2);
-  font-size: 11.5px;
-  font-weight: 600;
-  line-height: 1.6;
-  color: var(--ink);
-}
-
-.v2-session-times {
-  font-size: 12.5px;
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
-}
-
-.v2-session-revoke {
-  flex: none;
-}
-
-/* ---------- 危险区（T7）：危险语义面板 + 二次确认弹层。
-   设计系统为纯墨单色（墨色是唯一强调），红色缺席——危险语义按系统既有
-   惯例（.status-chip.is-failed / .btn-ghost.is-danger）以墨色加重表达：
-   全强度墨边 + surface-2 底 + ink 文字，与常规卡片形成层级差。
-   弹层壳复用 global.css .modal-overlay/.modal，此处只补窄幅与内距。 ---------- */
-
-.v2-danger-panel {
-  display: grid;
-  gap: 12px;
-  justify-items: start;
-  margin-top: 16px;
-  padding: 14px 16px;
-  border: 1px solid var(--ink);
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
-}
-
-.v2-danger-text {
-  margin: 0;
-  font-size: 13.5px;
-  line-height: 1.65;
-  color: var(--ink);
-}
-
-.v2-danger-text strong {
-  color: var(--ink-strong);
-}
-
-.v2-danger-dialog {
-  width: min(420px, 100%);
-  padding: 24px;
-}
-
-.v2-danger-dialog-title {
-  margin: 0 0 6px;
-  font-size: 17px;
-  font-weight: 700;
-  color: var(--ink-strong);
-}
-
-.v2-danger-dialog-sub {
-  margin: 0 0 14px;
-  font-size: 13.5px;
-  line-height: 1.65;
-  color: var(--text-2);
-}
-
-.v2-danger-dialog-actions {
-  display: flex;
-  gap: 10px;
-  justify-content: flex-end;
-}
-
-/* ---------- 注销受理全页冻结展示态（T7） ---------- */
-
-.v2-deleting-page {
-  display: grid;
-  justify-items: center;
-  align-content: center;
-  gap: 10px;
-  min-height: 56vh;
-  padding: 96px 24px;
-  text-align: center;
-}
-
-.v2-deleting-title {
-  margin: 4px 0 0;
-  font-family: var(--font-display);
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--ink-strong);
-}
-
-.v2-deleting-lead {
-  margin: 0;
-  font-size: 15px;
-  color: var(--ink);
-}
-
-.v2-deleting-lead strong {
-  color: var(--ink-strong);
-  font-variant-numeric: tabular-nums;
-}
-
-.v2-deleting-note {
-  margin: 0;
-  max-width: 46ch;
-  font-size: 13.5px;
-  line-height: 1.7;
-  color: var(--text-2);
-}
-
-.v2-deleting-domain {
-  margin: 8px 0 0;
-  font-size: 12.5px;
-  color: var(--text-3);
-}
-
-/* ---------- Provider 目录化管理页（FE-T8）。卡片壳沿用 global.css
-   .provider-card/.provider-list/.provider-form/.badge-default/.field-note，
-   此处只补目录化增量：模型徽标 / Key 等宽元信息行 / 测试结果行 /
-   轮换行内表单 / 测试 loading 旋转点。令牌全取 global.css（墨色单色体系，
-   成功/失败语义色按系统惯例以墨色层级表达）。 ---------- */
-
-/* 卡片根改纵向：主行（标题+操作）与展开的轮换表单上下排布 */
 .provider-card-v2 {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0;
+  gap: 11px;
 }
 
-.provider-card-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-/* 模型徽标：与 v2-session-badge 同构的全圆角小徽（surface-2 底 + 发丝线） */
-.provider-model-badge {
-  flex: none;
-  padding: 1px 8px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: 999px;
-  background: var(--surface-2);
-  font-size: 11.5px;
-  font-weight: 600;
-  line-height: 1.6;
-  color: var(--ink);
+.provider-card-v2 .provider-card-row {
+  width: 100%;
 }
 
 .provider-v2-meta {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin: 6px 0 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12.5px;
-  letter-spacing: 0.02em;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-3);
+  gap: 2px;
+  flex-wrap: wrap;
 }
 
-/* user-select: all 点击即整段选中（便于人工核对尾 4 位） */
+.provider-model-badge {
+  vertical-align: 0.05em;
+}
+
 .provider-key-mask {
-  user-select: all;
+  letter-spacing: 0.08em;
 }
 
-/* 测试连通性结果行：成功/失败语义按系统既有惯例以墨色层级表达
-   （ok = 常规墨色；fail/错误 = ink-strong 加重，同 .status-chip.is-failed） */
-.provider-test-result {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin: 8px 0 0;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--ink-strong);
-  overflow-wrap: anywhere;
+.provider-test-result svg {
+  color: currentColor;
 }
 
-.provider-test-result.is-ok {
-  color: var(--ink);
+/* ---------- 会话行（global 已有基础，这里补二次呼吸） ---------- */
+
+.v2-session-row {
+  transition: background-color var(--dur-fast) var(--ease-out);
 }
 
-.provider-test-result.is-limited {
-  font-weight: 400;
-  color: var(--text-2);
-  font-variant-numeric: tabular-nums;
+.v2-session-row:hover {
+  background: var(--surface-3);
 }
 
-/* 测试 loading 旋转点：单属性 transform 运动；reduced-motion 静止 */
-.provider-test-spinner {
-  flex: none;
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--hairline-strong);
-  border-top-color: var(--ink-strong);
-  border-radius: 50%;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .provider-test-spinner {
-    animation: provider-spin 0.8s linear infinite;
-  }
-}
-
-@keyframes provider-spin {
-  to {
-    transform: rotate(1turn);
-  }
-}
-
-/* 更换 Key 行内表单：surface-2 底嵌片，与 v2-danger-panel 同层级语言 */
-.provider-rotate-form {
-  display: grid;
-  gap: 12px;
-  margin-top: 14px;
-  padding: 14px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
-}
-
-.provider-key-input {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.provider-key-input .field-input {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.provider-rotate-actions {
-  display: flex;
-  gap: 10px;
-  justify-content: flex-end;
-}
-
-/* ============================================================
-   admin 控制台治理页增量样式（Phase 8 T12b；T12a 申报样式缺口收口：
-   .admin-table/.danger-zone/notice）。设计令牌全取 global.css（墨色
-   单色体系，无新取值）；text-only 块以等宽 + pre-wrap 呈现原文。
-   ============================================================ */
-
-/* ---------- admin 数据表（邀请/用户/审核/举报/目录/审计六页统一基元） ---------- */
+/* ---------- 治理面表格 / 抽屉细节 ---------- */
 
 .admin-table {
-  width: 100%;
-  margin-top: 16px;
-  border-collapse: collapse;
-  font-size: 13.5px;
+  margin-top: 8px;
 }
 
-.admin-table th,
-.admin-table td {
-  padding: 9px 12px;
-  border-bottom: 1px solid var(--hairline);
-  text-align: left;
-  vertical-align: top;
-  overflow-wrap: anywhere;
-  font-variant-numeric: tabular-nums;
-}
-
-.admin-table thead th {
-  border-bottom: 1px solid var(--hairline-strong);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-3);
-  white-space: nowrap;
-}
-
-.admin-table tbody tr:hover {
-  background: var(--surface-2);
-}
-
-/* 行内操作按钮组（处置/查看上下文、停用/白名单等并排换行） */
-.admin-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-/* ---------- 状态徽标（auto_check 结果；与 v2-session-badge 同构全圆角小徽） ---------- */
-
-.admin-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 8px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: 999px;
-  background: var(--surface-2);
-  font-size: 11.5px;
-  font-weight: 600;
-  line-height: 1.6;
-  color: var(--ink);
-}
-
-/* 未通过徽标：墨色加重表达（系统无红——同 .status-chip.is-failed 惯例） */
-.admin-chip.is-bad {
-  border-color: var(--ink);
-  color: var(--ink-strong);
-}
-
-/* auto_check issue 明细 / 文件元数据列表 */
-.admin-issue-list {
-  margin: 8px 0 0;
-  padding-left: 18px;
-  font-size: 12.5px;
-  line-height: 1.7;
-  color: var(--text-2);
-}
-
-/* ---------- text-only 文本块（content_json 全文/消息正文/审计详情树） ----------
-   等宽 + pre-wrap + 长串 break：审核员看到的就是字面原文，零 HTML 解析 */
-
-.admin-pre {
-  max-height: 320px;
-  margin: 8px 0 0;
-  padding: 10px 12px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
-  overflow: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12.5px;
-  line-height: 1.6;
-  letter-spacing: 0.02em;
-  color: var(--ink);
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-/* JSON 树缩进层级：发丝线左缘 */
-.admin-tree-children {
-  margin-left: 6px;
+.admin-table th:first-child {
   padding-left: 12px;
-  border-left: 1px solid var(--hairline);
 }
 
-.admin-tree-key {
-  color: var(--text-3);
+.admin-table td:first-child {
+  padding-left: 12px;
 }
 
-/* ---------- 成功回执/通知（T12a minor ③ notice 缺口收口） ----------
-   中性强调：surface-2 底 + 全强度发丝线，标题 ink-strong（不用 form-alert 的
-   错误语义，也不占用 .page-sub 的弱灰） */
+.admin-table td:last-child {
+  padding-right: 12px;
+}
+
+.admin-issue-list {
+  max-height: 220px;
+  overflow-y: auto;
+}
 
 .admin-notice {
-  margin-top: 16px;
-  padding: 12px 14px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--radius-control);
   background: var(--surface-2);
-  font-size: 13.5px;
-  color: var(--ink);
 }
 
-.admin-notice h3 {
-  margin: 0 0 6px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--ink-strong);
+.admin-notice + .admin-notice {
+  margin-top: 8px;
 }
-
-.admin-notice ul {
-  margin: 6px 0 0;
-  padding-left: 18px;
-}
-
-/* ---------- 危险区（kill-switch 声明块；T12a minor ③缺口收口） ----------
-   与 .v2-danger-panel 同语言：全强度墨边 + surface-2 底，与常规卡片成层级差 */
 
 .danger-zone {
   margin-top: 16px;
-  padding: 14px 16px;
-  border: 1px solid var(--ink);
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
 }
 
 .danger-zone h3 {
-  margin: 0 0 6px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--ink-strong);
+  color: var(--danger);
 }
-
-.danger-zone p {
-  margin: 0;
-  font-size: 12.5px;
-  line-height: 1.7;
-  color: var(--ink);
-}
-
-/* ---------- 处置动作选择行（radio + 说明语） ---------- */
 
 .admin-option-row {
-  display: block;
-  padding: 8px 0;
-  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
 }
 
-.admin-option-row input[type="radio"] {
-  margin-right: 8px;
+.admin-option-row:hover {
+  background: var(--surface-3);
 }
 
-.admin-option-row .field-note {
-  margin-left: 6px;
+/* 抽屉正文小节标题：弱标签，不抢标题层级 */
+.drawer-body section > h3 {
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.drawer-body section > p {
+  margin: 6px 0;
+  color: var(--text-2);
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+
+/* ---------- 管理子导航 ---------- */
+
+nav[aria-label="管理控制台导航"] {
+  gap: 4px;
+  padding: 4px;
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+nav[aria-label="管理控制台导航"] .v2-tab {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+
+/* ---------- 注销冻结页 / 危险弹层 ---------- */
+
+.v2-danger-dialog {
+  background: var(--surface);
+}
+
+.v2-danger-dialog .profile-security-form {
+  margin-top: 0;
+}
+
+.v2-deleting-page {
+  background:
+    radial-gradient(80% 60% at 50% 0%, var(--surface-2), transparent 65%),
+    var(--bg);
+}
+
+/* ---------- 响应式 ---------- */
+
+@media (max-width: 760px) {
+  .v2-otp-cells {
+    gap: 5px;
+  }
+
+  .otp-cell {
+    height: 46px;
+    font-size: 17px;
+  }
+
+  .v2-secret-block {
+    flex-direction: column;
+  }
+
+  .v2-secret-copy {
+    align-self: flex-end;
+  }
+
+  nav[aria-label="管理控制台导航"] {
+    display: flex;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+
+  nav[aria-label="管理控制台导航"]::-webkit-scrollbar {
+    display: none;
+  }
+
+  nav[aria-label="管理控制台导航"] .v2-tab {
+    flex: none;
+  }
 }

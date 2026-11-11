@@ -1,5 +1,6 @@
 import { formatDateTime } from "../lib/datetime.js";
 import { renderMarkdown } from "../lib/markdown.js";
+import StreamingText from "./StreamingText.jsx";
 
 const ROLE_LABELS = { user: "你", assistant: "专家" };
 
@@ -62,7 +63,7 @@ function Bubble({
         ))}
         {isStreaming ? (
           <>
-            {content}
+            <StreamingText text={content} />
             <span className="stream-caret" aria-hidden="true" />
           </>
         ) : role === "user" ? (

@@ -144,6 +144,30 @@ describe("设置流（setup → 复制 → activate）", () => {
     expect(screen.getAllByRole("button", { name: "已复制" }).length).toBe(2);
   });
 
+  it("复制反馈 2.5s 后淡出并恢复原按钮文案", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+      configurable: true,
+    });
+    await openSetup();
+
+    const button = screen.getByRole("button", { name: "复制密钥" });
+    fireEvent.click(button);
+    await flush();
+    expect(screen.getByRole("button", { name: "已复制" })).toBeTruthy();
+
+    act(() => {
+      vi.advanceTimersByTime(2280);
+    });
+    expect(button.classList.contains("is-fading")).toBe(true);
+
+    act(() => {
+      vi.advanceTimersByTime(220);
+    });
+    expect(screen.getByRole("button", { name: "复制密钥" })).toBeTruthy();
+  });
+
   it("clipboard 不可用 → 按钮反馈「复制失败」，不抛未捕获异常", async () => {
     Object.defineProperty(navigator, "clipboard", {
       value: {

@@ -3,6 +3,7 @@ import { requestV2 } from "../api/v2/client.js";
 import { V2_TASKS } from "../api/v2/routes.js";
 import { formatDateTime } from "../lib/datetime.js";
 import { formatBytes } from "../lib/format.js";
+import Collapsible from "./Collapsible.jsx";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -191,19 +192,23 @@ export default function TaskContextPanel({ taskId, task, inputFiles = [], artifa
         <QuotaBar taskId={taskId} inputFiles={inputFiles} artifacts={artifacts} />
       </div>
 
-      <div className="context-body" role="tabpanel" aria-label="文件">
-        <p className="context-card-name">输入文件（已冻结）</p>
-        <InputManifest inputFiles={inputFiles} />
-        <p className="context-card-name">产物</p>
-        <ArtifactList taskId={taskId} artifacts={artifacts} />
-      </div>
+      <Collapsible title="输入文件与产物" defaultOpen>
+        <div className="context-body" role="tabpanel" aria-label="文件">
+          <p className="context-card-name">输入文件（已冻结）</p>
+          <InputManifest inputFiles={inputFiles} />
+          <p className="context-card-name">产物</p>
+          <ArtifactList taskId={taskId} artifacts={artifacts} />
+        </div>
+      </Collapsible>
 
-      <div className="context-body" role="tabpanel" aria-label="轮次">
-        <SectionNote>
-          任务创建于 {formatDateTime(task.created_at)}；每轮对话由调度器租槽执行。
-        </SectionNote>
-        <RoundsTimeline task={task} />
-      </div>
+      <Collapsible title="轮次">
+        <div className="context-body" role="tabpanel" aria-label="轮次">
+          <SectionNote>
+            任务创建于 {formatDateTime(task.created_at)}；每轮对话由调度器租槽执行。
+          </SectionNote>
+          <RoundsTimeline task={task} />
+        </div>
+      </Collapsible>
     </aside>
   );
 }
