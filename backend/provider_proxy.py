@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from collections import OrderedDict
 from collections.abc import AsyncGenerator
 
 import httpx
@@ -216,14 +218,41 @@ async def _shape_upstream_response(upstream_response: httpx.Response) -> Respons
     )
 
 
-def _grant_cache() -> dict[str, dict]:
+def _grant_cache() -> OrderedDict[str, tuple[float, dict]]:
     """grant 结果缓存（Sup §10.10 缓存钉）：真实 Key 仅本进程内存，按 round_id
-    键控、无持久化——轮终局容器死亡即持有者消失；进程重启缓存自然清零。"""
+    键控、无持久化——轮终局容器死亡即持有者消失；进程重启缓存自然清零。
+    条目带 TTL 与 LRU 上限（Settings 可调），防长跑进程无界持有 Key。"""
     cache = getattr(app.state, "grant_cache", None)
-    if cache is None:
-        cache = {}
+    if not isinstance(cache, OrderedDict):
+        cache = OrderedDict(cache or {})
         app.state.grant_cache = cache
     return cache
+
+
+def _grant_cache_get(cache: OrderedDict[str, tuple[float, dict]], round_id: str) -> dict | None:
+    entry = cache.get(round_id)
+    if entry is None:
+        return None
+    expires_at, grant = entry
+    if expires_at <= time.monotonic():
+        cache.pop(round_id, None)
+        return None
+    cache.move_to_end(round_id)
+    return grant
+
+
+def _grant_cache_put(
+    cache: OrderedDict[str, tuple[float, dict]],
+    round_id: str,
+    grant: dict,
+    *,
+    ttl: float,
+    max_entries: int,
+) -> None:
+    cache[round_id] = (time.monotonic() + ttl, grant)
+    cache.move_to_end(round_id)
+    while len(cache) > max_entries:
+        cache.popitem(last=False)
 
 
 def _grant_http_client() -> httpx.AsyncClient:
@@ -267,12 +296,18 @@ async def _chat_completions_v2(
     model scope 依 grant 下发强制（钉四）→ base_target 直连上游，转发前 SSRF
     公网校验（net_guard：https + DNS 逐 IP 拒内网/元数据；fail → 502 不泄细节）。"""
     cache = _grant_cache()
-    grant = cache.get(claims["round_id"])
+    grant = _grant_cache_get(cache, claims["round_id"])
     if grant is None:
         grant = await _fetch_grant(token, settings)
         if grant is None:
             return _error(502, "provider routing failed")
-        cache[claims["round_id"]] = grant
+        _grant_cache_put(
+            cache,
+            claims["round_id"],
+            grant,
+            ttl=settings.PROVIDER_GRANT_CACHE_TTL_SECONDS,
+            max_entries=settings.PROVIDER_GRANT_CACHE_MAX_ENTRIES,
+        )
     if body.get("model") != grant["model"]:
         return _error(403, "model not allowed for this task token")
     upstream_response, error_response = await _forward_upstream(

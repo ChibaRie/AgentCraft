@@ -38,6 +38,7 @@ from backend.errors import AgentCraftError, ErrorCode
 from backend.models.task import Task
 from backend.services import harness_service
 from backend.services.task_token import TaskTokenInvalid, decode_task_token
+from backend.utils.crypto import EncryptionError
 from backend.v2 import mcp_service
 from backend.v2.models import AuditLog, TaskRound, UserMcpServer, UserMcpTool, UserProvider
 from backend.v2.models import Task as V2Task  # V2 任务行（owner_id 语义；V1 Task 属 sqlite 面）
@@ -508,7 +509,29 @@ async def provider_grant(
         base_target = provider.base_url
 
     # 钉六：发 Key 先审计（admin 会话独立事务——audit_logs 无 RLS 且 app role
-    # 零授权）；审计失败异常向上 → 500，Key 不出控制面（fail-closed）
+    # 零授权）；审计失败异常向上 → 500，Key 不出控制面（fail-closed）。
+    # 解密先于审计：解密失败不产生 "issued" 假记录，另落 outcome=decrypt_failed。
+    try:
+        api_key = key_sealer().open(key_ciphertext, dek_wrapped, provider_id=provider_id)
+    except EncryptionError:
+        logger.warning("provider-grant 解密失败 task_id=%s", claims["task_id"])
+        await _write_grant_audit(rt, claims, provider_id, outcome="decrypt_failed")
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "INTERNAL_ERROR", "message": "provider grant failed"},
+        ) from None
+
+    await _write_grant_audit(rt, claims, provider_id, outcome="issued")
+    return JSONResponse(
+        {"model": model, "provider": {"api_key": api_key, "base_target": base_target}},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def _write_grant_audit(
+    rt: V2Runtime, claims: dict, provider_id: str, *, outcome: str
+) -> None:
+    """grant 发放/失败审计（admin 独立事务；审计失败即 500，Key 不释放）。"""
     async with rt.admin_factory() as admin_db:
         async with admin_db.begin():
             admin_db.add(
@@ -522,13 +545,7 @@ async def provider_grant(
                         "task_id": claims["task_id"],
                         "round_id": claims["round_id"],
                         "provider_id": provider_id,
+                        "outcome": outcome,
                     },
                 )
             )
-
-    # 钉五：解密 AAD 绑定 claims 定位的 provider 行（key_sealer 双层解封）
-    api_key = key_sealer().open(key_ciphertext, dek_wrapped, provider_id=provider_id)
-    return JSONResponse(
-        {"model": model, "provider": {"api_key": api_key, "base_target": base_target}},
-        headers={"Cache-Control": "no-store"},
-    )

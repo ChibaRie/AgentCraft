@@ -384,6 +384,28 @@ def v2_proxy_env(proxy_env):
     app.state.grant_cache = {}
 
 
+def test_grant_cache_ttl_and_lru(monkeypatch):
+    """grant cache 必须有 TTL 与条目上限：过期即弃、超限按 LRU 淘汰。"""
+    from collections import OrderedDict
+
+    from backend import provider_proxy
+
+    cache: OrderedDict = OrderedDict()
+    clock = {"now": 100.0}
+    monkeypatch.setattr(provider_proxy.time, "monotonic", lambda: clock["now"])
+
+    provider_proxy._grant_cache_put(cache, "r1", {"k": 1}, ttl=10, max_entries=2)
+    provider_proxy._grant_cache_put(cache, "r2", {"k": 2}, ttl=10, max_entries=2)
+    assert provider_proxy._grant_cache_get(cache, "r1") == {"k": 1}  # r1 变为最近使用
+
+    provider_proxy._grant_cache_put(cache, "r3", {"k": 3}, ttl=10, max_entries=2)
+    assert list(cache) == ["r1", "r3"]  # 最久未用的 r2 被淘汰
+
+    clock["now"] = 111.0
+    assert provider_proxy._grant_cache_get(cache, "r1") is None
+    assert "r1" not in cache  # 过期即删
+
+
 async def test_v2_token_grants_and_forwards_real_key(v2_proxy_env):
     """V2 令牌 → grant 兑换 → 上游收到 Bearer <真 Key>（非任务令牌），
     URL 由 grant base_target 派生；响应不含任何 Key 形态。"""

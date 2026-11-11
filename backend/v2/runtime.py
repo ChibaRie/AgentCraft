@@ -5,8 +5,10 @@
 **单事务**内先 set_current_owner 再操作（GUC 事务本地，Phase 1 收口注意事项）。
 """
 
+import ipaddress
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, AsyncIterator
 
@@ -14,6 +16,7 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from backend.config import get_settings
 from backend.v2.db import build_engine, session_factory
 from backend.v2.task_storage import TaskStorage
 
@@ -103,6 +106,40 @@ async def owner_session(runtime: V2Runtime, user_id: str) -> AsyncIterator[Async
             yield session
 
 
+@lru_cache(maxsize=8)
+def _trusted_proxy_networks(raw: str) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    """解析 TRUSTED_PROXY_IPS（逗号分隔 IP/CIDR）；非法项 fail-closed 忽略。"""
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            continue
+    return tuple(networks)
+
+
 def client_ip(request: Request) -> str:
-    """客户端 IP（Phase 2 应用层取 socket peer；部署阶段集中替换为 nginx 可信转发头解析）。"""
-    return request.client.host if request.client else "unknown"
+    """客户端 IP：默认 socket peer；仅当 peer 在 TRUSTED_PROXY_IPS 内时采信
+    X-Forwarded-For 首值（nginx 覆盖头），非法头回退 peer。"""
+    peer = request.client.host if request.client else ""
+    trusted_raw = get_settings().TRUSTED_PROXY_IPS
+    if peer and trusted_raw:
+        try:
+            peer_ip = ipaddress.ip_address(peer)
+        except ValueError:
+            peer_ip = None
+        if peer_ip is not None and any(
+            peer_ip in net for net in _trusted_proxy_networks(trusted_raw)
+        ):
+            forwarded = request.headers.get("x-forwarded-for", "")
+            first = forwarded.split(",", 1)[0].strip()
+            try:
+                candidate = ipaddress.ip_address(first)
+            except ValueError:
+                candidate = None
+            if candidate is not None:
+                return str(candidate)
+    return peer or "unknown"

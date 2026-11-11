@@ -275,6 +275,9 @@ def test_v2_mode_rejects_placeholder_proxy_grant_secret(monkeypatch):
         "PI_NETWORK_NAME",
         "PROVIDER_PROXY_IMAGE",
         "MCP_SANDBOX_IMAGE",
+        "TRUSTED_PROXY_IPS",
+        "PROVIDER_GRANT_CACHE_TTL_SECONDS",
+        "PROVIDER_GRANT_CACHE_MAX_ENTRIES",
     ],
 )
 def test_env_example_lists_phase9_phase10_runtime_keys(key):

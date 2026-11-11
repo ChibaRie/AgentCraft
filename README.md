@@ -154,7 +154,7 @@ ruff check backend tests && ruff format --check backend tests
 cd frontend && npm test && npm run build
 ```
 
-当前基线：后端 `pytest` 收集 1067 项、全量 0 failed（EXIT=0）；
+当前基线：后端 `pytest` 收集 1075 项、全量 0 failed（EXIT=0）；
 `backend/` 语句覆盖率门槛 **80%**（CI 强制）；ruff check + format 双绿；前端 vitest
 **44 文件 / 429 用例**全绿 + 生产构建通过。CI（GitHub Actions）跑后端 + 前端双 job，
 并含 `alembic -c alembic_v2.ini check` 迁移漂移门（同一门已前移为常规测试
@@ -201,7 +201,7 @@ data/             # 本地数据卷与 Skill 包样例
 - 上层 `docs/AgentCraft-V2-Public-Beta/` —— V2 契约基线（PRD / Engineering Spec /
   Database Design / Deployment & Ops Spec v2.0.0 + API 补遗 v2.0.1）。
 - 上层 `docs/AgentCraft_V2_Progress.md` —— V2 升级进展与问题记录（阶段 0-10 全量交付、
-  裁决与遗留清单，v2.2）。
+  裁决与遗留清单，v2.3）。
 - 上层 `docs/superpowers/` —— `specs/` 实施设计、`plans/` 阶段计划与完成记录、
   `reports/` 手测留痕与 SBOM。
 - V1 历史：上层 `docs/AgentCraft-V1/`（PRD / Spec / DB / Scaffold Plan v0.4.x 与原型）；
@@ -212,6 +212,8 @@ data/             # 本地数据卷与 Skill 包样例
 
 - **单实例部署**：dispatcher / executor 按单实例语义编排（`V2_TASK` 运行参数可调）；
   水平扩展属部署阶段。
+- **反向代理**：生产 nginx 必须配置 `TRUSTED_PROXY_IPS`（代理私网地址/CIDR），
+  否则 `client_ip` 只取 socket peer，审计与匿名限流会按代理 IP 聚合。
 - **部署阶段待接线**：Linux VM + nginx + gVisor、runner-manager 独立服务、
   专用 egress proxy、mail-egress、Ed25519 建连凭据与 mTLS 通道。`SandboxBackend` /
   `TaskCredential` 是部署阶段需要新增的抽象（当前代码未定义），归属划分见

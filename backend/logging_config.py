@@ -4,9 +4,12 @@
 import logging
 import logging.config
 import re
+import traceback
 
 _REDACTIONS = [
     (re.compile(r"(?i)authorization:\s*bearer\s+\S+"), "Authorization: Bearer [REDACTED]"),
+    (re.compile(r"(?i)x-proxy-grant-secret:\s*\S+"), "X-Proxy-Grant-Secret: [REDACTED]"),
+    (re.compile(r"(?i)x-task-token:\s*\S+"), "X-Task-Token: [REDACTED]"),
     (re.compile(r"(?i)\bapi_key[=:]\s*\S+"), "api_key=[REDACTED]"),
     (re.compile(r"(?i)\bpassword[=:]\s*\S+"), "password=[REDACTED]"),
     (re.compile(r"(?i)\btotp\b\s*[:=]\s*\S+"), "totp=[REDACTED]"),
@@ -20,6 +23,18 @@ class SensitiveDataFilter(logging.Filter):
             msg = pattern.sub(repl, msg)
         record.msg = msg
         record.args = None
+        # formatter 在 filter 之后才格式化 exc_info；预先写入 sanitized 文本，
+        # 覆盖 logger.exception 的 traceback（否则异常消息中的凭据绕过脱敏）。
+        if record.exc_info:
+            text = "".join(traceback.format_exception(*record.exc_info))
+            for pattern, repl in _REDACTIONS:
+                text = pattern.sub(repl, text)
+            record.exc_text = text
+        if record.stack_info:
+            text = record.stack_info
+            for pattern, repl in _REDACTIONS:
+                text = pattern.sub(repl, text)
+            record.stack_info = text
         return True
 
 

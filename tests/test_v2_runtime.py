@@ -71,3 +71,25 @@ def test_client_ip_prefers_socket_peer_with_unknown_fallback():
     )
     # 直连 ASGI / 测试客户端可能缺 client（None）→ 兜底 "unknown"
     assert client_ip(StarletteRequest({**scope, "client": None})) == "unknown"
+
+
+def test_client_ip_uses_forwarded_header_only_from_trusted_proxy(monkeypatch):
+    """只有来自可信代理的请求才采用 X-Forwarded-For 首值；直连/伪造头一律用 peer。"""
+    from starlette.requests import Request as StarletteRequest
+
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "10.0.0.0/8")
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(b"x-forwarded-for", b"203.0.113.9, 10.0.0.5")],
+        "query_string": b"",
+    }
+    assert client_ip(StarletteRequest({**scope, "client": ("10.0.0.5", 1234)})) == "203.0.113.9"
+    # 非可信 peer 携带 XFF → 头被忽略
+    assert client_ip(StarletteRequest({**scope, "client": ("198.51.100.7", 1234)})) == (
+        "198.51.100.7"
+    )
+    # 可信 peer 但头值非法 → 回退 peer，绝不把任意字符串当 IP
+    bad = {**scope, "headers": [(b"x-forwarded-for", b"not-an-ip")]}
+    assert client_ip(StarletteRequest({**bad, "client": ("10.0.0.5", 1234)})) == "10.0.0.5"

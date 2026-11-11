@@ -232,7 +232,7 @@ uv run pytest tests/test_v2_mcp.py -k discover
 - Coverage gate is **80%** (`pyproject.toml [tool.coverage.report] fail_under`); omits are the V1
   historical chain, `tools/`, and the D15-Option1 frozen surface.
 
-Current baselines: backend collects **1067** tests, frontend **44 files / 429 tests**, both green
+Current baselines: backend collects **1075** tests, frontend **44 files / 429 tests**, both green
 with ruff check + format and the production build.
 
 Conventions: tests are `test_<behavior>.py` with descriptive names; frontend tests are colocated

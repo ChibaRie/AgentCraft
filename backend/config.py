@@ -88,6 +88,13 @@ class Settings(BaseSettings):
     # 网络内控制面别名——dev 形态由后端转发容器提供，compose 形态由 control
     # 服务网络别名提供（Phase 9 T1 接线，D16② 闭环）
     PROVIDER_PROXY_GRANT_URL: str = "http://agentcraft-control:8000/internal/provider-grant"
+    # 可信反向代理 IP/CIDR（逗号分隔）；非空时仅来自这些 peer 的 X-Forwarded-For
+    # 首值被采信（nginx 部署形态）。空 = 只用 socket peer（dev/直连）。
+    TRUSTED_PROXY_IPS: str = ""
+    # provider-proxy grant 内存缓存上界（真实 Key 只在该进程内存）：round 级 TTL
+    # 与总条目上限，超限按 LRU 淘汰；轮终局/进程重启自然清零。
+    PROVIDER_GRANT_CACHE_TTL_SECONDS: float = 600.0
+    PROVIDER_GRANT_CACHE_MAX_ENTRIES: int = 1024
     MAIL_TRANSPORT: str = "console"  # outbox 传输选择：console | mailegress（部署阶段接线）
     SESSION_COOKIE_SECURE: bool = True  # dev 经 http://localhost 浏览器豁免；LAN 调试可关
     LOG_LEVEL: str = "INFO"

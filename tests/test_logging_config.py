@@ -44,6 +44,46 @@ def test_filter_keeps_normal_content():
     assert rec.getMessage() == "task 42 settled in 1200ms"
 
 
+def test_filter_redacts_exception_text():
+    """logger.exception 的 traceback 同样过脱敏（SensitiveDataFilter 覆盖 exc_info）。"""
+    import sys
+
+    try:
+        raise RuntimeError("api_key=sk-leak-123 password=hunter2")
+    except RuntimeError:
+        exc_info = sys.exc_info()
+    rec = logging.LogRecord(
+        "agentcraft.t",
+        logging.ERROR,
+        __file__,
+        1,
+        "boom",
+        None,
+        exc_info,
+    )
+    SensitiveDataFilter().filter(rec)
+    text = rec.exc_text or ""
+    assert "sk-leak-123" not in text
+    assert "hunter2" not in text
+    assert "[REDACTED]" in text
+
+
+def test_filter_redacts_proxy_headers():
+    rec = logging.LogRecord(
+        "agentcraft.t",
+        logging.INFO,
+        __file__,
+        1,
+        "X-Proxy-Grant-Secret: secret-1 X-Task-Token: token-2",
+        None,
+        None,
+    )
+    SensitiveDataFilter().filter(rec)
+    msg = rec.getMessage()
+    assert "secret-1" not in msg and "token-2" not in msg
+    assert "[REDACTED]" in msg
+
+
 def test_no_prompt_content_in_engine_logs():
     # 模拟 pi_engine 对无法解析 stdout 行的处理路径：日志记录不得包含正文
     # （红线 §4.7：记元数据——长度与丢弃计数，不记 prompt/响应正文）

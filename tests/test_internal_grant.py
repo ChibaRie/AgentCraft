@@ -216,6 +216,34 @@ async def test_settled_round_same_token_401(client, grant_env, pg):
 # ---------------------------------------------------------------------------
 
 
+async def test_decrypt_failure_audits_outcome_and_does_not_leak(client, grant_env, pg):
+    """Key 解密失败：500 + 审计 outcome=decrypt_failed，响应与审计零 Key 材料。"""
+    _uid, tid, _rid, _epoch, token = await grant_env.seed_running("grant-decrypt@x.test")
+    async with pg.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE user_providers SET key_ciphertext = :bad "
+                "WHERE id = (SELECT provider_id FROM tasks WHERE id = :t)"
+            ),
+            {"bad": '{"bad":1}', "t": tid},
+        )
+
+    resp = _grant(client, token)
+
+    assert resp.status_code == 500
+    assert _REAL_KEY not in resp.text
+    async with pg.engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text("SELECT detail FROM audit_logs WHERE action = 'provider.grant.issue'")
+            )
+        ).all()
+    assert len(rows) == 1
+    detail = rows[0][0]
+    assert detail["outcome"] == "decrypt_failed"
+    assert _REAL_KEY not in json.dumps(detail)
+
+
 async def test_audit_row_without_key_material(client, grant_env, pg):
     """发 Key 落审计 provider.grant.issue；detail={task_id, round_id, provider_id}
     且审计行不含 Key 明文（响应体本身按钉二携带 api_key——审计零 Key 材料仅指
@@ -236,7 +264,12 @@ async def test_audit_row_without_key_material(client, grant_env, pg):
     row = rows[0]
     assert row[1] == "task" and str(row[2]) == tid
     detail = row[3]
-    assert detail == {"task_id": tid, "round_id": rid, "provider_id": detail["provider_id"]}
+    assert detail == {
+        "task_id": tid,
+        "round_id": rid,
+        "provider_id": detail["provider_id"],
+        "outcome": "issued",
+    }
     assert _REAL_KEY not in json.dumps(detail)
     # Key 明文也不落审计行的 reason / target 等其余字段（全行 JSON 序列化复验）
     assert _REAL_KEY not in json.dumps(
